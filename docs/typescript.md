@@ -22,6 +22,7 @@ import {
   bool,
   foreignKey,
   check,
+  index,
   staticDefault,
   sequenceDefault,
   eq,

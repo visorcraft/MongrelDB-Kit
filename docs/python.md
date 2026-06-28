@@ -24,6 +24,7 @@ from mongreldb_kit import (
     int,
     table,
     text,
+    unique,
 )
 
 

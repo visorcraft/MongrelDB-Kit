@@ -14,8 +14,8 @@ serde_json = "1"
 
 ```rust
 use mongreldb_kit::{
-    Column, ColumnType, Database, ForeignKey, ForeignKeyAction, Index, Migration, MigrationOp,
-    Schema, Table, UniqueConstraint,
+    Column, ColumnType, Database, DefaultKind, ForeignKey, ForeignKeyAction, Index, Migration,
+    MigrationOp, Schema, Table, UniqueConstraint,
 };
 use serde_json::{json, Map};
 use std::path::Path;
