@@ -28,7 +28,7 @@ describe('schema type inference', () => {
 		expectTypeOf<UsersRow['score']>().toEqualTypeOf<number>();
 		expectTypeOf<UsersRow['active']>().toEqualTypeOf<boolean>();
 		expectTypeOf<UsersRow['meta']>().toEqualTypeOf<unknown>();
-		expectTypeOf<UsersRow['createdAt']>().toEqualTypeOf<unknown>();
+		expectTypeOf<UsersRow['createdAt']>().toEqualTypeOf<string>();
 		expectTypeOf<UsersRow['nickname']>().toEqualTypeOf<string | null>();
 	});
 
@@ -56,7 +56,7 @@ describe('schema type inference', () => {
 			score: 0,
 			active: true,
 			meta: null,
-			createdAt: null,
+			createdAt: '2024-01-01T00:00:00Z',
 			nickname: null
 		};
 		acceptRow<typeof users>(row);

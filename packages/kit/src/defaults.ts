@@ -57,7 +57,7 @@ export function applyDefaults(
 				out[col.name] = source.value;
 				break;
 			case 'now':
-				out[col.name] = ctx.now;
+				out[col.name] = col.storageType === 'date' ? ctx.now.slice(0, 10) : ctx.now;
 				break;
 			case 'uuid':
 				out[col.name] = ctx.uuid();

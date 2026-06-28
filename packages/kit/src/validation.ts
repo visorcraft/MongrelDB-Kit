@@ -137,4 +137,11 @@ export function validateRow(table: TableSpec, row: Record<string, unknown>): voi
 	for (const column of table.columns) {
 		validateColumn(table.name, column, row[column.name]);
 	}
+
+	for (const check of table.checks) {
+		const result = check.expr(row);
+		if (typeof result === 'string') {
+			throw new KitValidationError(result, table.name);
+		}
+	}
 }

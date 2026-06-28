@@ -5,18 +5,21 @@ import { join } from 'node:path';
 import { ConditionKind } from 'mongreldb/native.js';
 import type { Database as NativeDatabase } from 'mongreldb/native.js';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, unique, foreignKey, index } from './schema.js';
+import { Schema, table, int, text, real, unique, foreignKey, index, check } from './schema.js';
 import { validateRow } from './validation.js';
-import type { TableSpec } from './types.js';
+import type { TableSpec, PkValue } from './types.js';
 import {
 	stageUniqueGuards,
+	stagePkGuard,
 	deleteUniqueGuards,
+	deletePkGuard,
 	touchRowGuard,
 	deleteRowGuard,
 	parentExists,
 	enforceForeignKeys,
 	planDelete,
 	toCells,
+	pkValueFromRow,
 	type ConstraintKit
 } from './constraints.js';
 import {
@@ -143,7 +146,45 @@ const d = table('d', {
 	]
 });
 
-const testSchema = new Schema([users, trips, shares, invites, members, tags, tagged, categories, items, a, b, c, d]);
+const groupMembers = table('group_members', {
+	columns: [int('group_id'), int('user_id'), text('role', { nullable: false })],
+	primaryKey: ['group_id', 'user_id']
+});
+
+const subscribers = table('subscribers', {
+	columns: [int('id', { primaryKey: true }), text('email', { nullable: true })],
+	primaryKey: ['id'],
+	unique: [unique(['email'], { name: 'subscribers_email_uq' })]
+});
+
+const checkedOrders = table('checked_orders', {
+	columns: [int('id', { primaryKey: true }), int('quantity'), real('price')],
+	primaryKey: ['id'],
+	checks: [
+		check('positive_total', (row) =>
+			Number(row.quantity) * (row.price as number) > 0 ? true : 'total must be positive'
+		)
+	]
+});
+
+const testSchema = new Schema([
+	users,
+	trips,
+	shares,
+	invites,
+	members,
+	tags,
+	tagged,
+	categories,
+	items,
+	a,
+	b,
+	c,
+	d,
+	groupMembers,
+	subscribers,
+	checkedOrders
+]);
 
 async function withDb(
 	fn: (kit: ConstraintKit, db: KitDatabase) => Promise<void>
@@ -166,16 +207,14 @@ async function insertRow(
 	await kit.db.transaction(async (txn) => {
 		validateRow(table, row);
 		enforceForeignKeys(kit, txn, table, row);
-		stageUniqueGuards(kit, txn, table, row, row[table.primaryKey[0]] as string | bigint);
+		const pkValue = pkValueFromRow(table, row);
+		stageUniqueGuards(kit, txn, table, row, pkValue);
+		stagePkGuard(kit, txn, table, pkValue);
 		txn.put(table.name, toCells(table, row));
 	});
 }
 
-async function deleteRow(
-	kit: ConstraintKit,
-	table: TableSpec,
-	pkValue: string | bigint
-): Promise<void> {
+async function deleteRow(kit: ConstraintKit, table: TableSpec, pkValue: PkValue): Promise<void> {
 	await kit.db.transaction(async (txn) => {
 		planDelete(kit, txn, table, pkValue);
 	});
@@ -232,6 +271,44 @@ describe('unique constraints', () => {
 			const key = encodeUniqueKey(1, 'users_email_uq', ['keep@example.com']);
 			expect(findGuard(db.nativeDb, key)).toBeDefined();
 			await deleteRow(kit, users, 1n);
+			expect(findGuard(db.nativeDb, key)).toBeUndefined();
+		});
+	});
+
+	it('allows two rows with null in a nullable unique column to coexist', async () => {
+		await withDb(async (kit) => {
+			await insertRow(kit, subscribers, { id: 1n, email: null });
+			await insertRow(kit, subscribers, { id: 2n, email: null });
+			await insertRow(kit, subscribers, { id: 3n, email: 'a@example.com' });
+			await expect(
+				insertRow(kit, subscribers, { id: 4n, email: 'a@example.com' })
+			).rejects.toBeInstanceOf(KitDuplicateError);
+		});
+	});
+});
+
+describe('composite primary keys', () => {
+	it('inserts, updates, and deletes rows with composite primary keys', async () => {
+		await withDb(async (kit, db) => {
+			await insertRow(kit, groupMembers, { group_id: 1n, user_id: 10n, role: 'member' });
+			await insertRow(kit, groupMembers, { group_id: 1n, user_id: 11n, role: 'admin' });
+			await insertRow(kit, groupMembers, { group_id: 2n, user_id: 10n, role: 'member' });
+
+			await expect(
+				insertRow(kit, groupMembers, { group_id: 1n, user_id: 10n, role: 'other' })
+			).rejects.toThrow();
+
+			await deleteRow(kit, groupMembers, [1n, 10n]);
+			expect(db.nativeDb.table('group_members').count()).toBe(2n);
+		});
+	});
+
+	it('cleans unique guards for composite primary key rows on delete', async () => {
+		await withDb(async (kit, db) => {
+			await insertRow(kit, subscribers, { id: 1n, email: 'keep@example.com' });
+			const key = encodeUniqueKey(1, 'subscribers_email_uq', ['keep@example.com']);
+			expect(findGuard(db.nativeDb, key)).toBeDefined();
+			await deleteRow(kit, subscribers, 1n);
 			expect(findGuard(db.nativeDb, key)).toBeUndefined();
 		});
 	});

@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, unique, index, foreignKey } from './schema.js';
-import { eq, asc, desc } from './query.js';
+import { Schema, table, int, text, unique, index, foreignKey, timestamp, date } from './schema.js';
+import { nowDefault } from './defaults.js';
+import { eq, asc, desc, and } from './query.js';
 import { KitDuplicateError, KitForeignKeyError } from './errors.js';
 
 function makeTempDir(): string {
@@ -26,7 +27,21 @@ const posts = table('posts', {
 	]
 });
 
-const testSchema = new Schema([users, posts]);
+const groupMembers = table('group_members', {
+	columns: [int('group_id'), int('user_id'), text('role', { nullable: false })],
+	primaryKey: ['group_id', 'user_id']
+});
+
+const events = table('events', {
+	columns: [
+		int('id', { primaryKey: true }),
+		text('name', { nullable: false }),
+		text('createdAt', { nullable: false, default: nowDefault() })
+	],
+	primaryKey: ['id']
+});
+
+const testSchema = new Schema([users, posts, groupMembers, events]);
 
 async function withDb(fn: (db: KitDatabase) => Promise<void>): Promise<void> {
 	const dir = makeTempDir();
@@ -153,6 +168,60 @@ describe('query builder', () => {
 			const rows = await db.selectFrom(users).orderBy(desc(users.id)).execute();
 			expect(rows[0].email).toBe('b@example.com');
 			expect(rows[1].email).toBe('a@example.com');
+		});
+	});
+
+	it('handles composite primary keys', async () => {
+		await withDb(async (db) => {
+			await db
+				.insertInto(groupMembers)
+				.values({ group_id: 1n, user_id: 10n, role: 'member' })
+				.execute();
+			await db
+				.insertInto(groupMembers)
+				.values({ group_id: 1n, user_id: 11n, role: 'admin' })
+				.execute();
+			await db
+				.insertInto(groupMembers)
+				.values({ group_id: 2n, user_id: 10n, role: 'member' })
+				.execute();
+
+			const rows = await db
+				.selectFrom(groupMembers)
+				.where(eq(groupMembers.group_id, 1n))
+				.orderBy(asc(groupMembers.user_id))
+				.execute();
+			expect(rows).toHaveLength(2);
+			expect(rows[0].role).toBe('member');
+			expect(rows[1].role).toBe('admin');
+
+			const updated = await db
+				.updateTable(groupMembers)
+				.set({ role: 'owner' })
+				.where(and(eq(groupMembers.group_id, 1n), eq(groupMembers.user_id, 10n)))
+				.execute();
+			expect(updated).toHaveLength(1);
+			expect(updated[0].role).toBe('owner');
+
+			const deleted = await db
+				.deleteFrom(groupMembers)
+				.where(and(eq(groupMembers.group_id, 1n), eq(groupMembers.user_id, 10n)))
+				.execute();
+			expect(deleted).toBe(1n);
+
+			const remaining = await db.selectFrom(groupMembers).execute();
+			expect(remaining).toHaveLength(2);
+		});
+	});
+
+	it('stores timestamp defaults as ISO strings', async () => {
+		await withDb(async (db) => {
+			const inserted = await db.insertInto(events).values({ id: 1n, name: 'Launch' }).execute();
+			expect(typeof inserted.createdAt).toBe('string');
+			expect(inserted.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+			const rows = await db.selectFrom(events).where(eq(events.id, 1n)).execute();
+			expect(rows[0].createdAt).toBe(inserted.createdAt);
 		});
 	});
 });

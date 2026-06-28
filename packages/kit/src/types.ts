@@ -10,6 +10,8 @@ export type ColumnStorageType =
 	| 'bytes'
 	| 'json';
 
+export type PkValue = string | bigint | (string | bigint | null)[];
+
 export type ColumnApplicationType = ColumnStorageType;
 
 export interface ColumnSpec<
@@ -75,8 +77,8 @@ type ApplicationTypeMap = {
 	bool: boolean;
 	int64: bigint;
 	float64: number;
-	timestamp: unknown;
-	date: unknown;
+	timestamp: string;
+	date: string;
 	text: string;
 	bytes: unknown;
 	json: unknown;

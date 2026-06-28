@@ -58,13 +58,12 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'bool':
 			return addon.ColumnType.Bool;
 		case 'int64':
-		case 'timestamp':
 			return addon.ColumnType.Int64;
 		case 'float64':
 			return addon.ColumnType.Float64;
-		case 'date':
-			return addon.ColumnType.Date32;
 		case 'text':
+		case 'timestamp':
+		case 'date':
 		case 'bytes':
 		case 'json':
 			return addon.ColumnType.Bytes;

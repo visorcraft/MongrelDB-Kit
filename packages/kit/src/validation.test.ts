@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { table, int, text, real, bool, json } from './schema.js';
+import { table, int, text, real, bool, json, check } from './schema.js';
 import { staticDefault, nowDefault, applyDefaults, type DefaultContext } from './defaults.js';
 import { validateRow } from './validation.js';
 import { KitValidationError } from './errors.js';
@@ -81,6 +81,25 @@ describe('validateRow', () => {
 		expect(() =>
 			validateRow(users, { id: 1n, email: 'a@b.com', role: 'user', note: '' })
 		).toThrow(KitValidationError);
+	});
+
+	it('table-level check violation throws', () => {
+		const orders = table('orders', {
+			columns: [int('id', { primaryKey: true }), int('quantity'), real('price')],
+			primaryKey: ['id'],
+			checks: [
+				check('positive_total', (row) =>
+					Number(row.quantity) * (row.price as number) > 0
+						? true
+						: 'total must be positive'
+				)
+			]
+		});
+		expect(() => validateRow(orders, { id: 1n, quantity: 2n, price: 5 })).not.toThrow();
+		expect(() => validateRow(orders, { id: 1n, quantity: 2n, price: -5 })).toThrow(
+			KitValidationError
+		);
+		expect(() => validateRow(orders, { id: 1n, quantity: 2n, price: -5 })).toThrow(/total/);
 	});
 
 	it('defaults applied before validation', () => {

@@ -10,9 +10,13 @@ import { validateRow } from './validation.js';
 import {
 	toCells,
 	stageUniqueGuards,
+	stagePkGuard,
 	deleteUniqueGuards,
+	deletePkGuard,
 	enforceForeignKeys,
 	planDelete,
+	pkValueFromRow,
+	pkValuesEqual,
 	type ConstraintKit
 } from './constraints.js';
 import { KitError } from './errors.js';
@@ -141,7 +145,7 @@ function isIndexed(table: TableSpec, columnName: string): boolean {
 function makeEqCondition(table: TableSpec, column: ColumnSpec, value: unknown) {
 	if (value === null || value === undefined) return null;
 
-	if (column.storageType === 'int64' || column.storageType === 'timestamp') {
+	if (column.storageType === 'int64') {
 		return {
 			kind: ConditionKind.RangeInt,
 			columnId: column.id,
@@ -240,9 +244,7 @@ function makeRangeFilter(
 }
 
 function fullScanCondition(table: TableSpec) {
-	const intColumn = table.columns.find(
-		(c) => c.storageType === 'int64' || c.storageType === 'timestamp'
-	);
+	const intColumn = table.columns.find((c) => c.storageType === 'int64');
 	if (intColumn) {
 		return {
 			kind: ConditionKind.RangeInt,
@@ -262,9 +264,15 @@ function fullScanCondition(table: TableSpec) {
 		};
 	}
 
-	throw new KitError(
-		`Full table scan on "${table.name}" requires an int64, timestamp, or float64 column`
-	);
+	const pkColumn = table.columns.find((c) => table.primaryKey.includes(c.name));
+	if (pkColumn) {
+		return {
+			kind: ConditionKind.Pk,
+			columnId: pkColumn.id
+		};
+	}
+
+	throw new KitError(`Full table scan on "${table.name}" requires an int64, float64, or primary key`);
 }
 
 function fullScanRows(db: NativeDatabase, table: TableSpec): MatchedRow[] {
@@ -463,17 +471,6 @@ async function prepareInsertRow(
 	return applyDefaults(table, withSequence, makeDefaultContext(kit));
 }
 
-function pkValueFromRow(table: TableSpec, row: Record<string, unknown>): string | bigint {
-	if (table.primaryKey.length !== 1) {
-		throw new KitError(`Composite primary keys are not supported yet`);
-	}
-	const value = row[table.primaryKey[0]!];
-	if (typeof value !== 'string' && typeof value !== 'bigint') {
-		throw new KitError(`Primary key value must be string or bigint`);
-	}
-	return value;
-}
-
 function applyUpdateDefaults(
 	table: TableSpec,
 	merged: Record<string, unknown>,
@@ -600,6 +597,7 @@ export class InsertBuilder<T extends TableSpec> {
 		await this.kit.nativeDb.transaction(async (txn) => {
 			enforceForeignKeys(kit, txn, this.table, defaulted);
 			stageUniqueGuards(kit, txn, this.table, defaulted, pkValue);
+			stagePkGuard(kit, txn, this.table, pkValue);
 			txn.put(this.table.name, toCells(this.table, defaulted));
 		});
 
@@ -644,13 +642,22 @@ export class UpdateBuilder<T extends TableSpec> {
 				const merged = { ...matched.row, ...patch };
 				applyUpdateDefaults(this.table, merged, patch, ctx);
 				validateRow(this.table, merged);
-				const pkValue = pkValueFromRow(this.table, merged);
-				deleteUniqueGuards(kit, txn, this.table, pkValue);
+				const oldPkValue = pkValueFromRow(this.table, matched.row);
+				const newPkValue = pkValueFromRow(this.table, merged);
+				const pkChanged = !pkValuesEqual(oldPkValue, newPkValue);
+				deleteUniqueGuards(kit, txn, this.table, oldPkValue);
+				if (pkChanged) {
+					deletePkGuard(kit, txn, this.table, oldPkValue);
+				}
 				if (hasForeignKeyChange(this.table, patch)) {
 					enforceForeignKeys(kit, txn, this.table, merged);
 				}
+				txn.delete(this.table.name, matched.rowId);
 				txn.put(this.table.name, toCells(this.table, merged));
-				stageUniqueGuards(kit, txn, this.table, merged, pkValue);
+				stageUniqueGuards(kit, txn, this.table, merged, newPkValue);
+				if (pkChanged) {
+					stagePkGuard(kit, txn, this.table, newPkValue);
+				}
 				updated.push(merged);
 			}
 		});
