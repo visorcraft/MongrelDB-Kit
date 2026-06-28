@@ -4,4 +4,6 @@ export * from './defaults.js';
 export * from './validation.js';
 export * from './errors.js';
 export * from './internalTables.js';
+export * from './keys.js';
+export * from './constraints.js';
 export * from './db.js';

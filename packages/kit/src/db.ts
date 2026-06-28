@@ -72,6 +72,34 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 }
 
 function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
+	const indexes = table.indexes.flatMap((idx) =>
+		idx.columns.map((colName) => {
+			const col = table.columns.find((c) => c.name === colName);
+			if (!col) {
+				throw new Error(`Index column "${colName}" not found in table "${table.name}"`);
+			}
+			return {
+				name: `${idx.name}_${colName}`,
+				columnId: col.id,
+				kind: addon.IndexKindSpec.Bitmap
+			};
+		})
+	);
+
+	const indexedColumns = new Set(table.indexes.flatMap((idx) => idx.columns));
+	for (const pk of table.primaryKey) {
+		if (indexedColumns.has(pk)) continue;
+		const col = table.columns.find((c) => c.name === pk);
+		if (!col) {
+			throw new Error(`Primary key column "${pk}" not found in table "${table.name}"`);
+		}
+		indexes.push({
+			name: `pk_${pk}`,
+			columnId: col.id,
+			kind: addon.IndexKindSpec.Bitmap
+		});
+	}
+
 	return {
 		columns: table.columns.map((col) => ({
 			id: col.id,
@@ -80,19 +108,7 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			primaryKey: col.primaryKey,
 			nullable: col.nullable
 		})),
-		indexes: table.indexes.flatMap((idx) =>
-			idx.columns.map((colName) => {
-				const col = table.columns.find((c) => c.name === colName);
-				if (!col) {
-					throw new Error(`Index column "${colName}" not found in table "${table.name}"`);
-				}
-				return {
-					name: `${idx.name}_${colName}`,
-					columnId: col.id,
-					kind: addon.IndexKindSpec.Bitmap
-				};
-			})
-		)
+		indexes
 	};
 }
 
@@ -124,6 +140,11 @@ export class KitDatabase {
 
 		const kitDb = new KitDatabase(db, schema);
 		for (const table of internalTables) {
+			if (!db.tableNames().includes(table.name)) {
+				db.createTable(table.name, toMongrelSchema(table));
+			}
+		}
+		for (const table of schema.tablesList()) {
 			if (!db.tableNames().includes(table.name)) {
 				db.createTable(table.name, toMongrelSchema(table));
 			}
@@ -171,6 +192,10 @@ export class KitDatabase {
 
 	close(): void {
 		this.db.close();
+	}
+
+	get nativeDb(): MongrelDatabase {
+		return this.db;
 	}
 
 	tableNames(): string[] {

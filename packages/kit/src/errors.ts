@@ -53,6 +53,18 @@ export class KitForeignKeyError extends KitError {
 	}
 }
 
+export class KitRestrictError extends KitError {
+	table: string;
+	constraint: string;
+
+	constructor(table: string, constraint: string) {
+		super(`Restrict violation in ${table} for ${constraint}`);
+		this.name = 'KitRestrictError';
+		this.table = table;
+		this.constraint = constraint;
+	}
+}
+
 export class KitConflictError extends KitError {
 	constructor(message = 'Conflict') {
 		super(message);
