@@ -1,3 +1,9 @@
 [workspace]
-members = ["crates/mongreldb-kit-core", "crates/mongreldb-kit", "crates/mongreldb-kit-python", "crates/mongreldb-kit-cli"]
+members = [
+    "crates/mongreldb-kit-core",
+    "crates/mongreldb-kit",
+    "crates/mongreldb-kit-python",
+    "crates/mongreldb-kit-cli",
+    "tests/conformance/rust",
+]
 resolver = "2"

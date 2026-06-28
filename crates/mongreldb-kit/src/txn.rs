@@ -273,6 +273,15 @@ impl<'a> Transaction<'a> {
             let parent = schema.table(&fk.references_table).ok_or_else(|| {
                 KitError::Integrity(format!("referenced table {} not found", fk.references_table))
             })?;
+            // A null foreign-key reference is allowed; it represents an optional relationship.
+            let child_values: Vec<&Value> = fk
+                .columns
+                .iter()
+                .map(|col| values.get(col).unwrap_or(&Value::Null))
+                .collect();
+            if child_values.iter().any(|v| v.is_null()) {
+                continue;
+            }
             let parent_value = pk_value_from_fk(values, &t, fk, parent)?;
             let parent_exists = self.parent_exists(&fk.references_table, &parent_value)?;
             if parent_exists {

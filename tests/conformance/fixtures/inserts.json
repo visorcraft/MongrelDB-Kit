@@ -1,0 +1,106 @@
+[
+  {
+    "name": "insert_user_alice",
+    "table": "users",
+    "row": {
+      "id": 1,
+      "email": "alice@example.com",
+      "role": "user",
+      "age": 30,
+      "handle": "aliceh",
+      "active": true,
+      "meta": "{\"tags\":[\"a\"]}"
+    }
+  },
+  {
+    "name": "insert_user_bob",
+    "table": "users",
+    "row": {
+      "id": 2,
+      "email": "bob@example.com",
+      "role": "admin",
+      "age": null,
+      "handle": "bobh",
+      "active": false,
+      "meta": null
+    }
+  },
+  {
+    "name": "insert_post_hello",
+    "table": "posts",
+    "row": {
+      "id": 1,
+      "user_id": 1,
+      "title": "Hello",
+      "slug": "hello-world",
+      "published": false
+    }
+  },
+  {
+    "name": "insert_post_hidden",
+    "table": "posts",
+    "row": {
+      "id": 2,
+      "user_id": 1,
+      "title": "Hidden",
+      "slug": "hidden-post",
+      "published": false
+    }
+  },
+  {
+    "name": "insert_comment_first",
+    "table": "comments",
+    "row": {
+      "id": 1,
+      "post_id": 1,
+      "author_id": 2,
+      "body": "Great post"
+    }
+  },
+  {
+    "name": "insert_comment_orphan",
+    "table": "comments",
+    "row": {
+      "id": 2,
+      "post_id": null,
+      "author_id": 2,
+      "body": "Orphan comment"
+    }
+  },
+  {
+    "name": "insert_user_invalid_age",
+    "table": "users",
+    "row": {
+      "id": 3,
+      "email": "charlie@example.com",
+      "role": "user",
+      "age": -1,
+      "handle": "charlieh",
+      "active": true,
+      "meta": null
+    }
+  },
+  {
+    "name": "insert_user_missing_email",
+    "table": "users",
+    "row": {
+      "id": 4,
+      "role": "user",
+      "age": 20,
+      "handle": "daveh",
+      "active": true,
+      "meta": null
+    }
+  },
+  {
+    "name": "insert_post_missing_user",
+    "table": "posts",
+    "row": {
+      "id": 3,
+      "user_id": 99,
+      "title": "No user",
+      "slug": "no-user",
+      "published": false
+    }
+  }
+]

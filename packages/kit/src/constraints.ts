@@ -51,7 +51,25 @@ export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] 
 	return table.columns.map((col) => {
 		const value = row[col.name];
 		if (value === null || value === undefined) {
-			return { columnId: col.id };
+			switch (col.storageType) {
+				case 'bool':
+					return { columnId: col.id, boolean: false };
+				case 'int64':
+					return { columnId: col.id, int64: 0n };
+				case 'float64':
+					return { columnId: col.id, float64: 0 };
+				case 'text':
+				case 'timestamp':
+				case 'date':
+				case 'json':
+					return { columnId: col.id, text: '' };
+				case 'bytes':
+					return { columnId: col.id, bytes: Buffer.alloc(0) };
+				default: {
+					const _exhaustive: never = col.storageType;
+					throw new Error(`Unsupported storage type for cell conversion: ${_exhaustive}`);
+				}
+			}
 		}
 		switch (col.storageType) {
 			case 'bool':

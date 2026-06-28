@@ -1,0 +1,61 @@
+[
+  {
+    "name": "query_all_users",
+    "table": "users",
+    "order": "+id"
+  },
+  {
+    "name": "query_users_by_role",
+    "table": "users",
+    "filter": {
+      "role": "admin"
+    }
+  },
+  {
+    "name": "query_posts_by_user",
+    "table": "posts",
+    "filter": {
+      "user_id": {
+        "eq": 1
+      }
+    }
+  },
+  {
+    "name": "query_comments_order_desc",
+    "table": "comments",
+    "order": "-id"
+  },
+  {
+    "name": "query_published_posts",
+    "table": "posts",
+    "filter": {
+      "published": true
+    }
+  },
+  {
+    "name": "query_users_limit_offset",
+    "table": "users",
+    "order": "+id",
+    "limit": 1,
+    "offset": 0
+  },
+  {
+    "name": "query_count_users",
+    "table": "users",
+    "count": true
+  },
+  {
+    "name": "query_null_post_id",
+    "table": "comments",
+    "filter": {
+      "post_id": null
+    },
+    "order": "+id"
+  },
+  {
+    "name": "query_select_columns",
+    "table": "users",
+    "select": ["id", "email"],
+    "order": "+id"
+  }
+]

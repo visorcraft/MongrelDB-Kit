@@ -1,0 +1,39 @@
+{
+  "update_user_email": {
+    "row": {
+      "id": 1,
+      "email": "alice2@example.com",
+      "role": "user",
+      "age": 30,
+      "handle": "aliceh",
+      "active": true,
+      "meta": "{\"tags\":[\"a\"]}"
+    }
+  },
+  "update_post_publish": {
+    "row": {
+      "id": 1,
+      "user_id": 1,
+      "title": "Hello",
+      "slug": "hello-world",
+      "published": true
+    }
+  },
+  "update_comment_body": {
+    "row": {
+      "id": 1,
+      "post_id": 1,
+      "author_id": 2,
+      "body": "Thanks"
+    }
+  },
+  "update_user_invalid_role": {
+    "error": "VALIDATION"
+  },
+  "update_user_duplicate_email": {
+    "error": "DUPLICATE"
+  },
+  "update_post_invalid_slug": {
+    "error": "VALIDATION"
+  }
+}

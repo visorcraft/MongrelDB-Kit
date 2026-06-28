@@ -1,0 +1,78 @@
+{
+  "delete_post_set_null": {
+    "users": [
+      {
+        "id": 1,
+        "email": "alice2@example.com",
+        "role": "user",
+        "age": 30,
+        "handle": "aliceh",
+        "active": true,
+        "meta": "{\"tags\":[\"a\"]}"
+      },
+      {
+        "id": 2,
+        "email": "bob@example.com",
+        "role": "admin",
+        "age": null,
+        "handle": "bobh",
+        "active": false,
+        "meta": null
+      }
+    ],
+    "posts": [
+      {
+        "id": 2,
+        "user_id": 1,
+        "title": "Hidden",
+        "slug": "hidden-post",
+        "published": false
+      }
+    ],
+    "comments": [
+      {
+        "id": 1,
+        "post_id": null,
+        "author_id": 2,
+        "body": "Thanks"
+      },
+      {
+        "id": 2,
+        "post_id": null,
+        "author_id": 2,
+        "body": "Orphan comment"
+      }
+    ]
+  },
+  "delete_user_cascade": {
+    "users": [
+      {
+        "id": 2,
+        "email": "bob@example.com",
+        "role": "admin",
+        "age": null,
+        "handle": "bobh",
+        "active": false,
+        "meta": null
+      }
+    ],
+    "posts": [],
+    "comments": [
+      {
+        "id": 1,
+        "post_id": null,
+        "author_id": 2,
+        "body": "Thanks"
+      },
+      {
+        "id": 2,
+        "post_id": null,
+        "author_id": 2,
+        "body": "Orphan comment"
+      }
+    ]
+  },
+  "delete_user_restrict": {
+    "error": "RESTRICT"
+  }
+}

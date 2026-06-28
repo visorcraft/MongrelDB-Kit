@@ -1,0 +1,50 @@
+[
+  {
+    "name": "update_user_email",
+    "table": "users",
+    "pk": 1,
+    "patch": {
+      "email": "alice2@example.com"
+    }
+  },
+  {
+    "name": "update_post_publish",
+    "table": "posts",
+    "pk": 1,
+    "patch": {
+      "published": true
+    }
+  },
+  {
+    "name": "update_comment_body",
+    "table": "comments",
+    "pk": 1,
+    "patch": {
+      "body": "Thanks"
+    }
+  },
+  {
+    "name": "update_user_invalid_role",
+    "table": "users",
+    "pk": 1,
+    "patch": {
+      "role": "superuser"
+    }
+  },
+  {
+    "name": "update_user_duplicate_email",
+    "table": "users",
+    "pk": 2,
+    "patch": {
+      "email": "alice2@example.com"
+    }
+  },
+  {
+    "name": "update_post_invalid_slug",
+    "table": "posts",
+    "pk": 1,
+    "patch": {
+      "slug": "Bad Slug!"
+    }
+  }
+]

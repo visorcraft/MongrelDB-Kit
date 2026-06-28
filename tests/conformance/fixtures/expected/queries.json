@@ -1,0 +1,90 @@
+{
+  "query_all_users": {
+    "rows": [
+      {
+        "id": 2,
+        "email": "bob@example.com",
+        "role": "admin",
+        "age": null,
+        "handle": "bobh",
+        "active": false,
+        "meta": null
+      }
+    ]
+  },
+  "query_users_by_role": {
+    "rows": [
+      {
+        "id": 2,
+        "email": "bob@example.com",
+        "role": "admin",
+        "age": null,
+        "handle": "bobh",
+        "active": false,
+        "meta": null
+      }
+    ]
+  },
+  "query_posts_by_user": {
+    "rows": []
+  },
+  "query_comments_order_desc": {
+    "rows": [
+      {
+        "id": 2,
+        "post_id": null,
+        "author_id": 2,
+        "body": "Orphan comment"
+      },
+      {
+        "id": 1,
+        "post_id": null,
+        "author_id": 2,
+        "body": "Thanks"
+      }
+    ]
+  },
+  "query_published_posts": {
+    "rows": []
+  },
+  "query_users_limit_offset": {
+    "rows": [
+      {
+        "id": 2,
+        "email": "bob@example.com",
+        "role": "admin",
+        "age": null,
+        "handle": "bobh",
+        "active": false,
+        "meta": null
+      }
+    ]
+  },
+  "query_count_users": {
+    "count": 1
+  },
+  "query_null_post_id": {
+    "rows": [
+      {
+        "id": 1,
+        "post_id": null,
+        "author_id": 2,
+        "body": "Thanks"
+      },
+      {
+        "id": 2,
+        "post_id": null,
+        "author_id": 2,
+        "body": "Orphan comment"
+      }
+    ]
+  },
+  "query_select_columns": {
+    "rows": [
+      {
+        "id": 2,
+        "email": "bob@example.com"
+      }
+    ]
+  }
+}

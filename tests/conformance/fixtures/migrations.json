@@ -1,0 +1,11 @@
+[
+  {
+    "version": 1,
+    "name": "initial",
+    "ops": [
+      { "create_table": { "name": "users" } },
+      { "create_table": { "name": "posts" } },
+      { "create_table": { "name": "comments" } }
+    ]
+  }
+]

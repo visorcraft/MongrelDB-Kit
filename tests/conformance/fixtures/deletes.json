@@ -1,0 +1,17 @@
+[
+  {
+    "name": "delete_post_set_null",
+    "table": "posts",
+    "pk": 1
+  },
+  {
+    "name": "delete_user_cascade",
+    "table": "users",
+    "pk": 1
+  },
+  {
+    "name": "delete_user_restrict",
+    "table": "users",
+    "pk": 2
+  }
+]

@@ -1,0 +1,266 @@
+{
+  "tables": [
+    {
+      "id": 1,
+      "name": "users",
+      "columns": [
+        {
+          "id": 1,
+          "name": "id",
+          "storage_type": "int64",
+          "application_type": "int64",
+          "nullable": false,
+          "primary_key": true,
+          "generated": false
+        },
+        {
+          "id": 2,
+          "name": "email",
+          "storage_type": "text",
+          "application_type": "text",
+          "nullable": false,
+          "primary_key": false,
+          "generated": false
+        },
+        {
+          "id": 3,
+          "name": "role",
+          "storage_type": "text",
+          "application_type": "text",
+          "nullable": false,
+          "primary_key": false,
+          "enum_values": [
+            "user",
+            "admin"
+          ],
+          "generated": false
+        },
+        {
+          "id": 4,
+          "name": "age",
+          "storage_type": "int64",
+          "application_type": "int64",
+          "nullable": true,
+          "primary_key": false,
+          "min": 0,
+          "max": 150,
+          "generated": false
+        },
+        {
+          "id": 5,
+          "name": "handle",
+          "storage_type": "text",
+          "application_type": "text",
+          "nullable": true,
+          "primary_key": false,
+          "min_length": 2,
+          "max_length": 20,
+          "generated": false
+        },
+        {
+          "id": 6,
+          "name": "active",
+          "storage_type": "bool",
+          "application_type": "bool",
+          "nullable": false,
+          "primary_key": false,
+          "default": {
+            "static": true
+          },
+          "generated": false
+        },
+        {
+          "id": 7,
+          "name": "meta",
+          "storage_type": "json",
+          "application_type": "json",
+          "nullable": true,
+          "primary_key": false,
+          "generated": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_email",
+          "columns": [
+            "email"
+          ],
+          "unique": true
+        }
+      ],
+      "unique_constraints": [
+        {
+          "name": "uq_email",
+          "columns": [
+            "email"
+          ]
+        }
+      ],
+      "foreign_keys": [],
+      "check_constraints": [
+        {
+          "name": "chk_user_age",
+          "expr": "age >= 0"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "posts",
+      "columns": [
+        {
+          "id": 1,
+          "name": "id",
+          "storage_type": "int64",
+          "application_type": "int64",
+          "nullable": false,
+          "primary_key": true,
+          "generated": false
+        },
+        {
+          "id": 2,
+          "name": "user_id",
+          "storage_type": "int64",
+          "application_type": "int64",
+          "nullable": false,
+          "primary_key": false,
+          "generated": false
+        },
+        {
+          "id": 3,
+          "name": "title",
+          "storage_type": "text",
+          "application_type": "text",
+          "nullable": false,
+          "primary_key": false,
+          "generated": false
+        },
+        {
+          "id": 4,
+          "name": "slug",
+          "storage_type": "text",
+          "application_type": "text",
+          "nullable": false,
+          "primary_key": false,
+          "regex": "^[a-z0-9-]+$",
+          "generated": false
+        },
+        {
+          "id": 5,
+          "name": "published",
+          "storage_type": "bool",
+          "application_type": "bool",
+          "nullable": false,
+          "primary_key": false,
+          "default": {
+            "static": false
+          },
+          "generated": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [],
+      "unique_constraints": [
+        {
+          "name": "uq_slug",
+          "columns": [
+            "slug"
+          ]
+        }
+      ],
+      "foreign_keys": [
+        {
+          "name": "fk_posts_user",
+          "columns": [
+            "user_id"
+          ],
+          "references_table": "users",
+          "references_columns": [
+            "id"
+          ],
+          "on_delete": "cascade"
+        }
+      ],
+      "check_constraints": []
+    },
+    {
+      "id": 3,
+      "name": "comments",
+      "columns": [
+        {
+          "id": 1,
+          "name": "id",
+          "storage_type": "int64",
+          "application_type": "int64",
+          "nullable": false,
+          "primary_key": true,
+          "generated": false
+        },
+        {
+          "id": 2,
+          "name": "post_id",
+          "storage_type": "int64",
+          "application_type": "int64",
+          "nullable": true,
+          "primary_key": false,
+          "generated": false
+        },
+        {
+          "id": 3,
+          "name": "body",
+          "storage_type": "text",
+          "application_type": "text",
+          "nullable": false,
+          "primary_key": false,
+          "min_length": 1,
+          "max_length": 500,
+          "generated": false
+        },
+        {
+          "id": 4,
+          "name": "author_id",
+          "storage_type": "int64",
+          "application_type": "int64",
+          "nullable": false,
+          "primary_key": false,
+          "generated": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [],
+      "unique_constraints": [],
+      "foreign_keys": [
+        {
+          "name": "fk_comments_post",
+          "columns": [
+            "post_id"
+          ],
+          "references_table": "posts",
+          "references_columns": [
+            "id"
+          ],
+          "on_delete": "set_null"
+        },
+        {
+          "name": "fk_comments_author",
+          "columns": [
+            "author_id"
+          ],
+          "references_table": "users",
+          "references_columns": [
+            "id"
+          ],
+          "on_delete": "restrict"
+        }
+      ],
+      "check_constraints": []
+    }
+  ]
+}

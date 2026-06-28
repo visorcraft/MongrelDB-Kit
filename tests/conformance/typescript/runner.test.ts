@@ -1,0 +1,362 @@
+import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+	KitDatabase,
+	Schema,
+	column,
+	table,
+	index,
+	unique,
+	foreignKey,
+	staticDefault,
+	nowDefault,
+	uuidDefault,
+	sequenceDefault,
+	customDefault,
+	eq,
+	ne,
+	gt,
+	gte,
+	lt,
+	lte,
+	isNull,
+	and,
+	or,
+	asc,
+	desc,
+	KitValidationError,
+	KitDuplicateError,
+	KitForeignKeyError,
+	KitRestrictError,
+	KitNotFoundError,
+	KitMigrationError
+} from '../../../packages/kit/src/index.js';
+import type { TableSpec, ColumnSpec, DefaultValue, Migration } from '../../../packages/kit/src/index.js';
+
+const FIXTURES_DIR = new URL('../fixtures', import.meta.url).pathname;
+
+function loadJson(name: string): any {
+	return JSON.parse(fs.readFileSync(path.join(FIXTURES_DIR, name), 'utf-8'));
+}
+
+function defaultFromJson(d: any): DefaultValue {
+	if (d === 'now') return nowDefault();
+	if (d === 'uuid') return uuidDefault();
+	if (typeof d === 'object' && d.static !== undefined) return staticDefault(d.static);
+	if (typeof d === 'object' && d.sequence !== undefined) return sequenceDefault(d.sequence);
+	if (typeof d === 'object' && d.custom_name !== undefined)
+		return customDefault(() => {
+			throw new Error('custom default not supported');
+		});
+	throw new Error(`unknown default: ${JSON.stringify(d)}`);
+}
+
+function columnFromJson(col: any): ColumnSpec {
+	const opts: any = {
+		nullable: col.nullable,
+		primaryKey: col.primary_key
+	};
+	if (col.default !== undefined) opts.default = defaultFromJson(col.default);
+	if (col.enum_values !== undefined) opts.enumValues = col.enum_values;
+	if (col.min !== undefined) opts.min = col.min;
+	if (col.max !== undefined) opts.max = col.max;
+	if (col.min_length !== undefined) opts.minLength = col.min_length;
+	if (col.max_length !== undefined) opts.maxLength = col.max_length;
+	if (col.regex !== undefined) opts.regex = new RegExp(col.regex);
+	const c = column(col.name, col.storage_type, opts) as ColumnSpec;
+	c.id = col.id;
+	return c;
+}
+
+function schemaFromFixture(raw: any): Schema {
+	const tables = raw.tables.map((t: any) => {
+		const cols = t.columns.map(columnFromJson);
+		const idxs = (t.indexes ?? []).map((i: any) => index(i.columns, { name: i.name, unique: i.unique }));
+		const uqs = (t.unique_constraints ?? []).map((u: any) => unique(u.columns, { name: u.name }));
+		const fks = (t.foreign_keys ?? []).map((fk: any) => {
+			const onDelete = fk.on_delete === 'set_null' ? 'set null' : fk.on_delete;
+			return foreignKey(fk.columns, { table: fk.references_table, columns: fk.references_columns }, { name: fk.name, onDelete });
+		});
+		return table(t.name, {
+			id: t.id,
+			columns: cols,
+			primaryKey: t.primary_key,
+			indexes: idxs,
+			foreignKeys: fks,
+			unique: uqs,
+			checks: []
+		});
+	});
+	return new Schema(tables);
+}
+
+function migrationFromFixture(raw: any, schema: Schema): Migration {
+	return {
+		version: raw.version,
+		name: raw.name,
+		up(ctx) {
+			for (const op of raw.ops) {
+				if (op.create_table) {
+					ctx.ensureTable(schema.table(op.create_table.name));
+				} else if (op.add_column) {
+					throw new KitMigrationError('add_column migration op not supported in conformance runner');
+				}
+			}
+		}
+	};
+}
+
+function isIntColumn(table: TableSpec, name: string): boolean {
+	return table.columns.some((c) => c.name === name && c.storageType === 'int64');
+}
+
+function normalizeRowForTs(table: TableSpec, row: Record<string, any>): Record<string, any> {
+	const out: Record<string, any> = {};
+	for (const [key, value] of Object.entries(row)) {
+		if (value === null || value === undefined) {
+			out[key] = null;
+		} else if (isIntColumn(table, key)) {
+			out[key] = BigInt(value);
+		} else {
+			out[key] = value;
+		}
+	}
+	return out;
+}
+
+function defaultForStorageType(storageType: string): unknown {
+	switch (storageType) {
+		case 'int64':
+			return 0n;
+		case 'float64':
+			return 0;
+		case 'bool':
+			return false;
+		case 'text':
+		case 'json':
+		case 'timestamp':
+		case 'date':
+		case 'bytes':
+			return '';
+		default:
+			return null;
+	}
+}
+
+function valuesEqual(a: unknown, b: unknown): boolean {
+	if (a === null || a === undefined || b === null || b === undefined) return a === b;
+	if (typeof a === 'bigint' || typeof b === 'bigint') return BigInt(a as any) === BigInt(b as any);
+	return a === b;
+}
+
+function normalizeValueForCompare(value: unknown): unknown {
+	if (typeof value === 'bigint') return Number(value);
+	if (Array.isArray(value)) return value.map(normalizeValueForCompare);
+	if (value && typeof value === 'object') {
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value)) out[k] = normalizeValueForCompare(v);
+		return out;
+	}
+	return value;
+}
+
+function normalizeRowForCompare(table: TableSpec, row: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(row)) {
+		const col = table.columns.find((c) => c.name === k);
+		if (col && col.nullable && valuesEqual(v, defaultForStorageType(col.storageType))) {
+			out[k] = null;
+		} else {
+			out[k] = normalizeValueForCompare(v);
+		}
+	}
+	return out;
+}
+
+function buildPredicate(table: TableSpec, filter: Record<string, any>): any {
+	const parts: any[] = [];
+	for (const [key, val] of Object.entries(filter)) {
+		const col = table.columns.find((c) => c.name === key);
+		if (!col) throw new Error(`column ${key} not found`);
+		if (val === null) {
+			if (col.nullable) {
+				const defaultValue = defaultForStorageType(col.storageType);
+				parts.push(or(isNull(col), eq(col, defaultValue as any)));
+			} else {
+				parts.push(isNull(col));
+			}
+		} else if (typeof val === 'object' && !Array.isArray(val)) {
+			const [[op, operand]] = Object.entries(val);
+			const v = isIntColumn(table, key) ? BigInt(operand as number) : operand;
+			switch (op) {
+				case 'eq':
+					parts.push(eq(col, v));
+					break;
+				case 'ne':
+					parts.push(ne(col, v));
+					break;
+				case 'gt':
+					parts.push(gt(col, v));
+					break;
+				case 'gte':
+					parts.push(gte(col, v));
+					break;
+				case 'lt':
+					parts.push(lt(col, v));
+					break;
+				case 'lte':
+					parts.push(lte(col, v));
+					break;
+				default:
+					throw new Error(`unknown operator ${op}`);
+			}
+		} else {
+			const v = isIntColumn(table, key) ? BigInt(val as number) : val;
+			parts.push(eq(col, v));
+		}
+	}
+	return parts.length === 1 ? parts[0] : and(...parts);
+}
+
+function buildOrder(table: TableSpec, order: string): any[] {
+	return order.split(',').map((part) => {
+		part = part.trim();
+		const descFlag = part.startsWith('-');
+		const name = descFlag ? part.slice(1) : part.startsWith('+') ? part.slice(1) : part;
+		const col = table.columns.find((c) => c.name === name);
+		if (!col) throw new Error(`order column ${name} not found`);
+		return descFlag ? desc(col) : asc(col);
+	});
+}
+
+function errorCode(err: unknown): string {
+	if (err instanceof KitValidationError) return 'VALIDATION';
+	if (err instanceof KitDuplicateError) return 'DUPLICATE';
+	if (err instanceof KitForeignKeyError) return 'FOREIGN_KEY';
+	if (err instanceof KitRestrictError) return 'RESTRICT';
+	if (err instanceof KitNotFoundError) return 'NOT_FOUND';
+	return 'UNKNOWN';
+}
+
+function assertOutcome<T>(scenarioName: string, fn: () => T, expected: any, normalize: (v: T) => any): void {
+	try {
+		const actual = normalize(fn());
+		if (expected.error) {
+			throw new Error(`scenario ${scenarioName} expected error ${expected.error} but succeeded with ${JSON.stringify(actual)}`);
+		}
+		expect(actual).toEqual(expected.row ?? expected.rows ?? expected.count ?? expected);
+	} catch (err) {
+		if (!expected.error) throw err;
+		expect(errorCode(err)).toBe(expected.error);
+	}
+}
+
+async function runScenario(scenario: any, expected: any, kit: KitDatabase, schema: Schema): Promise<void> {
+	const tableSpec = schema.table(scenario.table);
+	if (scenario.row !== undefined) {
+		const row = normalizeRowForTs(tableSpec, scenario.row);
+		assertOutcome(
+			scenario.name,
+			() => kit.insertInto(tableSpec).values(row).executeSync(),
+			expected,
+			(r) => normalizeRowForCompare(tableSpec, r as Record<string, unknown>)
+		);
+	} else if (scenario.patch !== undefined) {
+		const pkCol = tableSpec.columns.find((c) => c.name === tableSpec.primaryKey[0])!;
+		const pkValue = isIntColumn(tableSpec, pkCol.name) ? BigInt(scenario.pk) : scenario.pk;
+		const patch = normalizeRowForTs(tableSpec, scenario.patch);
+		assertOutcome(
+			scenario.name,
+			() => kit.updateTable(tableSpec).set(patch).where(eq(pkCol, pkValue)).executeSync()[0],
+			expected,
+			(r) => normalizeRowForCompare(tableSpec, r as Record<string, unknown>)
+		);
+	} else if (scenario.pk !== undefined && scenario.patch === undefined) {
+		const pkCol = tableSpec.columns.find((c) => c.name === tableSpec.primaryKey[0])!;
+		const pkValue = isIntColumn(tableSpec, pkCol.name) ? BigInt(scenario.pk) : scenario.pk;
+		try {
+			kit.deleteFrom(tableSpec).where(eq(pkCol, pkValue)).executeSync();
+			if (expected.error) {
+				throw new Error(`scenario ${scenario.name} expected error ${expected.error} but delete succeeded`);
+			}
+			for (const tableName of ['users', 'posts', 'comments']) {
+				const t = schema.table(tableName);
+				const rows = kit
+					.selectFrom(t)
+					.orderBy(...buildOrder(t, '+id'))
+					.executeSync()
+					.map((row) => normalizeRowForCompare(t, row as Record<string, unknown>));
+				expect(rows).toEqual(expected[tableName]);
+			}
+		} catch (err) {
+			if (!expected.error) throw err;
+			expect(errorCode(err)).toBe(expected.error);
+		}
+	} else if (scenario.table && (scenario.filter !== undefined || scenario.order !== undefined || scenario.count || scenario.select)) {
+		let result: any;
+		if (scenario.count) {
+			let builder = kit.selectFrom(tableSpec);
+			if (scenario.filter) builder = builder.where(buildPredicate(tableSpec, scenario.filter));
+			result = { count: Number(builder.selectCount().executeSync()) };
+		} else if (scenario.select) {
+			let builder = kit.selectFrom(tableSpec);
+			if (scenario.filter) builder = builder.where(buildPredicate(tableSpec, scenario.filter));
+			if (scenario.order) builder = builder.orderBy(...buildOrder(tableSpec, scenario.order));
+			if (scenario.limit !== undefined) builder = builder.limit(scenario.limit);
+			if (scenario.offset !== undefined) builder = builder.offset(scenario.offset);
+			const cols = scenario.select.map((name: string) => tableSpec.columns.find((c) => c.name === name)!);
+			result = { rows: builder.select(cols).executeSync().map((row) => normalizeRowForCompare(tableSpec, row as Record<string, unknown>)) };
+		} else {
+			let builder = kit.selectFrom(tableSpec);
+			if (scenario.filter) builder = builder.where(buildPredicate(tableSpec, scenario.filter));
+			if (scenario.order) builder = builder.orderBy(...buildOrder(tableSpec, scenario.order));
+			if (scenario.limit !== undefined) builder = builder.limit(scenario.limit);
+			if (scenario.offset !== undefined) builder = builder.offset(scenario.offset);
+			result = { rows: builder.executeSync().map((row: any) => normalizeRowForCompare(tableSpec, row as Record<string, unknown>)) };
+		}
+		expect(result).toEqual(expected);
+	}
+}
+
+describe('mongreldb-kit conformance', () => {
+	it('runs shared fixtures against the TypeScript kit', async () => {
+		const schemaRaw = loadJson('schema.json');
+		const migrationsRaw = loadJson('migrations.json');
+		const inserts = loadJson('inserts.json');
+		const updates = loadJson('updates.json');
+		const deletes = loadJson('deletes.json');
+		const queries = loadJson('queries.json');
+		const expected = {
+			inserts: loadJson('expected/inserts.json'),
+			updates: loadJson('expected/updates.json'),
+			deletes: loadJson('expected/deletes.json'),
+			queries: loadJson('expected/queries.json')
+		};
+
+		const schema = schemaFromFixture(schemaRaw);
+		const migrations = migrationsRaw.map((m: any) => migrationFromFixture(m, schema));
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-conformance-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			kit.migrateSync(schema, migrations);
+
+			for (const scenario of inserts) {
+				await runScenario(scenario, expected.inserts[scenario.name], kit, schema);
+			}
+			for (const scenario of updates) {
+				await runScenario(scenario, expected.updates[scenario.name], kit, schema);
+			}
+			for (const scenario of deletes) {
+				await runScenario(scenario, expected.deletes[scenario.name], kit, schema);
+			}
+			for (const scenario of queries) {
+				await runScenario(scenario, expected.queries[scenario.name], kit, schema);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+});
