@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/mongreldb-kit-core", "crates/mongreldb-kit"]
+resolver = "2"
