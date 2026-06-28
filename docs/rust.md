@@ -232,7 +232,23 @@ let migrations = vec![
 mongreldb_kit::migrate(&mut db, &migrations)?;
 ```
 
+## Sequences and defaults
+
+A column whose `DefaultKind::Sequence(name)` default is set is auto-assigned from a named sequence
+when the inserted row omits it. Sequences are **1-based** (the first value is `1`, matching SQL
+`AUTO_INCREMENT`). You can also draw values directly:
+
+```rust
+let first = db.allocate_sequence("orders_id_seq", 1)?; // 1 on a fresh sequence
+let block = db.allocate_sequence("orders_id_seq", 10)?; // reserve 10, returns the first
+```
+
+`DefaultKind` also covers `Static(value)`, `Now`, `Uuid`, and `CustomName(name)`.
+
 ## Error handling
+
+`KitError` is a flat enum of stable categories: `Validation`, `Duplicate`, `ForeignKey`, `Restrict`,
+`Migration`, `Conflict`, `Storage`, and `Integrity`. Match on the variant you handle:
 
 ```rust
 use mongreldb_kit::KitError;
@@ -247,6 +263,8 @@ match db.begin() {
 }
 ```
 
+`Conflict` is the retryable category; see [Errors](./errors.md) for the cross-language mapping.
+
 ## Running this example
 
 ```sh
@@ -255,3 +273,10 @@ cd kit-demo
 # Add mongreldb-kit and serde_json to Cargo.toml, then paste the code above.
 cargo run
 ```
+
+## See also
+
+- [Query builder](./query-builder.md) — the query model the `Query`/`Select`/`Expr` AST serializes.
+- [Constraints](./constraints.md) · [Errors](./errors.md) — enforcement and the `KitError` categories.
+- [Migrations](./migrations.md) — migration ops and the runner.
+- [TypeScript](./typescript.md) · [Python](./python.md) — the sibling language surfaces.

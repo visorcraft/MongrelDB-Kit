@@ -1,10 +1,136 @@
 # Migrations
 
-MongrelDB Kit records schema changes in a versioned migration list. The runner applies pending migrations in order, records them in the internal `_migrations` table, and updates the schema catalog.
+MongrelDB Kit evolves a schema through a versioned, ordered list of migrations.
+A runner applies the pending ones in version order, records each in the internal
+`__kit_schema_migrations` table, and rewrites the schema catalog. Re-running is a
+no-op, and a content-aware checksum detects after-the-fact edits to an
+already-applied migration.
 
-## Migration JSON format
+This guide uses the shared "store" schema (`customers`, `products`, `orders`,
+`order_items`) defined in [Schema DSL](./schema.md).
 
-Each migration is an object with `version`, `name`, and `ops`:
+## The migration object
+
+A migration is a small object. In TypeScript:
+
+```ts
+interface Migration {
+  version: number;          // unique, ordered; first applied is the lowest
+  name: string;             // human label, recorded alongside the version
+  ops?: MigrationOp[];      // optional declarative description (see below)
+  up: (ctx: MigrationContext) => Promise<void> | void;
+}
+```
+
+- **`version`** orders the history. The runner applies migrations whose version
+  is greater than the highest already applied, in ascending order.
+- **`name`** is stored with the record and shown by the CLI.
+- **`up()`** performs the change. In TypeScript this is **imperative** — you call
+  context methods and helper functions to do the work (see
+  [Two execution models](#two-execution-models)).
+- **`ops`** is an optional, declarative list describing what the migration
+  changes. The TypeScript runner does **not** execute `ops`; they exist only to
+  fold the migration's intent into its [checksum](#checksums-and-drift-detection)
+  so a later edit is caught as drift.
+
+## Running migrations
+
+There are two runners. Both live on the kit surface; pick by whether your `up()`
+callbacks are synchronous.
+
+```ts
+import { KitDatabase, migrate } from '@mongreldb/kit';
+import { schema } from './schema.js';
+
+const db = KitDatabase.openSync('./data', schema);
+
+// Synchronous: a method on the database. up() must be synchronous.
+db.migrateSync(schema, migrations);
+
+// Asynchronous: a standalone helper. Use it when up() is async or calls ctx.sql().
+await migrate(db, schema, migrations);
+```
+
+Both:
+
+1. Acquire the advisory lock row in `__kit_migration_locks` (a single `default`
+   lock with a 5-minute TTL). A live lock raises `KitMigrationError`
+   (`migration lock is already held`); an expired lock is reclaimed.
+2. Sort the supplied migrations by version.
+3. Read applied records from `__kit_schema_migrations` and
+   [verify their checksums](#checksums-and-drift-detection).
+4. Compute the pending set: every migration whose version is greater than the
+   maximum applied version.
+5. For each pending migration: write a record with status `in_progress`, run
+   `up()` inside a native transaction, then on success commit and mark the record
+   `applied`. On failure the transaction is rolled back, the record is marked
+   `failed`, and a `KitMigrationError` is raised.
+6. Rewrite the schema catalog (`__kit_schema_catalog`) and release the lock.
+
+Because step 4 only ever selects versions above the high-water mark, **running
+the runner twice applies nothing the second time** — migrations are idempotent.
+
+## Two execution models
+
+The same `MigrationOp` vocabulary is shared across languages, but it is used two
+different ways. Knowing which you are in avoids confusion.
+
+### TypeScript: imperative `up()`
+
+The TypeScript runner calls your `up(ctx)` and you make the change with context
+methods and the exported migration helpers. The `ops` array is metadata only —
+it never drives the work.
+
+`MigrationContext` provides:
+
+| Member | What it does |
+| --- | --- |
+| `ctx.kit` | The `KitDatabase`. |
+| `ctx.db` | The native MongrelDB database. |
+| `ctx.ensureTable(table)` | Create a table from its `TableSpec` if it does not exist. |
+| `ctx.addColumn(tableName, column)` | Add a column, backfilling non-nullable columns with their default. |
+| `ctx.sql(sql)` | Run raw SQL. Available in async migrations only; throws in `migrateSync`. |
+
+For changes beyond adding a table or column, import the standalone helpers and
+call them from `up()` with `ctx.kit`. They are async, so use the async `migrate`
+runner:
+
+```ts
+import {
+  migrate, dropTable, addColumn, addIndex, addUnique, addForeignKey, unique,
+} from '@mongreldb/kit';
+
+await migrate(db, schema, [
+  {
+    version: 5,
+    name: 'tighten_products',
+    ops: [{ kind: 'addUnique', table: 'products', constraint: 'products_sku_uq' }],
+    async up({ kit }) {
+      await addUnique(kit, 'products', unique(['sku'], { name: 'products_sku_uq' }));
+    },
+  },
+]);
+```
+
+| Helper | Effect |
+| --- | --- |
+| `createTable(kit, table)` / `ctx.ensureTable` | Create the table from its spec if missing. |
+| `addColumn(kit, t, column)` / `ctx.addColumn` | Add a column; non-nullable columns are backfilled with their default. |
+| `addIndex(kit, t, indexSpec)` | Add an index by rebuilding the table (MongrelDB has no add-index-in-place). |
+| `addUnique(kit, t, uniqueSpec)` | Add a unique constraint and backfill its guards; rejects data that already violates it. |
+| `addForeignKey(kit, t, fkSpec)` | Add a foreign key and touch parent row guards; rejects a child with a missing parent. |
+| `dropTable(kit, tableName)` | Drop a table and clear its unique-key and row guards. |
+
+There is intentionally **no** TypeScript helper for `dropColumn`, `dropUnique`,
+`dropForeignKey`, `addCheck`, or `dropCheck`: check and foreign-key *enforcement*
+is driven by the schema definition you pass when opening the database and
+re-persisting the catalog, so those need no row-level backfill step.
+
+### Declarative (JSON / Rust / CLI)
+
+When migrations come from a JSON file (the CLI) or the Rust kit, there is no
+`up()` — the **`ops` list is the migration body**, and the runner executes each
+op. JSON migrations use serde's snake_case shape:
 
 ```json
 [
@@ -12,208 +138,240 @@ Each migration is an object with `version`, `name`, and `ops`:
     "version": 1,
     "name": "initial",
     "ops": [
-      { "create_table": { "name": "users" } }
+      { "create_table": { "name": "customers" } },
+      { "create_table": { "name": "products" } }
     ]
   },
   {
     "version": 2,
-    "name": "add_posts",
+    "name": "add_orders",
     "ops": [
-      { "create_table": { "name": "posts" } },
-      { "add_column": { "table": "users", "column": "bio" } }
+      { "create_table": { "name": "orders" } },
+      { "add_foreign_key": { "table": "orders", "constraint": "orders_customer_id_fk" } }
     ]
   }
 ]
 ```
 
-## Operations
+The Rust/CLI runner resolves each op against the database's **stored** schema, so
+the referenced tables, columns, and constraints must already be present in that
+schema. See [CLI](./cli.md) for how `mongreldb-kit migrate apply` is wired.
 
-| Operation | JSON | Notes |
-|---|---|---|
-| Create table | `{"create_table": {"name": "users"}}` | Creates the table from the current schema |
-| Drop table | `{"drop_table": {"name": "users"}}` | Destructive; also clears the table's unique-key and row guards |
-| Add column | `{"add_column": {"table": "users", "column": "bio"}}` | Column must be nullable or have a default |
-| Drop column | `{"drop_column": {"table": "users", "column": "bio"}}` | Destructive |
-| Add index | `{"add_index": {"table": "users", "index": "idx_email"}}` | |
-| Drop index | `{"drop_index": {"table": "users", "index": "idx_email"}}` | |
-| Add unique | `{"add_unique": {"table": "users", "constraint": "uq_email"}}` | Backfills `__kit_unique_keys` guards for existing rows; **fails** if existing data already violates the constraint |
-| Drop unique | `{"drop_unique": {"table": "users", "constraint": "uq_email"}}` | Cleans the constraint's guards |
-| Add foreign key | `{"add_foreign_key": {"table": "posts", "constraint": "fk_posts_user"}}` | Touches parent `__kit_row_guards` for existing children; **fails** if a child references a missing parent |
-| Drop foreign key | `{"drop_foreign_key": {"table": "posts", "constraint": "fk_posts_user"}}` | |
-| Add check | `{"add_check": {"table": "users", "constraint": "chk_email"}}` | Validates existing rows |
-| Drop check | `{"drop_check": {"table": "users", "constraint": "chk_email"}}` | |
-| Raw SQL | `{"raw_sql": "SELECT 1"}` | Not supported by all adapters |
+## Supported operations
 
-## How migrations work
+The op vocabulary is identical across languages, but coverage differs by runner.
+Verify against this matrix rather than assuming symmetry.
 
-1. The runner acquires the advisory lock in `__kit_migration_locks`.
-2. It reads already-applied migrations from `__kit_schema_migrations`.
-3. It computes pending migrations: those with a version greater than the maximum applied version.
-4. Each pending migration runs inside a transaction.
-5. Successes are recorded as `applied`; failures are recorded as `failed` and the error is raised.
-6. The schema catalog is rewritten and the lock is released.
+| Op | TypeScript helper | Rust / CLI op runner |
+| --- | --- | --- |
+| `createTable` | `createTable` / `ctx.ensureTable` | implemented |
+| `dropTable` | `dropTable` (clears guards) | implemented (clears guards) |
+| `addColumn` | `addColumn` / `ctx.addColumn` (backfills non-nullable defaults) | implemented (adds the column) |
+| `addUnique` | `addUnique` (backfill + reject violations) | implemented (backfill + reject violations) |
+| `dropUnique` | — | implemented (deletes the constraint's guards) |
+| `addForeignKey` | `addForeignKey` (backfill + reject missing parent) | implemented (backfill + reject missing parent) |
+| `dropForeignKey` | — | metadata-only no-op (enforcement follows the re-persisted schema) |
+| `addCheck` / `dropCheck` | — | metadata-only no-op (enforcement follows the re-persisted schema) |
+| `addIndex` | `addIndex` (table rebuild) | **not supported** — raises a migration error |
+| `dropColumn` | — | **not supported** — raises a migration error |
+| `dropIndex` | — | **not supported** — raises a migration error |
+| `rawSql` | `ctx.sql` (async migrations only) | **not supported** — raises a migration error |
 
-The runner is idempotent: running it twice applies nothing the second time.
+Note the asymmetry: `addIndex` works in TypeScript (it rebuilds the table) but
+the Rust/CLI runner rejects it; conversely `dropUnique`, `dropForeignKey`, and
+check ops are handled (or safely no-op'd) by the Rust/CLI runner but have no
+TypeScript helper because the schema definition already carries their
+enforcement.
 
-## Migration checksums
+## Checksums and drift detection
 
-Each migration carries a **content-aware** SHA-256 checksum computed over a single
+Every migration carries a **content-aware** SHA-256 checksum over a single
 canonical serialization of its `version`, `name`, and ordered `ops` list:
 
 ```
 sha256('{"version":<n>,"name":<json>,"ops":[<op>,...]}')
 ```
 
-The canonical form fixes the key order (`op` first, then the op's fields) and uses
-standard JSON string escaping, so TypeScript, Rust, and Python produce **byte-identical**
-checksums for the same logical migration. Editing or reordering a migration's ops changes
-its checksum, which is how drift detection rejects a tampered or re-meaning'd migration
-that was already applied. (In TypeScript the `ops` array is optional; when omitted the
-checksum covers the version and name with an empty op list.)
+The canonical form fixes the key order (`op` first, then the op's fields) and
+uses standard JSON string escaping, so TypeScript, Rust, and Python produce
+**byte-identical** checksums for the same logical migration. Two verified
+examples (asserted by the cross-language conformance tests):
 
-## CLI commands
+```
+{"version":1,"name":"init","ops":[{"op":"create_table","name":"users"}]}
+  -> fe2f521793591207bd4d8645c2631e4b7ce43e30fe7ea5691a2846c74ea71cc3
 
-The `mongreldb-kit` CLI reads migrations from JSON files.
-
-Apply migrations:
-```sh
-mongreldb-kit migrate apply ./app.kitdb ./migrations.json
+{"version":1,"name":"init","ops":[]}
+  -> 6408373a4372a2c49859db2a4548ea43308e5ba7dd3609998ca376606cf09757
 ```
 
-Show status:
-```sh
-mongreldb-kit migrate status ./app.kitdb
-```
+When `ops` is omitted (TypeScript), the checksum covers the version and name
+with an empty op list — the second form above.
 
-Show pending migrations without applying:
-```sh
-mongreldb-kit migrate plan ./app.kitdb ./migrations.json
-```
+**Drift detection.** When the TypeScript runner reads the applied records, it
+recomputes the checksum of the supplied migration with the same version and
+compares it (and the name) against what was stored. A mismatch — or an applied
+version that is missing from the supplied list — raises `KitSchemaDriftError`.
+That is how an edited or reordered historical migration is caught before it can
+silently change the meaning of the schema. Records left in `failed` status are
+skipped by drift detection; repair them before re-running.
 
-Generate a skeleton migration from drift:
-```sh
-mongreldb-kit generate migration ./schema.json --from ./app.kitdb
-```
+> Because the checksum is content-aware, **adding or editing an `op` on an
+> already-applied migration changes its checksum and trips drift detection**.
+> Keep the `ops` you list in sync with what `up()` actually did so the checksum
+> stays stable.
 
-Validate a schema file:
-```sh
-mongreldb-kit schema validate ./schema.json
-```
+## Backfilling and guard maintenance
 
-Print the stored schema:
-```sh
-mongreldb-kit schema print ./app.kitdb
-```
+Several operations scan existing rows and reconcile the kit's
+[internal guard tables](./internal-tables.md) so constraints added *after* data
+exists stay consistent. All backfills are idempotent — re-running leaves existing
+guards untouched.
 
-## TypeScript migrations
+- **Add column (non-nullable).** The column must have a default. The runner
+  scans the table and writes the default into every row before committing.
+  A `sequence` default cannot be backfilled and raises `KitMigrationError`.
+- **Add unique.** For each existing row whose unique columns are all non-null,
+  the runner reserves a `__kit_unique_keys` guard. If two rows produce the same
+  key, the existing data already violates the constraint and the migration
+  **fails**. Rows with a null in any unique column are skipped (nulls never
+  collide).
+- **Add foreign key.** For each existing child row with a non-null foreign key,
+  the runner verifies the referenced parent exists and touches the parent's
+  `__kit_row_guards` entry, so a later concurrent parent delete conflicts. A
+  missing parent **fails** the migration.
+- **Drop table / drop unique.** The runner removes the unique-key and row guards
+  owned by the dropped table or constraint.
+
+## Walkthrough: evolving the store schema
+
+Start from the base store schema and grow it. Each migration lists the `ops`
+that match what `up()` does, so the checksum stays content-aware.
 
 ```ts
+import {
+  KitDatabase, migrate, text, unique, addUnique,
+} from '@mongreldb/kit';
+import { schema, customers, products, orders, orderItems } from './schema.js';
+
+const db = KitDatabase.openSync('./data', schema);
+
+// v1 is the initial create. Synchronous: ensureTable + addColumn are sync.
 db.migrateSync(schema, [
   {
     version: 1,
-    name: 'initial',
+    name: 'init',
+    ops: [
+      { kind: 'createTable', name: 'customers' },
+      { kind: 'createTable', name: 'products' },
+      { kind: 'createTable', name: 'orders' },
+      { kind: 'createTable', name: 'order_items' },
+    ],
     up({ ensureTable }) {
-      ensureTable(users);
-    }
+      ensureTable(customers);
+      ensureTable(products);
+      ensureTable(orders);
+      ensureTable(orderItems);
+    },
   },
-  {
-    version: 2,
-    name: 'add_bio',
-    up({ addColumn }) {
-      addColumn('users', text('bio', { nullable: true }));
-    }
-  }
 ]);
 ```
 
-The `MigrationContext` provides:
-- `kit` — the `KitDatabase`
-- `db` — the native MongrelDB database object
-- `ensureTable(table)` — create a table from the schema if it does not exist
-- `addColumn(tableName, column)` — add a column, backfilling non-nullable columns with their default
-- `sql(sql)` — run raw SQL (async migrations only; throws in `migrateSync`)
-
-For the other schema changes, import the standalone helpers and call them from `up()` with
-`ctx.kit` (these are async, so use the async `migrate()` runner):
+**Add a column.** Give customers an optional phone number. A nullable column
+needs no backfill; a non-nullable one would need a default.
 
 ```ts
-import { dropTable, addUnique, addForeignKey, addIndex } from '@mongreldb/kit';
-
-await migrate(db, schema, [
+db.migrateSync(schema, [
+  /* ...v1... */
   {
-    version: 3,
-    name: 'tighten_accounts',
-    ops: [{ kind: 'addUnique', table: 'accounts', constraint: 'accounts_email_uq' }],
-    async up({ kit }) {
-      await addUnique(kit, 'accounts', unique(['email'], { name: 'accounts_email_uq' }));
-    }
-  }
+    version: 2,
+    name: 'add_customer_phone',
+    ops: [{ kind: 'addColumn', table: 'customers', column: 'phone' }],
+    up({ addColumn }) {
+      addColumn('customers', text('phone', { nullable: true }));
+    },
+  },
 ]);
 ```
 
-- `dropTable(kit, tableName)` — drop a table and clear its unique-key/row guards.
-- `addUnique(kit, tableName, uniqueSpec)` — add a unique constraint, backfilling guards
-  (rejects existing data that already violates it).
-- `addForeignKey(kit, tableName, fkSpec)` — add a foreign key, touching parent row guards
-  (rejects existing children with a missing parent).
-- `addIndex(kit, tableName, indexSpec)` — add an index by rebuilding the table.
+**Add a unique constraint.** Suppose products gain a `barcode`. Add the column
+(nullable, so existing rows are fine), then add the unique constraint, which
+backfills `__kit_unique_keys` for the rows that have a barcode and rejects the
+migration if two rows already share one. `addUnique` is async, so use `migrate`:
 
-Listing the matching declarative `ops` on the migration keeps its content-aware checksum
-in sync with the imperative `up()` so a later edit is detected as drift.
+```ts
+await migrate(db, schema, [
+  /* ...v1, v2... */
+  {
+    version: 3,
+    name: 'add_product_barcode',
+    ops: [
+      { kind: 'addColumn', table: 'products', column: 'barcode' },
+      { kind: 'addUnique', table: 'products', constraint: 'products_barcode_uq' },
+    ],
+    async up({ addColumn, kit }) {
+      addColumn('products', text('barcode', { nullable: true }));
+      await addUnique(kit, 'products', unique(['barcode'], { name: 'products_barcode_uq' }));
+    },
+  },
+]);
+```
+
+After v3, `db.migrateSync`/`migrate` re-runs apply nothing, and editing any of
+the listed `ops` on v1–v3 would be rejected as drift on the next run.
+
+## Failed migrations
+
+If a migration's `up()` throws, the transaction is rolled back and the record is
+marked `failed`; the runner raises `KitMigrationError`. Because the runner only
+considers versions above the maximum applied, a failed migration blocks the ones
+after it. Repair (or remove) the failed migration, then run the runner again.
+Failed records are excluded from drift verification so a fixed migration can be
+re-applied cleanly.
 
 ## Rust migrations
 
 ```rust
-use mongreldb_kit::{Migration, MigrationOp};
+use mongreldb_kit::{migrate, Migration, MigrationOp};
 
 let migrations = vec![
     Migration {
         version: 1,
-        name: "initial".into(),
-        ops: vec![MigrationOp::CreateTable { name: "users".into() }],
+        name: "init".into(),
+        ops: vec![MigrationOp::CreateTable { name: "customers".into() }],
     },
     Migration {
         version: 2,
-        name: "add_posts".into(),
+        name: "add_orders".into(),
         ops: vec![
-            MigrationOp::CreateTable { name: "posts".into() },
-            MigrationOp::AddColumn { table: "users".into(), column: "bio".into() },
+            MigrationOp::CreateTable { name: "orders".into() },
+            MigrationOp::AddForeignKey {
+                table: "orders".into(),
+                constraint: "orders_customer_id_fk".into(),
+            },
         ],
     },
 ];
 
-mongreldb_kit::migrate(&mut db, &migrations)?;
+migrate(&mut db, &migrations)?;
 ```
+
+The Rust runner is op-driven (`version` is an `i64`) and resolves every op
+against the database's stored schema.
 
 ## Python migrations
 
 ```python
 db.migrate([
-    {"version": 1, "name": "initial", "ops": [{"create_table": {"name": "users"}}]},
-    {"version": 2, "name": "add_posts", "ops": [{"create_table": {"name": "posts"}}]},
+    {"version": 1, "name": "init", "ops": [{"create_table": {"name": "customers"}}]},
+    {"version": 2, "name": "add_orders", "ops": [{"create_table": {"name": "orders"}}]},
 ])
 ```
 
-## Backfilling and guard maintenance
+## See also
 
-Several ops scan existing rows and reconcile the kit's guard tables
-(`__kit_unique_keys`, `__kit_row_guards`) so that constraints added after data already
-exists stay consistent. All backfills are idempotent — re-running leaves existing guards
-untouched.
-
-- **Add column (non-nullable).** The column must have a default. The runner scans the
-  table and writes the default into every row before committing.
-- **Add unique.** For each existing row whose unique columns are all non-null, the runner
-  reserves a `__kit_unique_keys` guard. If two rows produce the same key the existing data
-  already violates the constraint and the migration **fails** (rejecting the change).
-  Rows with a null in any unique column are skipped (nulls never collide).
-- **Add foreign key.** For each existing child row with a non-null foreign key, the runner
-  verifies the referenced parent exists and touches the parent's `__kit_row_guards` entry
-  (so a later concurrent parent delete conflicts). A missing parent **fails** the
-  migration.
-- **Drop table / drop unique.** The runner removes the unique-key and row guards owned by
-  the dropped table or constraint.
-
-## Failed migrations
-
-If a migration fails, the transaction is rolled back and the migration record is marked `failed`. Fix the migration, then run the runner again. The runner only considers migrations whose version is greater than the maximum applied version, so a failed migration must be repaired or removed before later migrations can proceed.
+- [Schema DSL](./schema.md) — the table/column/constraint specs migrations apply.
+- [Constraints](./constraints.md) — what unique, check, and foreign-key backfills enforce.
+- [Internal tables](./internal-tables.md) — the `__kit_*` tables migrations read and write.
+- [CLI](./cli.md) — `migrate apply`/`status`/`plan` and `generate migration`.
+- [Errors](./errors.md) — `KitMigrationError`, `KitSchemaDriftError`, `KitForeignKeyError`.

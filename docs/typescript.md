@@ -82,6 +82,9 @@ db.migrateSync(schema, [
 // Insert
 // ---------------------------------------------------------------------------
 
+// `id` is omitted: the sequence assigns a 1-based id (the first row is 1n, never 0n).
+// Columns with a default (and nullable columns) are optional in `.values(...)`; only
+// non-nullable, no-default columns are required. int64 columns are `bigint` (alice.id === 1n).
 const alice = db.insertInto(users).values({ email: 'alice@example.com', name: 'Alice' }).executeSync();
 const bob = db.insertInto(users).values({ email: 'bob@example.com' }).executeSync();
 
@@ -185,8 +188,12 @@ db.deleteFrom(table).where(predicate).executeSync();
 - `ne(column, value)`
 - `gt(column, value)`, `gte(column, value)`, `lt(column, value)`, `lte(column, value)`
 - `isNull(column)`, `isNotNull(column)`
-- `inList(column, values)`
-- `and(...predicates)`, `or(...predicates)`
+- `inList(column, values)`, `notInList(column, values)`
+- `like(column, pattern)`, `contains(column, substring)`
+- `and(...predicates)`, `or(...predicates)`, `not(predicate)`
+
+Joins, aggregates, `groupBy`/`having`, `distinct`, subqueries, `exists`, and CTEs are part of the
+same builder — see the [Query builder](./query-builder.md) guide for the full surface.
 
 ## Migrations
 
@@ -217,3 +224,11 @@ npx tsx kit-demo.ts
 ```
 
 The first run creates `./app.kitdb`. Subsequent runs open the existing database.
+
+## See also
+
+- [Schema DSL](./schema.md) and [Types](./types.md) — column/table specs and `Row`/`Insert`/`Update` inference.
+- [Defaults & sequences](./defaults.md) — defaults and 1-based auto-increment ids.
+- [Query builder](./query-builder.md) — the complete query surface.
+- [Constraints](./constraints.md) · [Errors](./errors.md) — enforcement and the typed failures.
+- [Transactions](./transactions.md) · [Migrations](./migrations.md) · [Testing](./testing.md).

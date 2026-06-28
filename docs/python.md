@@ -156,12 +156,19 @@ if __name__ == "__main__":
 |---|---|
 | `nullable=True` | Allow `None` values |
 | `primary_key=True` | Mark as part of the primary key |
-| `default={...}` | Static, now, UUID, or sequence default |
+| `default=...` | Default value (see shapes below) |
 | `generated=True` | Auto-generate on insert/update |
 | `enum_values=[...]` | Restrict string values |
 | `min=...`, `max=...` | Numeric range |
 | `min_length=...`, `max_length=...` | String/bytes length |
 | `regex=...` | Pattern match |
+| `check_expr="..."` | Column check as a serialized expression string (e.g. `"price_cents >= 0"`) |
+
+Default shapes mirror the cross-language `DefaultKind` JSON: `{"static": <value>}`,
+`{"sequence": "<name>"}`, `{"custom_name": "<name>"}`, and the bare strings `"now"` and `"uuid"`.
+A column whose default is `{"sequence": ...}` is auto-assigned a **1-based** id when the inserted row
+omits it (the first row is `1`, never `0`). `check_expr` and the table-level `check(name, expr)` use
+the serialized string-expression grammar — the cross-language form, not a Python callable.
 
 ## Transactions
 
@@ -186,24 +193,62 @@ except Exception:
 
 ## Queries
 
-`txn.select` accepts a simple object filter and an order string:
+`txn.select` accepts a friendly object filter and an order string:
 
 ```python
 rows = txn.select(
     "posts",
     filter={"published": {"eq": True}, "user_id": {"gt": 0}},
-    order="-created_at",
+    order="-placed_at",
     limit=10,
     offset=0,
+    columns=["id", "title"],   # optional projection; omit for all columns
+    distinct=False,
 )
 ```
 
-Supported filter operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`.
+Per-column operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `contains`, `in`, `not_in`,
+`is_null`, `is_not_null`, `in_subquery`. A bare value (`{"user_id": 1}`) is shorthand for `eq`.
+Top-level logical keys combine column predicates: `and` / `or` (a list of filters), `not` (a
+filter), and `exists` / `not_exists` (a subselect). Multiple keys at one level are AND-ed.
 
 Order syntax:
 - `"+id"` or `"id"` — ascending
 - `"-id"` — descending
-- `"-created_at,+id"` — multiple columns
+- `"-placed_at,+id"` — multiple columns
+
+### Aggregates and joins
+
+`txn.aggregate` runs group-by/having; build specs with the `agg` helper (`count`, `sum`, `min`,
+`max`, `avg`):
+
+```python
+from mongreldb_kit import agg
+
+rows = txn.aggregate(
+    "orders",
+    aggregates=[agg("count", "n"), agg("sum", "spent", "amount")],
+    group_by=["customer_id"],
+    having={"n": {"gt": 1}},
+)
+```
+
+`txn.join` runs nested-loop joins; describe each join with `kind` (`inner`/`left`/`cross`) and an
+`on` predicate built with `on_eq`:
+
+```python
+from mongreldb_kit import on_eq
+
+rows = txn.join(
+    "orders",
+    alias="o",
+    joins=[{"kind": "inner", "table": "customers", "alias": "c",
+            "on": on_eq("o.customer_id", "c.id")}],
+)
+```
+
+`txn.select` also takes `ctes=[{"name", "table", ...}]` to materialize common table expressions
+before the body runs. Joins, aggregates, group/having, and CTEs are computed in memory.
 
 ## Migrations
 
@@ -212,6 +257,35 @@ db.migrate([
     {"version": 1, "name": "init", "ops": [{"create_table": {"name": "users"}}]},
     {"version": 2, "name": "add_posts", "ops": [{"create_table": {"name": "posts"}}]},
 ])
+```
+
+## Database methods
+
+Beyond `create` / `open` / `begin` / `migrate`, the `Database` handle exposes:
+
+```python
+db.allocate_sequence("orders_id_seq")        # next 1-based value (count=1 by default)
+db.allocate_sequence("orders_id_seq", 10)    # reserve 10, returns the first
+db.table_names()                             # application tables (excludes __kit_* internals)
+db.set_schema(schema())                      # refresh the in-memory schema without migrating
+db.transaction(lambda txn: txn.insert("users", {...}))  # commit on success, retry on conflict
+```
+
+`db.transaction(fn, max_retries=5)` runs `fn(txn)`, commits on success, rolls back on any error, and
+retries the whole callback when a `ConflictError` (a retryable write-write conflict) is raised.
+
+## Key encoding
+
+The byte-identical key encoders used internally are exposed for tooling and tests. Components are
+typed values — `{"int": n}`, `{"text": s}`, or `{"null": True}` — so the integer `1` and the text
+`"1"` never collide:
+
+```python
+from mongreldb_kit import encode_pk, encode_unique_key, encode_row_guard_key
+
+encode_pk([{"int": 1}])                               # primary-key bytes
+encode_unique_key(1, "uq_user_email", [{"text": "a@example.com"}])
+encode_row_guard_key("users", [{"int": 1}])
 ```
 
 ## Error handling
@@ -236,3 +310,10 @@ Save the file as `kit_demo.py` and run:
 ```sh
 python kit_demo.py
 ```
+
+## See also
+
+- [Query builder](./query-builder.md) — the full query model these helpers serialize.
+- [Constraints](./constraints.md) and [Errors](./errors.md) — the rules and the typed failures.
+- [Migrations](./migrations.md) — migration ops and the runner.
+- [TypeScript](./typescript.md) · [Rust](./rust.md) — the sibling language surfaces.
