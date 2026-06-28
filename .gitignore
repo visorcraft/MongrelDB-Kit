@@ -1,0 +1,93 @@
+# OS and editor state
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+!.env.test
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Node.js / TypeScript
+node_modules/
+.npm/
+.pnpm-store/
+dist/
+build/
+coverage/
+.nyc_output/
+.turbo/
+.vite/
+*.tsbuildinfo
+
+# Native Node addon build output
+*.node
+npm-*.tgz
+
+# Rust
+target/
+**/*.rs.bk
+*.profraw
+*.profdata
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+.eggs/
+wheelhouse/
+pip-wheel-metadata/
+
+# Python packaging/build artifacts
+*.egg
+*.whl
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Generated docs/site output
+site/
+.docusaurus/
+
+# Local databases and scratch data
+*.db
+*.sqlite
+*.sqlite3
+data/
+tmp/
+temp/
+
+# Test and browser artifacts
+playwright-report/
+test-results/
+.playwright-mcp/
+
+# Coverage and benchmark output
+criterion/
+bench-results/
