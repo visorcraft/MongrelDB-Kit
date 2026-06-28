@@ -8,7 +8,7 @@ import type { TableSpec, ColumnSpec, IndexSpec, UniqueSpec, ForeignKeySpec, Colu
 import { toCells } from './constraints.js';
 import { validateRow } from './validation.js';
 
-import { KitMigrationError } from './errors.js';
+import { KitMigrationError, KitSchemaDriftError } from './errors.js';
 import { kitSchemaMigrations, kitSchemaCatalog, kitMigrationLocks } from './internalTables.js';
 
 
@@ -247,10 +247,15 @@ async function releaseLock(kit: KitDatabase): Promise<void> {
 	locks.commit();
 }
 
-async function readAppliedMigrations(kit: KitDatabase): Promise<{ version: bigint; status: string }[]> {
+async function readAppliedMigrations(kit: KitDatabase): Promise<{ version: bigint; name: string; checksum: string; status: string }[]> {
 	const rows = fullScanRows(kit.nativeDb, kitSchemaMigrations);
 	return rows
-		.map((m) => ({ version: m.row.version as bigint, status: m.row.status as string }))
+		.map((m) => ({
+			version: m.row.version as bigint,
+			name: m.row.name as string,
+			checksum: m.row.checksum as string,
+			status: m.row.status as string
+		}))
 		.sort((a, b) => Number(a.version - b.version));
 }
 
@@ -352,10 +357,15 @@ function releaseLockSync(kit: KitDatabase): void {
 	locks.commit();
 }
 
-function readAppliedMigrationsSync(kit: KitDatabase): { version: bigint; status: string }[] {
+function readAppliedMigrationsSync(kit: KitDatabase): { version: bigint; name: string; checksum: string; status: string }[] {
 	const rows = fullScanRows(kit.nativeDb, kitSchemaMigrations);
 	return rows
-		.map((m) => ({ version: m.row.version as bigint, status: m.row.status as string }))
+		.map((m) => ({
+			version: m.row.version as bigint,
+			name: m.row.name as string,
+			checksum: m.row.checksum as string,
+			status: m.row.status as string
+		}))
 		.sort((a, b) => Number(a.version - b.version));
 }
 
@@ -432,6 +442,8 @@ export function migrateSync(kit: KitDatabase, schema: Schema, migrations: Migrat
 		migrations = [...migrations].sort((a, b) => a.version - b.version);
 
 		const applied = readAppliedMigrationsSync(kit);
+		verifyMigrationChecksums(applied, migrations);
+
 		const maxApplied = applied.reduce((max, m) => (m.version > max ? m.version : max), 0n);
 		const pending = migrations.filter((m) => BigInt(m.version) > maxApplied);
 
@@ -467,6 +479,8 @@ export async function migrate(kit: KitDatabase, schema: Schema, migrations: Migr
 		migrations = [...migrations].sort((a, b) => a.version - b.version);
 
 		const applied = await readAppliedMigrations(kit);
+		verifyMigrationChecksums(applied, migrations);
+
 		const maxApplied = applied.reduce((max, m) => (m.version > max ? m.version : max), 0n);
 		const pending = migrations.filter((m) => BigInt(m.version) > maxApplied);
 
@@ -488,6 +502,38 @@ export async function migrate(kit: KitDatabase, schema: Schema, migrations: Migr
 		await writeSchemaCatalog(kit, schema);
 	} finally {
 		await releaseLock(kit);
+	}
+}
+
+/**
+ * Reject edited or reordered historical migrations by comparing the stored
+ * checksum/name of every applied migration record against the corresponding
+ * migration in the supplied list. Drift here would silently change the meaning
+ * of an already-applied migration and corrupt the schema catalog.
+ */
+function verifyMigrationChecksums(
+	applied: { version: bigint; name: string; checksum: string; status: string }[],
+	migrations: Migration[]
+): void {
+	const byVersion = new Map(migrations.map((m) => [BigInt(m.version), m]));
+	for (const record of applied) {
+		if (record.status === 'failed') {
+			// Failed migrations are not part of the canonical history; the
+			// caller is expected to repair them before re-running.
+			continue;
+		}
+		const current = byVersion.get(record.version);
+		if (!current) {
+			throw new KitSchemaDriftError(
+				`migration ${record.version} (${record.name}) is recorded as applied but is missing from the supplied migrations list`
+			);
+		}
+		const expected = migrationChecksum(current);
+		if (expected !== record.checksum || current.name !== record.name) {
+			throw new KitSchemaDriftError(
+				`migration ${record.version} (${record.name}) checksum mismatch: stored ${record.checksum}, expected ${expected}`
+			);
+		}
 	}
 }
 

@@ -19,7 +19,7 @@ import {
 	pkValuesEqual,
 	type ConstraintKit
 } from './constraints.js';
-import { KitError } from './errors.js';
+import { KitError, isRetryableConflict } from './errors.js';
 
 declare module './db.js' {
 	interface KitDatabase {
@@ -471,15 +471,49 @@ function prepareInsertRowSync(
 	return applyDefaults(table, withSequence, makeDefaultContext(kit));
 }
 
-function runSyncTxn(kit: KitDatabase, fn: (txn: Transaction) => void): void {
-	const txn = kit.begin();
-	try {
-		fn(txn);
-		txn.commit();
-	} catch (err) {
-		txn.rollback();
-		throw err;
+function runSyncTxn(
+	kit: KitDatabase,
+	fn: (txn: Transaction) => void,
+	opts: { maxRetries?: number; baseDelayMs?: number } = {}
+): void {
+	const maxRetries = opts.maxRetries ?? 5;
+	const baseDelayMs = opts.baseDelayMs ?? 1;
+
+	let lastErr: unknown;
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		const txn = kit.begin();
+		try {
+			fn(txn);
+			txn.commit();
+			return;
+		} catch (err) {
+			try {
+				txn.rollback();
+			} catch {
+				// ignore rollback errors
+			}
+			lastErr = err;
+			// Kit-level conflicts (e.g. unique-guard or row-guard write-write
+			// races) and native MongrelDB conflicts are both retryable. The
+			// native addon prefixes commit-time conflict messages with
+			// `__CONFLICT__:`; the kit throws KitConflictError.
+			if (attempt < maxRetries && isRetryableConflict(err)) {
+				// Synchronous bounded backoff. Keep the delay small so single-
+				// threaded tests stay fast; the loop bound guarantees forward
+				// progress.
+				const delay = baseDelayMs * (attempt + 1);
+				if (delay > 0) {
+					const start = Date.now();
+					while (Date.now() - start < delay) {
+						// busy wait
+					}
+				}
+				continue;
+			}
+			throw err;
+		}
 	}
+	throw lastErr;
 }
 
 function applyUpdateDefaults(

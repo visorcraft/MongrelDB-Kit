@@ -103,6 +103,12 @@ where
         .ok_or_else(|| PlannerError::TableNotFound(table_name.into()))?
         .clone();
 
+    // Snapshot the plan state before recursing into children. If any descendant
+    // restricts the delete, we must discard the cascade/set-null entries that
+    // were staged on this branch so a caller applying the plan cannot orphan
+    // children while `restricted` is non-empty.
+    let delete_snapshot = plan.delete.len();
+    let set_null_snapshot = plan.set_null.len();
     let mut restricted = false;
 
     for child_table in &schema.tables {
@@ -149,6 +155,11 @@ where
     path.pop();
 
     if restricted {
+        // Discard any cascade deletes and set-null updates staged on this
+        // branch. The plan stays consistent: either every affected row is
+        // accounted for, or `restricted` explains why the delete cannot run.
+        plan.delete.truncate(delete_snapshot);
+        plan.set_null.truncate(set_null_snapshot);
         return Ok(false);
     }
 
@@ -265,5 +276,65 @@ mod tests {
         };
         let err = plan_delete(&schema, "a", "a1", lookup).unwrap_err();
         assert!(matches!(err, PlannerError::CircularDelete(_)));
+    }
+
+    #[test]
+    fn restrict_in_sibling_discards_cascaded_deletes() {
+        // parent has two children: cascade_child (cascade) and restrict_child
+        // (restrict). Both report a single child row. Without snapshot/restore
+        // the cascade_child would be pushed into plan.delete; the parent would
+        // then be marked restricted, and a caller applying plan.delete would
+        // orphan cascade_child. The fix discards the cascade subtree when any
+        // sibling is restricted.
+        let parent = table("parent", 1, "id");
+
+        let mut cascade_child = table("cascade_child", 2, "id");
+        cascade_child.foreign_keys = vec![fk(
+            "fk_cascade",
+            &["parent_id"],
+            "parent",
+            &["id"],
+            ForeignKeyAction::Cascade,
+        )];
+        cascade_child.columns.push(Column::new(2, "parent_id", ColumnType::Text));
+
+        let mut restrict_child = table("restrict_child", 3, "id");
+        restrict_child.foreign_keys = vec![fk(
+            "fk_restrict",
+            &["parent_id"],
+            "parent",
+            &["id"],
+            ForeignKeyAction::Restrict,
+        )];
+        restrict_child.columns.push(Column::new(2, "parent_id", ColumnType::Text));
+
+        let schema = Schema::new(vec![parent, cascade_child, restrict_child]).unwrap();
+
+        let lookup = |table: &Table, _fk: &ForeignKey, parent_pk: &str| {
+            // Each FK on each child table reports exactly one child row keyed
+            // by the table name so they are distinguishable in assertions.
+            vec![[(table.name.as_str(), parent_pk.to_string().as_str())]]
+                .into_iter()
+                .flatten()
+                .map(|(t, p)| (format!("{t}_row_for_{p}"), p.to_string()))
+                .collect()
+        };
+
+        let plan = plan_delete(&schema, "parent", "p1", lookup).unwrap();
+
+        // Restrict should win: nothing should be deletable, and the cascade
+        // child must NOT appear in plan.delete.
+        assert!(
+            plan.delete.is_empty(),
+            "expected no deletes when a sibling restricts, got {:?}",
+            plan.delete
+        );
+        assert_eq!(
+            plan.restricted,
+            vec![RestrictedConstraint {
+                table: "restrict_child".into(),
+                constraint: "fk_restrict".into(),
+            }]
+        );
     }
 }

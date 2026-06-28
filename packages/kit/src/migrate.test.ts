@@ -6,7 +6,7 @@ import { KitDatabase } from './db.js';
 import { Schema, table, int, text, index } from './schema.js';
 import { migrate, type Migration } from './migrate.js';
 import { kitSchemaMigrations, kitSchemaCatalog, kitMigrationLocks } from './internalTables.js';
-import { KitMigrationError } from './errors.js';
+import { KitMigrationError, KitSchemaDriftError } from './errors.js';
 import './query.js';
 
 function makeTempDir(): string {
@@ -163,6 +163,51 @@ describe('migrate', () => {
 			).resolves.toBeUndefined();
 		});
 	});
+
+	it('rejects a renamed historical migration as schema drift', async () => {
+		await withDb(async (db) => {
+			const original: Migration[] = [
+				{
+					version: 1,
+					name: 'init',
+					up: async (ctx) => {
+						await ctx.ensureTable(users);
+					}
+				}
+			];
+			await migrate(db, new Schema([users]), original);
+
+			// Rename the historical migration in the supplied list. The stored
+			// checksum/name no longer matches.
+			const renamed: Migration[] = [
+				{ version: 1, name: 'edited', up: async () => undefined }
+			];
+			await expect(migrate(db, new Schema([users]), renamed)).rejects.toBeInstanceOf(
+				KitSchemaDriftError
+			);
+		});
+	});
+
+	it('rejects a missing historical migration as schema drift', async () => {
+		await withDb(async (db) => {
+			const v1: Migration[] = [
+				{
+					version: 1,
+					name: 'init',
+					up: async (ctx) => {
+						await ctx.ensureTable(users);
+					}
+				}
+			];
+			await migrate(db, new Schema([users]), v1);
+
+			// Supply a different migration list that omits version 1.
+			const empty: Migration[] = [];
+			await expect(migrate(db, new Schema([users]), empty)).rejects.toBeInstanceOf(
+				KitSchemaDriftError
+			);
+		});
+	});
 });
 
 describe('migrateSync', () => {
@@ -287,6 +332,26 @@ describe('migrateSync', () => {
 			expect(() =>
 				db.migrateSync(new Schema([]), [{ version: 2, name: 'ok', up: () => undefined }])
 			).not.toThrow();
+		});
+	});
+
+	it('rejects a renamed historical migration as schema drift', () => {
+		withDbSync((db) => {
+			const original: Migration[] = [
+				{
+					version: 1,
+					name: 'init',
+					up: (ctx) => {
+						ctx.ensureTable(users);
+					}
+				}
+			];
+			db.migrateSync(new Schema([users]), original);
+
+			const renamed: Migration[] = [
+				{ version: 1, name: 'edited', up: () => undefined }
+			];
+			expect(() => db.migrateSync(new Schema([users]), renamed)).toThrow(KitSchemaDriftError);
 		});
 	});
 });
