@@ -61,7 +61,7 @@ export interface CheckSpec {
 }
 
 export interface TableSpec<TColumns extends readonly ColumnSpec[] = readonly ColumnSpec[]> {
-	id: number;
+	tableId: number;
 	name: string;
 	columns: TColumns;
 	primaryKey: string[];

@@ -177,7 +177,7 @@ export class KitDatabase {
 		const catalog = this.db.table('__kit_schema_catalog');
 		const schemaJson = JSON.stringify(
 			this.schema.tablesList().map((t) => ({
-				id: t.id,
+				tableId: t.tableId,
 				name: t.name,
 				columns: t.columns.map((c) => ({
 					id: c.id,

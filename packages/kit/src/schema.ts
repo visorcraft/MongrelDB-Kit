@@ -178,12 +178,18 @@ export interface TableOptions<TColumns extends readonly ColumnSpec[]> {
 	checks?: CheckSpec[];
 }
 
+type ColumnMap<TColumns extends readonly ColumnSpec[]> = {
+	[K in TColumns[number] as K['name'] extends keyof TableSpec<TColumns>
+		? never
+		: K['name']]: K;
+};
+
 let nextTableId = 1;
 
 export function table<const TColumns extends readonly ColumnSpec[]>(
 	name: string,
 	options: TableOptions<TColumns>
-): TableSpec<TColumns> {
+): TableSpec<TColumns> & ColumnMap<TColumns> {
 	const columns = options.columns;
 	for (let i = 0; i < columns.length; i++) {
 		columns[i].id = columns[i].id || i + 1;
@@ -240,8 +246,8 @@ export function table<const TColumns extends readonly ColumnSpec[]>(
 		}
 	}
 
-	return {
-		id: options.id ?? nextTableId++,
+	const spec: Record<string, unknown> = {
+		tableId: options.id ?? nextTableId++,
 		name,
 		columns,
 		primaryKey,
@@ -250,6 +256,12 @@ export function table<const TColumns extends readonly ColumnSpec[]>(
 		unique,
 		checks
 	};
+	for (const col of columns) {
+		if (!(col.name in spec)) {
+			spec[col.name] = col;
+		}
+	}
+	return spec as TableSpec<TColumns> & ColumnMap<TColumns>;
 }
 
 export class Schema {
@@ -261,11 +273,11 @@ export class Schema {
 			if (this.byName.has(t.name)) {
 				throw new Error(`Duplicate table name "${t.name}"`);
 			}
-			if (this.byId.has(t.id)) {
-				throw new Error(`Duplicate table id ${t.id}`);
+			if (this.byId.has(t.tableId)) {
+				throw new Error(`Duplicate table id ${t.tableId}`);
 			}
 			this.byName.set(t.name, t);
-			this.byId.set(t.id, t);
+			this.byId.set(t.tableId, t);
 		}
 	}
 
