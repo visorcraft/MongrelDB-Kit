@@ -9,8 +9,11 @@
 		"check": "tsc --noEmit",
 		"test": "vitest run"
 	},
+	"engines": {
+		"node": ">=22.0.0"
+	},
 	"dependencies": {
-		"mongreldb": "file:/work/repos/visorcraft/mongreldb/crates/mongreldb-node"
+		"mongreldb": "file:../../../mongreldb/crates/mongreldb-node"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
