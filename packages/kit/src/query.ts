@@ -650,6 +650,7 @@ export class UpdateBuilder<T extends TableSpec> {
 					enforceForeignKeys(kit, txn, this.table, merged);
 				}
 				txn.put(this.table.name, toCells(this.table, merged));
+				stageUniqueGuards(kit, txn, this.table, merged, pkValue);
 				updated.push(merged);
 			}
 		});

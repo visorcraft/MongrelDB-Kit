@@ -125,6 +125,17 @@ describe('query builder', () => {
 		});
 	});
 
+	it('rejects unique constraint violations on update', async () => {
+		await withDb(async (db) => {
+			await db.insertInto(users).values({ id: 1n, email: 'a@example.com' }).execute();
+			await db.insertInto(users).values({ id: 2n, email: 'b@example.com' }).execute();
+
+			await expect(
+				db.updateTable(users).set({ email: 'b@example.com' }).where(eq(users.id, 1n)).execute()
+			).rejects.toBeInstanceOf(KitDuplicateError);
+		});
+	});
+
 	it('rejects foreign key violations on insert', async () => {
 		await withDb(async (db) => {
 			await db.insertInto(users).values({ id: 1n, email: 'author@example.com' }).execute();
