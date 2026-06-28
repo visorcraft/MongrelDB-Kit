@@ -1,16 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-	table,
-	int,
-	text,
-	timestamp,
-	unique,
-	index,
-	foreignKey,
-	check,
-	Schema,
-	validateValue
-} from './schema.js';
+import { table, int, text, timestamp, unique, index, foreignKey, check, Schema } from './schema.js';
 
 describe('schema DSL', () => {
 	it('builds a users table spec', () => {
@@ -44,15 +33,6 @@ describe('schema DSL', () => {
 
 		expect(users.unique).toHaveLength(1);
 		expect(users.unique[0]).toMatchObject({ name: 'uq_email', columns: ['email'] });
-	});
-
-	it('catches invalid enum values', () => {
-		const role = text('role', { enumValues: ['user', 'admin'] });
-		expect(validateValue(role, 'user').valid).toBe(true);
-		expect(validateValue(role, 'admin').valid).toBe(true);
-		const bad = validateValue(role, 'superuser');
-		expect(bad.valid).toBe(false);
-		expect(bad.error).toContain('superuser');
 	});
 
 	it('rejects duplicate column names', () => {

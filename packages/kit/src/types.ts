@@ -1,3 +1,5 @@
+import type { DefaultValue } from './defaults.js';
+
 export type ColumnStorageType =
 	| 'bool'
 	| 'int64'
@@ -9,12 +11,6 @@ export type ColumnStorageType =
 	| 'json';
 
 export type ColumnApplicationType = ColumnStorageType;
-
-export type DefaultValue =
-	| { kind: 'literal'; value: unknown }
-	| { kind: 'raw'; expr: string }
-	| { kind: 'now' }
-	| { kind: 'uuid' };
 
 export interface ColumnSpec<
 	TName extends string = string,

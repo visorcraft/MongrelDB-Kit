@@ -6,9 +6,9 @@ import type {
 	IndexSpec,
 	ForeignKeySpec,
 	UniqueSpec,
-	CheckSpec,
-	DefaultValue
+	CheckSpec
 } from './types.js';
+import type { DefaultValue } from './defaults.js';
 
 export type ColumnOptions = {
 	nullable?: boolean;
@@ -284,78 +284,4 @@ export class Schema {
 	hasTable(name: string): boolean {
 		return this.byName.has(name);
 	}
-}
-
-export interface ValidationResult {
-	valid: boolean;
-	error?: string;
-}
-
-export function validateValue(column: ColumnSpec, value: unknown): ValidationResult {
-	if (value === null || value === undefined) {
-		if (column.nullable) {
-			return { valid: true };
-		}
-		return { valid: false, error: `Column "${column.name}" cannot be null` };
-	}
-
-	if (column.enumValues && !column.enumValues.includes(String(value))) {
-		return {
-			valid: false,
-			error: `Value "${String(value)}" for "${column.name}" must be one of ${column.enumValues.join(', ')}`
-		};
-	}
-
-	if (column.min !== undefined && typeof value === 'number' && value < column.min) {
-		return {
-			valid: false,
-			error: `Value for "${column.name}" must be at least ${column.min}`
-		};
-	}
-
-	if (column.max !== undefined && typeof value === 'number' && value > column.max) {
-		return {
-			valid: false,
-			error: `Value for "${column.name}" must be at most ${column.max}`
-		};
-	}
-
-	if (column.minLength !== undefined) {
-		const length = typeof value === 'string' ? value.length : Array.isArray(value) ? value.length : null;
-		if (length !== null && length < column.minLength) {
-			return {
-				valid: false,
-				error: `Value for "${column.name}" must have length at least ${column.minLength}`
-			};
-		}
-	}
-
-	if (column.maxLength !== undefined) {
-		const length = typeof value === 'string' ? value.length : Array.isArray(value) ? value.length : null;
-		if (length !== null && length > column.maxLength) {
-			return {
-				valid: false,
-				error: `Value for "${column.name}" must have length at most ${column.maxLength}`
-			};
-		}
-	}
-
-	if (column.regex && typeof value === 'string' && !column.regex.test(value)) {
-		return {
-			valid: false,
-			error: `Value for "${column.name}" does not match required pattern`
-		};
-	}
-
-	if (column.check) {
-		const result = column.check(value);
-		if (result !== true) {
-			return {
-				valid: false,
-				error: typeof result === 'string' ? result : `Value for "${column.name}" failed custom check`
-			};
-		}
-	}
-
-	return { valid: true };
 }
