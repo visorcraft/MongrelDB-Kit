@@ -102,6 +102,16 @@ describe('validateRow', () => {
 		expect(() => validateRow(orders, { id: 1n, quantity: 2n, price: -5 })).toThrow(/total/);
 	});
 
+	it('table-level check returning false rejects the row', () => {
+		const items = table('items', {
+			columns: [int('id', { primaryKey: true }), text('name')],
+			primaryKey: ['id'],
+			checks: [check('always_false', () => false)]
+		});
+		expect(() => validateRow(items, { id: 1n, name: 'ok' })).toThrow(KitValidationError);
+		expect(() => validateRow(items, { id: 1n, name: 'ok' })).toThrow(/always_false/);
+	});
+
 	it('defaults applied before validation', () => {
 		const items = table('items', {
 			columns: [

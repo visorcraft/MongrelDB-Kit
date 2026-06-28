@@ -140,8 +140,11 @@ export function validateRow(table: TableSpec, row: Record<string, unknown>): voi
 
 	for (const check of table.checks) {
 		const result = check.expr(row);
-		if (typeof result === 'string') {
-			throw new KitValidationError(result, table.name);
+		if (result !== true) {
+			throw new KitValidationError(
+				typeof result === 'string' ? result : `Table check "${check.name}" failed`,
+				table.name
+			);
 		}
 	}
 }

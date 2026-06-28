@@ -34,8 +34,8 @@ type ApplicationTypeMap = {
 	bool: boolean;
 	int64: bigint;
 	float64: number;
-	timestamp: unknown;
-	date: unknown;
+	timestamp: string;
+	date: string;
 	text: string;
 	bytes: unknown;
 	json: unknown;
@@ -171,7 +171,7 @@ function makeRangeCondition(
 	op: 'gt' | 'gte' | 'lt' | 'lte',
 	value: unknown
 ) {
-	if (column.storageType === 'int64' || column.storageType === 'timestamp') {
+	if (column.storageType === 'int64') {
 		const v = value as bigint;
 		let lo = I64_MIN;
 		let hi = I64_MAX;
