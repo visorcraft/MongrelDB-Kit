@@ -98,6 +98,23 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			columnId: col.id,
 			kind: addon.IndexKindSpec.Bitmap
 		});
+		indexedColumns.add(pk);
+	}
+
+	for (const fk of table.foreignKeys) {
+		for (const colName of fk.columns) {
+			if (indexedColumns.has(colName)) continue;
+			const col = table.columns.find((c) => c.name === colName);
+			if (!col) {
+				throw new Error(`Foreign key column "${colName}" not found in table "${table.name}"`);
+			}
+			indexes.push({
+				name: `fk_${fk.name}_${colName}`,
+				columnId: col.id,
+				kind: addon.IndexKindSpec.Bitmap
+			});
+			indexedColumns.add(colName);
+		}
 	}
 
 	return {
@@ -145,12 +162,15 @@ export class KitDatabase {
 			}
 		}
 		for (const table of schema.tablesList()) {
-			if (!db.tableNames().includes(table.name)) {
-				db.createTable(table.name, toMongrelSchema(table));
-			}
+			kitDb.ensureAppTable(table);
 		}
 		kitDb.writeSchemaCatalog();
 		return kitDb;
+	}
+
+	private ensureAppTable(table: TableSpec): void {
+		if (this.db.tableNames().includes(table.name)) return;
+		this.db.createTable(table.name, toMongrelSchema(table));
 	}
 
 	private writeSchemaCatalog(): void {
