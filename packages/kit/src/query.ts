@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ConditionKind } from 'mongreldb/native.js';
-import type { Database as NativeDatabase, Cell, RowJs } from 'mongreldb/native.js';
+import type { Database as NativeDatabase, Cell, RowJs, Transaction } from 'mongreldb/native.js';
 import { KitDatabase } from './db.js';
 import type { TableSpec, ColumnSpec } from './types.js';
 import type { Row, Insert, Update } from './types.js';
@@ -454,21 +454,32 @@ function makeDefaultContext(kit: KitDatabase): DefaultContext {
 	};
 }
 
-async function prepareInsertRow(
+function prepareInsertRowSync(
 	kit: KitDatabase,
 	table: TableSpec,
 	row: Record<string, unknown>
-): Promise<Record<string, unknown>> {
+): Record<string, unknown> {
 	const withSequence: Record<string, unknown> = { ...row };
 	for (const col of table.columns) {
 		if (
 			(withSequence[col.name] === undefined || withSequence[col.name] === null) &&
 			col.default?.kind === 'sequence'
 		) {
-			withSequence[col.name] = await kit.allocateSequence(col.default.name, 1);
+			withSequence[col.name] = kit.allocateSequenceSync(col.default.name, 1);
 		}
 	}
 	return applyDefaults(table, withSequence, makeDefaultContext(kit));
+}
+
+function runSyncTxn(kit: KitDatabase, fn: (txn: Transaction) => void): void {
+	const txn = kit.begin();
+	try {
+		fn(txn);
+		txn.commit();
+	} catch (err) {
+		txn.rollback();
+		throw err;
+	}
 }
 
 function applyUpdateDefaults(
@@ -539,7 +550,7 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> {
 		return next;
 	}
 
-	async execute(): Promise<TResult> {
+	executeSync(): TResult {
 		const db = this.kit.nativeDb;
 
 		if (this._count) {
@@ -569,6 +580,10 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> {
 
 		return rows.map((m) => m.row) as TResult;
 	}
+
+	async execute(): Promise<TResult> {
+		return this.executeSync();
+	}
 }
 
 export class InsertBuilder<T extends TableSpec> {
@@ -584,17 +599,17 @@ export class InsertBuilder<T extends TableSpec> {
 		return this;
 	}
 
-	async execute(): Promise<Row<T>> {
+	executeSync(): Row<T> {
 		if (this._row === undefined) {
 			throw new KitError('values() must be called before execute()');
 		}
 		const row = this._row as Record<string, unknown>;
-		const defaulted = await prepareInsertRow(this.kit, this.table, row);
+		const defaulted = prepareInsertRowSync(this.kit, this.table, row);
 		validateRow(this.table, defaulted);
 		const pkValue = pkValueFromRow(this.table, defaulted);
 		const kit = makeConstraintKit(this.kit);
 
-		await this.kit.nativeDb.transaction(async (txn) => {
+		runSyncTxn(this.kit, (txn) => {
 			enforceForeignKeys(kit, txn, this.table, defaulted);
 			stageUniqueGuards(kit, txn, this.table, defaulted, pkValue);
 			stagePkGuard(kit, txn, this.table, pkValue);
@@ -602,6 +617,10 @@ export class InsertBuilder<T extends TableSpec> {
 		});
 
 		return defaulted as Row<T>;
+	}
+
+	async execute(): Promise<Row<T>> {
+		return this.executeSync();
 	}
 }
 
@@ -624,7 +643,7 @@ export class UpdateBuilder<T extends TableSpec> {
 		return this;
 	}
 
-	async execute(): Promise<Row<T>[]> {
+	executeSync(): Row<T>[] {
 		if (this._patch === undefined) {
 			throw new KitError('set() must be called before execute()');
 		}
@@ -637,7 +656,7 @@ export class UpdateBuilder<T extends TableSpec> {
 		const kit = makeConstraintKit(this.kit);
 		const updated: Record<string, unknown>[] = [];
 
-		await this.kit.nativeDb.transaction(async (txn) => {
+		runSyncTxn(this.kit, (txn) => {
 			for (const matched of matches) {
 				const merged = { ...matched.row, ...patch };
 				applyUpdateDefaults(this.table, merged, patch, ctx);
@@ -664,6 +683,10 @@ export class UpdateBuilder<T extends TableSpec> {
 
 		return updated as Row<T>[];
 	}
+
+	async execute(): Promise<Row<T>[]> {
+		return this.executeSync();
+	}
 }
 
 export class DeleteBuilder<T extends TableSpec> {
@@ -679,7 +702,7 @@ export class DeleteBuilder<T extends TableSpec> {
 		return this;
 	}
 
-	async execute(): Promise<bigint> {
+	executeSync(): bigint {
 		const db = this.kit.nativeDb;
 		const matches = this._where
 			? evaluatePredicate(db, this.table, this._where)
@@ -687,7 +710,7 @@ export class DeleteBuilder<T extends TableSpec> {
 		const kit = makeConstraintKit(this.kit);
 		let deleted = 0;
 
-		await this.kit.nativeDb.transaction(async (txn) => {
+		runSyncTxn(this.kit, (txn) => {
 			for (const matched of matches) {
 				const pkValue = pkValueFromRow(this.table, matched.row);
 				planDelete(kit, txn, this.table, pkValue);
@@ -696,6 +719,10 @@ export class DeleteBuilder<T extends TableSpec> {
 		});
 
 		return BigInt(deleted);
+	}
+
+	async execute(): Promise<bigint> {
+		return this.executeSync();
 	}
 }
 

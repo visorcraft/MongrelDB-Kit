@@ -27,9 +27,9 @@ export interface Migration {
 export interface MigrationContext {
 	kit: KitDatabase;
 	db: NativeDatabase;
-	ensureTable: (table: TableSpec) => Promise<void>;
-	addColumn: (tableName: string, column: ColumnSpec) => Promise<void>;
-	sql: (sql: string) => Promise<unknown[]>;
+	ensureTable: (table: TableSpec) => Promise<void> | void;
+	addColumn: (tableName: string, column: ColumnSpec) => Promise<void> | void;
+	sql: (sql: string) => Promise<unknown[]> | unknown[];
 }
 
 type MongrelSchemaSpec = {
@@ -319,6 +319,147 @@ function makeContext(kit: KitDatabase): MigrationContext {
 	};
 }
 
+function acquireLockSync(kit: KitDatabase): void {
+	const db = kit.nativeDb;
+	const locks = db.table('__kit_migration_locks');
+	const now = new Date();
+	const expiresAt = new Date(now.getTime() + LOCK_TTL_MS);
+
+	const existing = locks.getByPkText(LOCK_NAME);
+	if (existing) {
+		const expiresAtCell = existing.cells.find(
+			(c) => c.columnId === columnId(kitMigrationLocks, 'expires_at')
+		);
+		const existingExpires = expiresAtCell?.text;
+		if (existingExpires && new Date(existingExpires) > now) {
+			throw new KitMigrationError('migration lock is already held');
+		}
+		locks.deleteByPkText(LOCK_NAME);
+	}
+
+	locks.put([
+		{ columnId: columnId(kitMigrationLocks, 'lock_name'), text: LOCK_NAME },
+		{ columnId: columnId(kitMigrationLocks, 'holder'), text: LOCK_HOLDER },
+		{ columnId: columnId(kitMigrationLocks, 'acquired_at'), text: now.toISOString() },
+		{ columnId: columnId(kitMigrationLocks, 'expires_at'), text: expiresAt.toISOString() }
+	]);
+	locks.commit();
+}
+
+function releaseLockSync(kit: KitDatabase): void {
+	const locks = kit.nativeDb.table('__kit_migration_locks');
+	locks.deleteByPkText(LOCK_NAME);
+	locks.commit();
+}
+
+function readAppliedMigrationsSync(kit: KitDatabase): { version: bigint; status: string }[] {
+	const rows = fullScanRows(kit.nativeDb, kitSchemaMigrations);
+	return rows
+		.map((m) => ({ version: m.row.version as bigint, status: m.row.status as string }))
+		.sort((a, b) => Number(a.version - b.version));
+}
+
+function insertMigrationRecordSync(
+	kit: KitDatabase,
+	migration: Migration,
+	status: 'in_progress' | 'applied' | 'failed'
+): void {
+	const table = kit.nativeDb.table('__kit_schema_migrations');
+	table.put([
+		{ columnId: columnId(kitSchemaMigrations, 'version'), int64: BigInt(migration.version) },
+		{ columnId: columnId(kitSchemaMigrations, 'name'), text: migration.name },
+		{ columnId: columnId(kitSchemaMigrations, 'checksum'), text: migrationChecksum(migration) },
+		{ columnId: columnId(kitSchemaMigrations, 'applied_at'), text: isoNow() },
+		{ columnId: columnId(kitSchemaMigrations, 'kit_version'), text: kitVersion() },
+		{ columnId: columnId(kitSchemaMigrations, 'status'), text: status }
+	]);
+	table.commit();
+}
+
+function updateMigrationStatusSync(
+	kit: KitDatabase,
+	version: number,
+	status: 'applied' | 'failed'
+): void {
+	const table = kit.nativeDb.table('__kit_schema_migrations');
+	const rowJs = table.getByPkInt64(BigInt(version));
+	if (!rowJs) {
+		throw new KitMigrationError(`migration record ${version} not found`);
+	}
+	const row = rowFromRowJs(kitSchemaMigrations, rowJs);
+	const updated = { ...row, status };
+	table.put(toCells(kitSchemaMigrations, updated));
+	table.commit();
+}
+
+function writeSchemaCatalogSync(kit: KitDatabase, schema: Schema): void {
+	const db = kit.nativeDb;
+	const schemaJson = schemaCatalogJson(schema);
+	const checksum = createHash('sha256').update(schemaJson).digest('hex');
+	const now = isoNow();
+
+	const txn = db.begin();
+	try {
+		txn.put('__kit_schema_catalog', [
+			{ columnId: columnId(kitSchemaCatalog, 'schema_version'), int64: 1n },
+			{ columnId: columnId(kitSchemaCatalog, 'schema_json'), text: schemaJson },
+			{ columnId: columnId(kitSchemaCatalog, 'checksum'), text: checksum },
+			{ columnId: columnId(kitSchemaCatalog, 'written_at'), text: now }
+		]);
+		txn.commit();
+	} catch (err) {
+		txn.rollback();
+		throw err;
+	}
+}
+
+function makeContextSync(kit: KitDatabase): MigrationContext {
+	return {
+		kit,
+		db: kit.nativeDb,
+		ensureTable: (table: TableSpec) => createTableSync(kit, table),
+		addColumn: (tableName: string, column: ColumnSpec) => addColumnSync(kit, tableName, column),
+		sql: () => {
+			throw new KitMigrationError('sql() is not available in synchronous migrations');
+		}
+	};
+}
+
+export function migrateSync(kit: KitDatabase, schema: Schema, migrations: Migration[]): void {
+	acquireLockSync(kit);
+
+	try {
+		migrations = [...migrations].sort((a, b) => a.version - b.version);
+
+		const applied = readAppliedMigrationsSync(kit);
+		const maxApplied = applied.reduce((max, m) => (m.version > max ? m.version : max), 0n);
+		const pending = migrations.filter((m) => BigInt(m.version) > maxApplied);
+
+		for (const migration of pending) {
+			insertMigrationRecordSync(kit, migration, 'in_progress');
+
+			const txn = kit.nativeDb.begin();
+			try {
+				const result = migration.up(makeContextSync(kit));
+				if (result && typeof (result as Promise<void>).then === 'function') {
+					throw new KitMigrationError('async migration up() cannot be used with migrateSync');
+				}
+				txn.commit();
+				updateMigrationStatusSync(kit, migration.version, 'applied');
+			} catch (cause) {
+				txn.rollback();
+				updateMigrationStatusSync(kit, migration.version, 'failed');
+				const message = cause instanceof Error ? cause.message : String(cause);
+				throw new KitMigrationError(`migration ${migration.version} failed: ${message}`);
+			}
+		}
+
+		writeSchemaCatalogSync(kit, schema);
+	} finally {
+		releaseLockSync(kit);
+	}
+}
+
 export async function migrate(kit: KitDatabase, schema: Schema, migrations: Migration[]): Promise<void> {
 	await acquireLock(kit);
 
@@ -350,9 +491,13 @@ export async function migrate(kit: KitDatabase, schema: Schema, migrations: Migr
 	}
 }
 
-export async function createTable(kit: KitDatabase, table: TableSpec): Promise<void> {
+function createTableSync(kit: KitDatabase, table: TableSpec): void {
 	if (kit.nativeDb.tableNames().includes(table.name)) return;
 	kit.nativeDb.createTable(table.name, toMongrelSchema(table));
+}
+
+export async function createTable(kit: KitDatabase, table: TableSpec): Promise<void> {
+	createTableSync(kit, table);
 }
 
 export async function dropTable(_kit: KitDatabase, _tableName: string): Promise<void> {
@@ -381,7 +526,7 @@ function computeDefaultValue(column: ColumnSpec, kit: KitDatabase): unknown {
 	}
 }
 
-export async function addColumn(kit: KitDatabase, tableName: string, column: ColumnSpec): Promise<void> {
+function addColumnSync(kit: KitDatabase, tableName: string, column: ColumnSpec): void {
 	if (!column.nullable && !column.default && !column.generated) {
 		throw new KitMigrationError(
 			`Column "${column.name}" on "${tableName}" must be nullable or have a default value`
@@ -417,6 +562,10 @@ export async function addColumn(kit: KitDatabase, tableName: string, column: Col
 		}
 		db.table(tableName).commit();
 	}
+}
+
+export async function addColumn(kit: KitDatabase, tableName: string, column: ColumnSpec): Promise<void> {
+	addColumnSync(kit, tableName, column);
 }
 
 export async function addIndex(kit: KitDatabase, tableName: string, index: IndexSpec): Promise<void> {

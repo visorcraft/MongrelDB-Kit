@@ -46,4 +46,16 @@ describe('KitDatabase', () => {
 		expect(() => db.close()).not.toThrow();
 		rmSync(dir, { recursive: true, force: true });
 	});
+
+	it('openSync creates temp directory, internal tables exist, app table list is empty', () => {
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([]));
+		try {
+			expect(db.tableNames()).toEqual([]);
+			expect(db.allocateSequenceSync('probe', 1)).toBe(0n);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

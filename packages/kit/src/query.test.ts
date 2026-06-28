@@ -54,6 +54,17 @@ async function withDb(fn: (db: KitDatabase) => Promise<void>): Promise<void> {
 	}
 }
 
+function withDbSync(fn: (db: KitDatabase) => void): void {
+	const dir = makeTempDir();
+	const db = KitDatabase.openSync(dir, testSchema);
+	try {
+		fn(db);
+	} finally {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 describe('query builder', () => {
 	it('inserts and selects one row', async () => {
 		await withDb(async (db) => {
@@ -222,6 +233,32 @@ describe('query builder', () => {
 
 			const rows = await db.selectFrom(events).where(eq(events.id, 1n)).execute();
 			expect(rows[0].createdAt).toBe(inserted.createdAt);
+		});
+	});
+
+	it('executes insert, select, update, and delete synchronously', () => {
+		withDbSync((db) => {
+			const inserted = db.insertInto(users).values({ id: 1n, email: 'sync@example.com' }).executeSync();
+			expect(inserted.email).toBe('sync@example.com');
+			expect(inserted.id).toBe(1n);
+
+			const rows = db.selectFrom(users).where(eq(users.id, 1n)).executeSync();
+			expect(rows).toHaveLength(1);
+			expect(rows[0].email).toBe('sync@example.com');
+
+			const updated = db
+				.updateTable(users)
+				.set({ email: 'updated@example.com' })
+				.where(eq(users.id, 1n))
+				.executeSync();
+			expect(updated).toHaveLength(1);
+			expect(updated[0].email).toBe('updated@example.com');
+
+			const deleted = db.deleteFrom(users).where(eq(users.id, 1n)).executeSync();
+			expect(deleted).toBe(1n);
+
+			const remaining = db.selectFrom(users).executeSync();
+			expect(remaining).toHaveLength(0);
 		});
 	});
 });

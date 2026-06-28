@@ -14,6 +14,7 @@ import {
 	kitSequences
 } from './internalTables.js';
 import type { TableSpec, ColumnStorageType, CheckSpec } from './types.js';
+import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
 
 type MongrelDatabase = NativeDatabase & {
 	transaction(
@@ -155,16 +156,37 @@ export class KitDatabase {
 		}
 
 		const kitDb = new KitDatabase(db, schema);
-		for (const table of internalTables) {
-			if (!db.tableNames().includes(table.name)) {
-				db.createTable(table.name, toMongrelSchema(table));
-			}
-		}
+		kitDb.ensureInternalTables();
 		for (const table of schema.tablesList()) {
 			kitDb.ensureAppTable(table);
 		}
 		kitDb.writeSchemaCatalog();
 		return kitDb;
+	}
+
+	static openSync(path: string, schema: Schema): KitDatabase {
+		let db: MongrelDatabase;
+		try {
+			db = addon.Database.open(path);
+		} catch {
+			db = addon.Database.withPath(path);
+		}
+
+		const kitDb = new KitDatabase(db, schema);
+		kitDb.ensureInternalTables();
+		for (const table of schema.tablesList()) {
+			kitDb.ensureAppTable(table);
+		}
+		kitDb.writeSchemaCatalog();
+		return kitDb;
+	}
+
+	private ensureInternalTables(): void {
+		for (const table of internalTables) {
+			if (!this.db.tableNames().includes(table.name)) {
+				this.db.createTable(table.name, toMongrelSchema(table));
+			}
+		}
 	}
 
 	private ensureAppTable(table: TableSpec): void {
@@ -209,6 +231,10 @@ export class KitDatabase {
 		catalog.commit();
 	}
 
+	migrateSync(schema: Schema, migrations: Migration[]): void {
+		runMigrateSync(this, schema, migrations);
+	}
+
 	close(): void {
 		this.db.close();
 	}
@@ -225,40 +251,44 @@ export class KitDatabase {
 		return this.db.begin();
 	}
 
-	async allocateSequence(name: string, count = 1): Promise<bigint> {
-		let start = 0n;
-		await this.db.transaction((txn) => {
-			const handle = this.db.table('__kit_sequences');
-			const seqTable = txn.table('__kit_sequences');
-			const matches = handle.query([
-				{
-					kind: addon.ConditionKind.BitmapEq,
-					columnId: columnId(kitSequences, 'sequence_name'),
-					text: name
-				}
-			]);
-			const existing = matches[0] ?? null;
-			const now = isoNow();
-			if (!existing) {
-				start = 0n;
-				seqTable.put([
-					{ columnId: columnId(kitSequences, 'sequence_name'), text: name },
-					{ columnId: columnId(kitSequences, 'next_value'), int64: BigInt(count) },
-					{ columnId: columnId(kitSequences, 'updated_at'), text: now }
-				]);
-			} else {
-				const nextCell = existing.cells.find(
-					(c) => c.columnId === columnId(kitSequences, 'next_value')
-				);
-				const current = nextCell?.int64 ?? 0n;
-				start = current;
-				seqTable.put([
-					{ columnId: columnId(kitSequences, 'sequence_name'), text: name },
-					{ columnId: columnId(kitSequences, 'next_value'), int64: current + BigInt(count) },
-					{ columnId: columnId(kitSequences, 'updated_at'), text: now }
-				]);
+	allocateSequenceSync(name: string, count = 1): bigint {
+		const txn = this.db.begin();
+		const seqTable = txn.table('__kit_sequences');
+		const handle = this.db.table('__kit_sequences');
+		const matches = handle.query([
+			{
+				kind: addon.ConditionKind.BitmapEq,
+				columnId: columnId(kitSequences, 'sequence_name'),
+				text: name
 			}
-		});
+		]);
+		const existing = matches[0] ?? null;
+		const now = isoNow();
+		let start = 0n;
+		if (!existing) {
+			start = 0n;
+			seqTable.put([
+				{ columnId: columnId(kitSequences, 'sequence_name'), text: name },
+				{ columnId: columnId(kitSequences, 'next_value'), int64: BigInt(count) },
+				{ columnId: columnId(kitSequences, 'updated_at'), text: now }
+			]);
+		} else {
+			const nextCell = existing.cells.find(
+				(c) => c.columnId === columnId(kitSequences, 'next_value')
+			);
+			const current = nextCell?.int64 ?? 0n;
+			start = current;
+			seqTable.put([
+				{ columnId: columnId(kitSequences, 'sequence_name'), text: name },
+				{ columnId: columnId(kitSequences, 'next_value'), int64: current + BigInt(count) },
+				{ columnId: columnId(kitSequences, 'updated_at'), text: now }
+			]);
+		}
+		txn.commit();
 		return start;
+	}
+
+	async allocateSequence(name: string, count = 1): Promise<bigint> {
+		return this.allocateSequenceSync(name, count);
 	}
 }
