@@ -121,12 +121,21 @@ type NullableColumnName<C> = C extends { name: infer N; nullable: infer Null }
 
 type NullableColumns<T extends TableSpec> = NullableColumnName<T['columns'][number]>;
 
-// Insert input: columns with a default/generated value are omitted (the kit
-// supplies them); nullable columns are optional (omitting one stores NULL);
-// everything else is required.
+// Columns that may be omitted on insert: nullable ones (default to NULL) and
+// ones with a default/generated value (the kit supplies them when omitted). A
+// defaulted column — e.g. an AUTO_INCREMENT/sequence primary key — may still be
+// supplied explicitly, matching SQL semantics, so it is optional rather than
+// omitted.
+type OptionalInsertColumns<T extends TableSpec> = Extract<
+	NullableColumns<T> | ColumnsWithDefault<T>,
+	keyof Row<T>
+>;
+
+// Insert input: non-nullable columns without a default are required; everything
+// else (nullable or defaulted) is optional.
 export type Insert<T extends TableSpec> = Omit<
 	Row<T>,
 	ColumnsWithDefault<T> | NullableColumns<T>
 > &
-	Partial<Pick<Row<T>, Extract<NullableColumns<T>, keyof Row<T>>>>;
+	Partial<Pick<Row<T>, OptionalInsertColumns<T>>>;
 export type Update<T extends TableSpec> = Partial<Row<T>>;

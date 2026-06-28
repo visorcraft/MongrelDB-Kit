@@ -45,12 +45,13 @@ fn sequence_allocation_is_monotonic() {
     .unwrap();
     let db = Database::create(&dir, schema).unwrap();
 
-    assert_eq!(db.allocate_sequence("seq", 1).unwrap(), 0);
+    // 1-based (AUTO_INCREMENT): 1, then 2, then reserve 5 from 3, then 8.
     assert_eq!(db.allocate_sequence("seq", 1).unwrap(), 1);
-    assert_eq!(db.allocate_sequence("seq", 5).unwrap(), 2);
-    assert_eq!(db.allocate_sequence("seq", 1).unwrap(), 7);
+    assert_eq!(db.allocate_sequence("seq", 1).unwrap(), 2);
+    assert_eq!(db.allocate_sequence("seq", 5).unwrap(), 3);
+    assert_eq!(db.allocate_sequence("seq", 1).unwrap(), 8);
     // A different sequence has its own counter.
-    assert_eq!(db.allocate_sequence("other", 1).unwrap(), 0);
+    assert_eq!(db.allocate_sequence("other", 1).unwrap(), 1);
 }
 
 #[test]
@@ -84,8 +85,9 @@ fn sequence_allocation_retries_under_contention() {
     }
     let mut all: Vec<i64> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
     all.sort_unstable();
-    // Every allocation must be unique and the set must be a gap-free range.
-    let expected: Vec<i64> = (0..(THREADS * PER_THREAD) as i64).collect();
+    // Every allocation must be unique and the set must be a gap-free range
+    // starting at 1 (sequences are 1-based).
+    let expected: Vec<i64> = (1..=(THREADS * PER_THREAD) as i64).collect();
     assert_eq!(all, expected, "sequence values collided or were lost");
 }
 
@@ -118,10 +120,10 @@ fn sequence_and_custom_defaults_apply_on_insert() {
 
     let mut txn = db.begin().unwrap();
     let first = txn.insert("users", row(&[])).unwrap();
-    assert_eq!(first.values.get("id"), Some(&json!(0)));
+    assert_eq!(first.values.get("id"), Some(&json!(1)));
     assert_eq!(first.values.get("token"), Some(&json!("fixed-token")));
     let second = txn.insert("users", row(&[])).unwrap();
-    assert_eq!(second.values.get("id"), Some(&json!(1)));
+    assert_eq!(second.values.get("id"), Some(&json!(2)));
     txn.commit().unwrap();
 }
 

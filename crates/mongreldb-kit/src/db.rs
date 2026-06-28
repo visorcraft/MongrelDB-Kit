@@ -117,15 +117,18 @@ impl Database {
                 .find(|r| internal_bytes(r, cols::SEQ_NAME) == Some(name.to_string()));
 
             let now = crate::internal::iso_now();
+            // Sequences are 1-based, matching SQL AUTO_INCREMENT / SERIAL. A
+            // starting value of 0 is unsafe: applications use 0 as the "unset"
+            // sentinel for nullable foreign keys.
             let (start, next, old_row_id) = match &existing {
                 Some(row) => {
                     let current = match row.columns.get(&cols::SEQ_NEXT) {
                         Some(CoreValue::Int64(i)) => *i,
-                        _ => 0,
+                        _ => 1,
                     };
                     (current, current + count, Some(row.row_id))
                 }
-                None => (0, count, None),
+                None => (1, 1 + count, None),
             };
 
             if let Some(rid) = old_row_id {

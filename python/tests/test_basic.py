@@ -191,10 +191,11 @@ def test_allocate_sequence_and_table_names():
     path = tmp_db()
     db = Database.create(path, users_orders_schema())
 
-    assert db.allocate_sequence("ids") == 0
+    # 1-based (AUTO_INCREMENT): 1, then 2, then reserve 5 from 3, then 8.
     assert db.allocate_sequence("ids") == 1
-    assert db.allocate_sequence("ids", 5) == 2
-    assert db.allocate_sequence("ids") == 7
+    assert db.allocate_sequence("ids") == 2
+    assert db.allocate_sequence("ids", 5) == 3
+    assert db.allocate_sequence("ids") == 8
 
     names = sorted(db.table_names())
     assert names == ["items", "orders", "users"]

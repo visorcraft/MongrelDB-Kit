@@ -264,19 +264,22 @@ export class KitDatabase {
 		]);
 		const existing = matches[0] ?? null;
 		const now = isoNow();
-		let start = 0n;
+		// Sequences are 1-based, matching SQL AUTO_INCREMENT / SERIAL. A starting
+		// value of 0 is unsafe: 0 is falsy and collides with the "unset" sentinel
+		// applications use for nullable foreign keys.
+		let start: bigint;
 		if (!existing) {
-			start = 0n;
+			start = 1n;
 			seqTable.put([
 				{ columnId: columnId(kitSequences, 'sequence_name'), text: name },
-				{ columnId: columnId(kitSequences, 'next_value'), int64: BigInt(count) },
+				{ columnId: columnId(kitSequences, 'next_value'), int64: start + BigInt(count) },
 				{ columnId: columnId(kitSequences, 'updated_at'), text: now }
 			]);
 		} else {
 			const nextCell = existing.cells.find(
 				(c) => c.columnId === columnId(kitSequences, 'next_value')
 			);
-			const current = nextCell?.int64 ?? 0n;
+			const current = nextCell?.int64 ?? 1n;
 			start = current;
 			seqTable.put([
 				{ columnId: columnId(kitSequences, 'sequence_name'), text: name },
