@@ -54,7 +54,7 @@ fn ensure_internal_tables(core: &CoreDatabase) -> Result<()> {
     Ok(())
 }
 
-fn load_applied_migrations(core: &CoreDatabase) -> Result<Vec<Migration>> {
+pub fn load_applied_migrations(core: &CoreDatabase) -> Result<Vec<Migration>> {
     let handle = core.table(MIGRATIONS_TABLE).map_err(KitError::from)?;
     let guard = handle.lock();
     let snapshot = guard.snapshot();

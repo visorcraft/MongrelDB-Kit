@@ -64,6 +64,11 @@ impl Database {
         self.schema.table(name)
     }
 
+    /// Return the currently loaded schema.
+    pub fn schema(&self) -> &KitSchema {
+        &self.schema
+    }
+
     /// Begin a new kit transaction.
     pub fn begin(&self) -> Result<crate::txn::Transaction<'_>> {
         let core_txn = self.inner.begin();
@@ -73,6 +78,29 @@ impl Database {
     /// Replace the in-memory schema, usually after a migration.
     pub fn set_schema(&mut self, schema: KitSchema) {
         self.schema = schema;
+    }
+
+    /// Verify that the sidecar schema file and internal `_migrations` table
+    /// are present.
+    pub fn check_internal_tables(&self) -> Result<()> {
+        let schema_file = self.root.join(SCHEMA_FILE);
+        if !schema_file.exists() {
+            return Err(KitError::Integrity(format!(
+                "schema file {} is missing",
+                schema_file.display()
+            )));
+        }
+        if self.inner.table_id(MIGRATIONS_TABLE).is_err() {
+            return Err(KitError::Integrity(
+                "internal _migrations table is missing".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Return the migrations already recorded in `_migrations`.
+    pub fn applied_migrations(&self) -> Result<Vec<mongreldb_kit_core::migrations::Migration>> {
+        crate::migrate::load_applied_migrations(&self.inner)
     }
 
     pub(crate) fn core_db(&self) -> &CoreDatabase {
