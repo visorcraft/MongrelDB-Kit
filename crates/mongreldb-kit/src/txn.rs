@@ -1,45 +1,66 @@
 //! Kit transaction wrapper around a MongrelDB core transaction.
+//!
+//! Constraints are enforced with the guard-table architecture shared with the
+//! TypeScript kit:
+//!
+//! * Unique constraints reserve a row in `__kit_unique_keys` keyed by the typed
+//!   encoded unique key. Concurrent inserts of the same value collide on that
+//!   key and one transaction retries.
+//! * Foreign keys verify the parent row exists and then *touch* the parent's
+//!   `__kit_row_guards` row. A concurrent parent delete also writes that guard
+//!   key, forcing a write-write conflict so the unsafe snapshot interleaving is
+//!   impossible.
+//! * Composite primary keys reserve a `__pk_<table>` guard in `__kit_unique_keys`.
+//!
+//! Reads inside a transaction use the transaction's read snapshot; writes staged
+//! earlier in the same transaction are tracked in memory so read-your-writes
+//! behaves correctly even though the core transaction cannot read its own
+//! staging.
 
+use crate::db::internal_bytes;
 use crate::error::{KitError, Result};
-use crate::query::execute_select;
-use crate::schema::{
-    core_row_to_json, pk_to_map, row_to_core_cells, Row,
-};
+use crate::internal::{cols, iso_now, ROW_GUARDS, UNIQUE_KEYS};
+use crate::query::{run_aggregate, run_join, run_select, project_distinct, ExecCtx, JoinRow};
+use crate::schema::{core_row_to_json, pk_to_map, row_to_core_cells, Row};
+use mongreldb_core::memtable::{Row as CoreRow, Value as CoreValue};
 use mongreldb_core::RowId;
+use mongreldb_kit_core::keys::{
+    decode_pk, encode_pk, encode_row_guard_key, encode_unique_key, KeyComponent, KIT_KEY_VERSION,
+};
 use mongreldb_kit_core::planner::{plan_delete, DeletePlan};
-use mongreldb_kit_core::query::Query;
-use mongreldb_kit_core::schema::{DefaultKind, Table as KitTable};
+use mongreldb_kit_core::query::{AggregateQuery, Cte, JoinQuery, Query, Select};
+use mongreldb_kit_core::schema::{
+    Column, ColumnType, DefaultKind, ForeignKey, Table as KitTable, UniqueConstraint,
+};
 use serde_json::{Map, Value};
+use std::collections::HashSet;
 
 /// A kit transaction.
-///
-/// Wraps a core cross-table transaction and enforces kit-level defaults,
-/// validation, unique constraints, and foreign keys.
 pub struct Transaction<'a> {
     db: &'a crate::db::Database,
     core: mongreldb_core::txn::Transaction<'a>,
     staged: Vec<StagedOp>,
+    /// Unique keys reserved within this (uncommitted) transaction.
+    staged_unique: Vec<StagedUnique>,
+    /// Row-guard keys already touched in this transaction (dedupe).
+    touched_guards: HashSet<String>,
     next_temp_id: u64,
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum StagedOp {
-    Insert {
-        table: String,
-        values: Map<String, Value>,
-        temp_id: u64,
-    },
-    Update {
-        table: String,
-        old_row_id: u64,
-        values: Map<String, Value>,
-        temp_id: u64,
-    },
-    Delete {
-        table: String,
-        row_id: u64,
-    },
+    Insert { values: Map<String, Value> },
+    Update { values: Map<String, Value> },
+    /// A delete staged in this transaction. Tracked so `staged_parent_exists`
+    /// can ignore rows removed earlier in the same transaction.
+    Delete { pk: String },
+}
+
+#[derive(Debug, Clone)]
+struct StagedUnique {
+    encoded_key: String,
+    owner_table: String,
+    owner_pk: String,
 }
 
 impl<'a> Transaction<'a> {
@@ -51,6 +72,8 @@ impl<'a> Transaction<'a> {
             db,
             core,
             staged: Vec::new(),
+            staged_unique: Vec::new(),
+            touched_guards: HashSet::new(),
             next_temp_id: 1,
         }
     }
@@ -58,19 +81,24 @@ impl<'a> Transaction<'a> {
     /// Insert a row into `table`.
     pub fn insert(&mut self, table: &str, mut row: Map<String, Value>) -> Result<Row> {
         let t = self.require_table(table)?.clone();
-        apply_defaults(&mut row, &t)?;
+        self.apply_defaults(&mut row, &t)?;
         mongreldb_kit_core::validation::validate_row(&t, &row)?;
-        self.check_unique_constraints(table, &row, None)?;
-        self.check_foreign_keys(table, &row)?;
 
-        let temp_id = self.next_temp_id;
-        self.next_temp_id += 1;
+        // Validate all constraints before staging any writes.
+        self.check_unique_constraints(&t, &row, None)?;
+        self.check_pk_guard(&t, &row, true)?;
+        self.check_foreign_keys(&t, &row)?;
+
+        // Stage guard rows + the application row atomically.
+        self.reserve_unique_guards(&t, &row, None)?;
+        self.reserve_pk_guard(&t, &row)?;
+        self.touch_foreign_key_guards(&t, &row)?;
+
         let cells = row_to_core_cells(&row, &t)?;
         self.core.put(table, cells).map_err(KitError::from)?;
+        let temp_id = self.alloc_temp_id();
         self.staged.push(StagedOp::Insert {
-            table: table.to_string(),
             values: row.clone(),
-            temp_id,
         });
         Ok(Row {
             row_id: temp_id,
@@ -79,12 +107,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Update the row in `table` identified by `pk` with `patch`.
-    pub fn update(
-        &mut self,
-        table: &str,
-        pk: &Value,
-        patch: Map<String, Value>,
-    ) -> Result<Row> {
+    pub fn update(&mut self, table: &str, pk: &Value, patch: Map<String, Value>) -> Result<Row> {
         let t = self.require_table(table)?.clone();
         let pk_map = pk_to_map(pk, &t)?;
         let old_row = self
@@ -98,21 +121,21 @@ impl<'a> Transaction<'a> {
             }
         }
         mongreldb_kit_core::validation::validate_row(&t, &values)?;
-        self.check_unique_constraints(table, &values, Some(old_row.row_id))?;
-        self.check_foreign_keys(table, &values)?;
+        self.check_unique_constraints(&t, &values, Some(&old_row.values))?;
+        self.check_foreign_keys(&t, &values)?;
 
-        let temp_id = self.next_temp_id;
-        self.next_temp_id += 1;
+        // Reserve new unique keys and delete stale ones.
+        self.reserve_unique_guards(&t, &values, Some(&old_row.values))?;
+        self.touch_foreign_key_guards(&t, &values)?;
+
         let cells = row_to_core_cells(&values, &t)?;
         self.core
             .delete(table, RowId(old_row.row_id))
             .map_err(KitError::from)?;
         self.core.put(table, cells).map_err(KitError::from)?;
+        let temp_id = self.alloc_temp_id();
         self.staged.push(StagedOp::Update {
-            table: table.to_string(),
-            old_row_id: old_row.row_id,
             values: values.clone(),
-            temp_id,
         });
         Ok(Row {
             row_id: temp_id,
@@ -122,8 +145,8 @@ impl<'a> Transaction<'a> {
 
     /// Delete the row in `table` identified by `pk`.
     pub fn delete(&mut self, table: &str, pk: &Value) -> Result<()> {
-        let t = self.require_table(table)?;
-        let pk_map = pk_to_map(pk, t)?;
+        let t = self.require_table(table)?.clone();
+        let pk_map = pk_to_map(pk, &t)?;
         let row = self
             .get_by_pk_internal(table, &pk_map)?
             .ok_or_else(|| KitError::Integrity(format!("row not found in {table}")))?;
@@ -141,7 +164,7 @@ impl<'a> Transaction<'a> {
             return Err(KitError::Restrict(msg));
         }
 
-        // Apply set-null updates first, then cascade deletes, finally the parent.
+        // Apply set-null updates first, then cascade deletes, finally the target.
         for set_null in &plan.set_null {
             self.apply_set_null(set_null)?;
         }
@@ -149,26 +172,27 @@ impl<'a> Transaction<'a> {
             if del.table == table {
                 continue; // deleted at the end
             }
-            let child_table = self.require_table(&del.table)?;
-            let child_pk = pk_string_to_value(&del.pk, child_table)?;
-            let child_pk_map = pk_to_map(&child_pk, child_table)?;
+            let child_table = self.require_table(&del.table)?.clone();
+            let child_pk = pk_string_to_value(&del.pk, &child_table)?;
+            let child_pk_map = pk_to_map(&child_pk, &child_table)?;
             if let Some(child_row) = self.get_by_pk_internal(&del.table, &child_pk_map)? {
+                self.delete_guards_for(&child_table, &child_row.values)?;
                 self.core
                     .delete(&del.table, RowId(child_row.row_id))
                     .map_err(KitError::from)?;
-                self.staged.push(StagedOp::Delete {
-                    table: del.table.clone(),
-                    row_id: child_row.row_id,
-                });
+                self.staged.push(StagedOp::Delete { pk: del.pk.clone() });
             }
         }
 
+        // Clean the target's guards and force a conflict with any concurrent
+        // child insert by touching its row guard.
+        self.delete_guards_for(&t, &row.values)?;
+        self.touch_row_guard(table, &pk_components(&t, &row.values))?;
         self.core
             .delete(table, RowId(row.row_id))
             .map_err(KitError::from)?;
         self.staged.push(StagedOp::Delete {
-            table: table.to_string(),
-            row_id: row.row_id,
+            pk: encoded_pk_for(&t, &row.values),
         });
         Ok(())
     }
@@ -180,15 +204,63 @@ impl<'a> Transaction<'a> {
         self.get_by_pk_internal(table, &pk_map)
     }
 
-    /// Execute a `Select` query.
+    /// Execute a `Select` query. Subqueries (`IN (subquery)`, `EXISTS`) and
+    /// `like`/`contains`/`not in` predicates resolve against this transaction's
+    /// read snapshot, so they may reference other tables.
     pub fn select(&self, query: &Query) -> Result<Vec<Row>> {
         let select = match query {
             Query::Select(s) => s,
             _ => return Err(KitError::Validation("only SELECT supported".into())),
         };
-        let t = self.require_table(&select.table)?;
-        let visible = self.db.visible_core_rows(&select.table)?;
-        execute_select(t, visible, select)
+        let ctx = self.exec_ctx();
+        run_select(&ctx, select)
+    }
+
+    /// Like [`select`](Self::select) but drops duplicate rows. When the select
+    /// projects columns, duplicates are decided on the projection (true
+    /// `SELECT DISTINCT col, ...`); otherwise on the whole row.
+    pub fn select_distinct(&self, query: &Query) -> Result<Vec<Row>> {
+        let select = match query {
+            Query::Select(s) => s,
+            _ => return Err(KitError::Validation("only SELECT supported".into())),
+        };
+        let ctx = self.exec_ctx();
+        let rows = run_select(&ctx, select)?;
+        Ok(project_distinct(select, rows))
+    }
+
+    /// Materialize each CTE in order (a later CTE may read an earlier one) and
+    /// run `body` with those named results available as virtual tables.
+    pub fn select_with(&self, ctes: &[Cte], body: &Select) -> Result<Vec<Row>> {
+        let mut ctx = self.exec_ctx();
+        for cte in ctes {
+            let rows = run_select(&ctx, &cte.query)?;
+            ctx.add_cte(cte.name.clone(), rows);
+        }
+        run_select(&ctx, body)
+    }
+
+    /// Run an aggregate / group-by / having query. Returns one row per group
+    /// (group-key columns plus the aggregate aliases); with no `group_by` the
+    /// whole filtered table is a single group.
+    pub fn aggregate(&self, query: &AggregateQuery) -> Result<Vec<Row>> {
+        let ctx = self.exec_ctx();
+        run_aggregate(&ctx, query)
+    }
+
+    /// Run a nested-loop join. Each result row is a map keyed by table alias; see
+    /// [`JoinQuery`] for the shape. Supports inner, left, and cross joins.
+    pub fn join(&self, query: &JoinQuery) -> Result<Vec<JoinRow>> {
+        let ctx = self.exec_ctx();
+        run_join(&ctx, query)
+    }
+
+    /// Build an execution context whose table fetcher reads visible rows at this
+    /// transaction's read snapshot.
+    fn exec_ctx(&self) -> ExecCtx<'_> {
+        ExecCtx::new(Some(&self.db.schema), move |name: &str| {
+            self.snapshot_rows(name)
+        })
     }
 
     /// Commit the transaction.
@@ -201,15 +273,25 @@ impl<'a> Transaction<'a> {
         self.core.rollback();
     }
 
+    // ── internals ──────────────────────────────────────────────────────────
+
+    fn alloc_temp_id(&mut self) -> u64 {
+        let id = self.next_temp_id;
+        self.next_temp_id += 1;
+        id
+    }
+
     fn require_table(&self, name: &str) -> Result<&KitTable> {
         self.db
             .table(name)
             .ok_or_else(|| KitError::Integrity(format!("table {name} not found")))
     }
 
-    fn visible_rows(&self, table: &str) -> Result<Vec<Row>> {
+    fn snapshot_rows(&self, table: &str) -> Result<Vec<Row>> {
         let t = self.require_table(table)?;
-        let core_rows = self.db.visible_core_rows(table)?;
+        let core_rows = self
+            .db
+            .visible_core_rows_at(table, self.core.read_snapshot())?;
         core_rows
             .into_iter()
             .map(|r| core_row_to_json(&r, t))
@@ -218,142 +300,360 @@ impl<'a> Transaction<'a> {
 
     fn get_by_pk_internal(&self, table: &str, pk_map: &Map<String, Value>) -> Result<Option<Row>> {
         let t = self.require_table(table)?;
-        let rows = self.visible_rows(table)?;
+        let rows = self.snapshot_rows(table)?;
         Ok(rows.into_iter().find(|r| pk_matches(&r.values, pk_map, t)))
     }
 
+    fn internal_rows(&self, table: &str) -> Result<Vec<CoreRow>> {
+        self.db
+            .visible_core_rows_at(table, self.core.read_snapshot())
+    }
+
+    // ── unique constraints ─────────────────────────────────────────────────
+
+    /// Reject the row if any of its unique keys is already owned by a different
+    /// row, either in committed state or in this transaction's staging.
     fn check_unique_constraints(
         &self,
-        table: &str,
+        table: &KitTable,
         values: &Map<String, Value>,
-        exclude_row_id: Option<u64>,
+        old_values: Option<&Map<String, Value>>,
     ) -> Result<()> {
-        let t = self.require_table(table)?;
-        let existing = self.visible_rows(table)?;
-        for uq in &t.unique_constraints {
-            let key = uq_key(values, t, uq);
-            for row in &existing {
-                if Some(row.row_id) == exclude_row_id {
+        let owner_pk = encoded_pk_for(table, values);
+        let committed = self.internal_rows(UNIQUE_KEYS)?;
+        for uq in &table.unique_constraints {
+            let Some(key) = unique_key(table, uq, values) else {
+                continue;
+            };
+            // Unchanged keys (update where the value did not move) are fine.
+            if let Some(old) = old_values {
+                if unique_key(table, uq, old).as_deref() == Some(key.as_str()) {
                     continue;
                 }
-                if uq_key(&row.values, t, uq) == key && !key.is_empty() {
+            }
+            self.assert_key_free(&committed, table, uq, &key, &owner_pk)?;
+        }
+        Ok(())
+    }
+
+    fn assert_key_free(
+        &self,
+        committed: &[CoreRow],
+        table: &KitTable,
+        uq: &UniqueConstraint,
+        key: &str,
+        owner_pk: &str,
+    ) -> Result<()> {
+        for guard in committed {
+            if internal_bytes(guard, cols::UQ_ENCODED).as_deref() == Some(key) {
+                let g_table = internal_bytes(guard, cols::UQ_OWNER_TABLE).unwrap_or_default();
+                let g_pk = internal_bytes(guard, cols::UQ_OWNER_PK).unwrap_or_default();
+                if g_table != table.name || g_pk != owner_pk {
                     return Err(KitError::Duplicate(format!(
                         "unique constraint {} on {}",
-                        uq.name, table
+                        uq.name, table.name
                     )));
                 }
             }
-            for staged in &self.staged {
-                let staged_values = match staged {
-                    StagedOp::Insert { values: v, .. } | StagedOp::Update { values: v, .. } => {
-                        if let StagedOp::Update { old_row_id, .. } = staged {
-                            if Some(*old_row_id) == exclude_row_id {
-                                continue;
-                            }
-                        }
-                        v
-                    }
-                    StagedOp::Delete { .. } => continue,
-                };
-                if uq_key(staged_values, t, uq) == key && !key.is_empty() {
-                    return Err(KitError::Duplicate(format!(
-                        "unique constraint {} on {} (staged)",
-                        uq.name, table
-                    )));
-                }
+        }
+        for staged in &self.staged_unique {
+            if staged.encoded_key == key
+                && (staged.owner_table != table.name || staged.owner_pk != owner_pk)
+            {
+                return Err(KitError::Duplicate(format!(
+                    "unique constraint {} on {}",
+                    uq.name, table.name
+                )));
             }
         }
         Ok(())
     }
 
-    fn check_foreign_keys(&self, table: &str, values: &Map<String, Value>) -> Result<()> {
-        let schema = &self.db.schema;
-        let t = self.require_table(table)?.clone();
-        for fk in &t.foreign_keys {
-            let parent = schema.table(&fk.references_table).ok_or_else(|| {
-                KitError::Integrity(format!("referenced table {} not found", fk.references_table))
-            })?;
-            // A null foreign-key reference is allowed; it represents an optional relationship.
-            let child_values: Vec<&Value> = fk
-                .columns
-                .iter()
-                .map(|col| values.get(col).unwrap_or(&Value::Null))
-                .collect();
-            if child_values.iter().any(|v| v.is_null()) {
+    /// Reserve new unique guard rows for `values`, deleting any stale guards that
+    /// belonged to the previous version of the row (on update).
+    fn reserve_unique_guards(
+        &mut self,
+        table: &KitTable,
+        values: &Map<String, Value>,
+        old_values: Option<&Map<String, Value>>,
+    ) -> Result<()> {
+        let owner_pk = encoded_pk_for(table, values);
+        for uq in &table.unique_constraints {
+            let new_key = unique_key(table, uq, values);
+            let old_key = old_values.and_then(|old| unique_key(table, uq, old));
+            if new_key == old_key {
                 continue;
             }
-            let parent_value = pk_value_from_fk(values, &t, fk, parent)?;
-            let parent_exists = self.parent_exists(&fk.references_table, &parent_value)?;
-            if parent_exists {
+            if let Some(key) = &new_key {
+                self.put_unique_guard(&uq.name, key, &table.name, &owner_pk)?;
+            }
+            if let Some(key) = &old_key {
+                self.delete_unique_guard(key)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn put_unique_guard(
+        &mut self,
+        constraint: &str,
+        encoded_key: &str,
+        owner_table: &str,
+        owner_pk: &str,
+    ) -> Result<()> {
+        let now = iso_now();
+        self.core
+            .put(
+                UNIQUE_KEYS,
+                vec![
+                    (cols::UQ_ENCODED, CoreValue::Bytes(encoded_key.into())),
+                    (cols::UQ_CONSTRAINT, CoreValue::Bytes(constraint.into())),
+                    (cols::UQ_OWNER_TABLE, CoreValue::Bytes(owner_table.into())),
+                    (cols::UQ_OWNER_PK, CoreValue::Bytes(owner_pk.into())),
+                    (cols::UQ_CREATED, CoreValue::Bytes(now.into_bytes())),
+                ],
+            )
+            .map_err(KitError::from)?;
+        self.staged_unique.push(StagedUnique {
+            encoded_key: encoded_key.to_string(),
+            owner_table: owner_table.to_string(),
+            owner_pk: owner_pk.to_string(),
+        });
+        Ok(())
+    }
+
+    fn delete_unique_guard(&mut self, encoded_key: &str) -> Result<()> {
+        let committed = self.internal_rows(UNIQUE_KEYS)?;
+        for guard in &committed {
+            if internal_bytes(guard, cols::UQ_ENCODED).as_deref() == Some(encoded_key) {
+                self.core
+                    .delete(UNIQUE_KEYS, guard.row_id)
+                    .map_err(KitError::from)?;
+            }
+        }
+        self.staged_unique.retain(|s| s.encoded_key != encoded_key);
+        Ok(())
+    }
+
+    /// Delete every unique guard owned by the given row (used on row delete).
+    fn delete_unique_guards_for_owner(
+        &mut self,
+        table: &KitTable,
+        owner_pk: &str,
+    ) -> Result<()> {
+        let constraint_names: HashSet<&str> = table
+            .unique_constraints
+            .iter()
+            .map(|u| u.name.as_str())
+            .collect();
+        let committed = self.internal_rows(UNIQUE_KEYS)?;
+        for guard in &committed {
+            let g_table = internal_bytes(guard, cols::UQ_OWNER_TABLE).unwrap_or_default();
+            let g_pk = internal_bytes(guard, cols::UQ_OWNER_PK).unwrap_or_default();
+            let g_constraint = internal_bytes(guard, cols::UQ_CONSTRAINT).unwrap_or_default();
+            if g_table == table.name
+                && g_pk == owner_pk
+                && (constraint_names.contains(g_constraint.as_str())
+                    || g_constraint == pk_guard_constraint(table))
+            {
+                self.core
+                    .delete(UNIQUE_KEYS, guard.row_id)
+                    .map_err(KitError::from)?;
+            }
+        }
+        let owner_pk = owner_pk.to_string();
+        let name = table.name.clone();
+        self.staged_unique
+            .retain(|s| !(s.owner_table == name && s.owner_pk == owner_pk));
+        Ok(())
+    }
+
+    // ── primary-key guard (composite keys) ─────────────────────────────────
+
+    fn check_pk_guard(
+        &self,
+        table: &KitTable,
+        values: &Map<String, Value>,
+        is_insert: bool,
+    ) -> Result<()> {
+        if table.primary_key.len() <= 1 || !is_insert {
+            return Ok(());
+        }
+        let key = pk_guard_key(table, values);
+        let owner_pk = encoded_pk_for(table, values);
+        let committed = self.internal_rows(UNIQUE_KEYS)?;
+        for guard in &committed {
+            if internal_bytes(guard, cols::UQ_ENCODED).as_deref() == Some(key.as_str()) {
+                return Err(KitError::Duplicate(format!(
+                    "primary key {} on {}",
+                    owner_pk, table.name
+                )));
+            }
+        }
+        for staged in &self.staged_unique {
+            if staged.encoded_key == key {
+                return Err(KitError::Duplicate(format!(
+                    "primary key {} on {}",
+                    owner_pk, table.name
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn reserve_pk_guard(&mut self, table: &KitTable, values: &Map<String, Value>) -> Result<()> {
+        if table.primary_key.len() <= 1 {
+            return Ok(());
+        }
+        let key = pk_guard_key(table, values);
+        let owner_pk = encoded_pk_for(table, values);
+        let constraint = pk_guard_constraint(table);
+        self.put_unique_guard(&constraint, &key, &table.name, &owner_pk)
+    }
+
+    // ── foreign keys ───────────────────────────────────────────────────────
+
+    fn check_foreign_keys(&self, table: &KitTable, values: &Map<String, Value>) -> Result<()> {
+        for fk in &table.foreign_keys {
+            if fk_values_null(fk, values) {
                 continue;
             }
-            // Also check staged inserts/updates in this transaction.
-            if self.staged_parent_exists(&fk.references_table, &parent_value)? {
+            let parent = self.require_table(&fk.references_table)?;
+            let parent_pk = parent_pk_value(values, fk, parent)?;
+            let parent_pk_map = pk_to_map(&parent_pk, parent)?;
+            if self.parent_exists(&fk.references_table, &parent_pk_map)?
+                || self.staged_parent_exists(parent, &parent_pk_map)
+            {
                 continue;
             }
             return Err(KitError::ForeignKey(format!(
                 "{} references {}({})",
-                fk.name, fk.references_table, fk.references_columns.join(",")
+                fk.name,
+                fk.references_table,
+                fk.references_columns.join(",")
             )));
         }
         Ok(())
     }
 
-    fn parent_exists(&self, table: &str, pk: &Value) -> Result<bool> {
-        let t = self.require_table(table)?;
-        let pk_map = pk_to_map(pk, t)?;
-        let rows = self.visible_rows(table)?;
-        Ok(rows.iter().any(|r| pk_matches(&r.values, &pk_map, t)))
+    fn touch_foreign_key_guards(
+        &mut self,
+        table: &KitTable,
+        values: &Map<String, Value>,
+    ) -> Result<()> {
+        for fk in table.foreign_keys.clone() {
+            if fk_values_null(&fk, values) {
+                continue;
+            }
+            let parent = self.require_table(&fk.references_table)?.clone();
+            let components = parent_pk_components(values, &fk, &parent);
+            self.touch_row_guard(&parent.name, &components)?;
+        }
+        Ok(())
     }
 
-    fn staged_parent_exists(&self, table: &str, pk: &Value) -> Result<bool> {
+    fn parent_exists(&self, table: &str, pk_map: &Map<String, Value>) -> Result<bool> {
         let t = self.require_table(table)?;
-        let pk_map = pk_to_map(pk, t)?;
+        let rows = self.snapshot_rows(table)?;
+        Ok(rows.iter().any(|r| pk_matches(&r.values, pk_map, t)))
+    }
+
+    fn staged_parent_exists(&self, table: &KitTable, pk_map: &Map<String, Value>) -> bool {
+        // Replay this transaction's staging in order so a parent inserted and
+        // then deleted within the same transaction is not treated as present.
+        let target = encode_pk(&pk_components(table, pk_map));
+        let mut exists = false;
         for staged in &self.staged {
-            let values = match staged {
-                StagedOp::Insert { values: v, .. } | StagedOp::Update { values: v, .. } => v,
-                StagedOp::Delete { .. } => continue,
-            };
-            if pk_matches(values, &pk_map, t) {
-                return Ok(true);
+            match staged {
+                StagedOp::Insert { values } | StagedOp::Update { values } => {
+                    if pk_matches(values, pk_map, table) {
+                        exists = true;
+                    }
+                }
+                StagedOp::Delete { pk } => {
+                    if *pk == target {
+                        exists = false;
+                    }
+                }
             }
         }
-        Ok(false)
+        exists
     }
+
+    // ── row guards ─────────────────────────────────────────────────────────
+
+    fn touch_row_guard(&mut self, table: &str, pk_components: &[KeyComponent]) -> Result<()> {
+        let encoded_pk = encode_pk(pk_components);
+        let guard_key = encode_row_guard_key(table, &encoded_pk);
+        if !self.touched_guards.insert(guard_key.clone()) {
+            return Ok(());
+        }
+        // Replace any existing committed guard, bumping the version.
+        let mut version = 1i64;
+        let committed = self.internal_rows(ROW_GUARDS)?;
+        for guard in &committed {
+            if internal_bytes(guard, cols::RG_ENCODED).as_deref() == Some(guard_key.as_str()) {
+                if let Some(CoreValue::Int64(v)) = guard.columns.get(&cols::RG_VERSION) {
+                    version = v + 1;
+                }
+                self.core
+                    .delete(ROW_GUARDS, guard.row_id)
+                    .map_err(KitError::from)?;
+            }
+        }
+        let now = iso_now();
+        self.core
+            .put(
+                ROW_GUARDS,
+                vec![
+                    (cols::RG_ENCODED, CoreValue::Bytes(guard_key.into_bytes())),
+                    (cols::RG_TABLE, CoreValue::Bytes(table.into())),
+                    (cols::RG_PK, CoreValue::Bytes(encoded_pk.into_bytes())),
+                    (cols::RG_VERSION, CoreValue::Int64(version)),
+                    (cols::RG_UPDATED, CoreValue::Bytes(now.into_bytes())),
+                ],
+            )
+            .map_err(KitError::from)?;
+        Ok(())
+    }
+
+    /// Remove unique + pk guards for a row that is being deleted.
+    fn delete_guards_for(&mut self, table: &KitTable, values: &Map<String, Value>) -> Result<()> {
+        let owner_pk = encoded_pk_for(table, values);
+        self.delete_unique_guards_for_owner(table, &owner_pk)
+    }
+
+    // ── delete planning ────────────────────────────────────────────────────
 
     fn plan_delete(&self, table: &str, row: &Row) -> Result<DeletePlan> {
         let schema = &self.db.schema;
         let t = self.require_table(table)?;
-        let pk = row.pk(t).ok_or_else(|| KitError::Integrity("row has no pk".into()))?;
-        let pk_str = pk_value_to_string(&pk, t)?;
-        let find_children = |child_table: &KitTable, fk: &mongreldb_kit_core::schema::ForeignKey, parent_pk: &str| {
-            let parent_pk_value = pk_string_to_value(parent_pk, t).ok();
-            if parent_pk_value.is_none() {
-                return Vec::new();
-            }
-            let parent_pk_value = parent_pk_value.unwrap();
-            let parent_pk_map = pk_to_map(&parent_pk_value, t).ok();
-            if parent_pk_map.is_none() {
-                return Vec::new();
-            }
-            let parent_pk_map = parent_pk_map.unwrap();
-
-            let child_rows = match self.visible_rows(&child_table.name) {
-                Ok(r) => r,
-                Err(_) => return Vec::new(),
-            };
-            let mut out = Vec::new();
-            for child_row in child_rows {
-                if fk_matches(&child_row.values, child_table, fk, &parent_pk_map, t) {
-                    if let Some(child_pk) = child_row.pk(child_table) {
-                        if let Ok(s) = pk_value_to_string(&child_pk, child_table) {
-                            out.push((s, parent_pk.to_string()));
-                        }
+        let pk_str = encoded_pk_for(t, &row.values);
+        let find_children =
+            |child_table: &KitTable, fk: &ForeignKey, parent_pk: &str| -> Vec<(String, String)> {
+                let parent_pk_value = match pk_string_to_value(parent_pk, t) {
+                    Ok(v) => v,
+                    Err(_) => return Vec::new(),
+                };
+                let parent_pk_map = match pk_to_map(&parent_pk_value, t) {
+                    Ok(m) => m,
+                    Err(_) => return Vec::new(),
+                };
+                let child_rows = match self.snapshot_rows(&child_table.name) {
+                    Ok(r) => r,
+                    Err(_) => return Vec::new(),
+                };
+                let mut out = Vec::new();
+                for child_row in child_rows {
+                    if fk_matches(&child_row.values, fk, &parent_pk_map, t) {
+                        out.push((
+                            encoded_pk_for(child_table, &child_row.values),
+                            parent_pk.to_string(),
+                        ));
                     }
                 }
-            }
-            out
-        };
+                out
+            };
         plan_delete(schema, table, &pk_str, find_children).map_err(KitError::from)
     }
 
@@ -361,17 +661,17 @@ impl<'a> Transaction<'a> {
         &mut self,
         set_null: &mongreldb_kit_core::planner::SetNullUpdate,
     ) -> Result<()> {
-        let child_table = self.require_table(&set_null.table)?;
-        let child_pk = pk_string_to_value(&set_null.pk, child_table)?;
-        let child_pk_map = pk_to_map(&child_pk, child_table)?;
+        let child_table = self.require_table(&set_null.table)?.clone();
+        let child_pk = pk_string_to_value(&set_null.pk, &child_table)?;
+        let child_pk_map = pk_to_map(&child_pk, &child_table)?;
         let Some(child_row) = self.get_by_pk_internal(&set_null.table, &child_pk_map)? else {
             return Ok(());
         };
         let mut values = child_row.values.clone();
         for col in &set_null.columns {
-            let col_def = child_table.column(col).ok_or_else(|| {
-                KitError::Integrity(format!("set-null column {col} not found"))
-            })?;
+            let col_def = child_table
+                .column(col)
+                .ok_or_else(|| KitError::Integrity(format!("set-null column {col} not found")))?;
             if !col_def.nullable {
                 return Err(KitError::Restrict(format!(
                     "set-null on non-nullable column {col}"
@@ -379,165 +679,186 @@ impl<'a> Transaction<'a> {
             }
             values.insert(col.clone(), Value::Null);
         }
-        mongreldb_kit_core::validation::validate_row(child_table, &values)?;
-        let cells = row_to_core_cells(&values, child_table)?;
+        // Re-run validation (including checks) on the patched child row.
+        mongreldb_kit_core::validation::validate_row(&child_table, &values)?;
+        // Recompute unique guards for the patched row.
+        self.delete_guards_for(&child_table, &child_row.values)?;
+        let cells = row_to_core_cells(&values, &child_table)?;
         self.core
             .delete(&set_null.table, RowId(child_row.row_id))
             .map_err(KitError::from)?;
-        self.core.put(&set_null.table, cells).map_err(KitError::from)?;
+        self.core
+            .put(&set_null.table, cells)
+            .map_err(KitError::from)?;
+        self.reserve_unique_guards(&child_table, &values, None)?;
         self.staged.push(StagedOp::Update {
-            table: set_null.table.clone(),
-            old_row_id: child_row.row_id,
-            values,
-            temp_id: self.next_temp_id,
+            values: values.clone(),
         });
-        self.next_temp_id += 1;
         Ok(())
     }
-}
 
-fn apply_defaults(row: &mut Map<String, Value>, table: &KitTable) -> Result<()> {
-    for col in &table.columns {
-        if row.contains_key(&col.name) && row.get(&col.name) != Some(&Value::Null) {
-            continue;
-        }
-        if let Some(default) = &col.default {
+    // ── defaults ───────────────────────────────────────────────────────────
+
+    fn apply_defaults(&self, row: &mut Map<String, Value>, table: &KitTable) -> Result<()> {
+        for col in &table.columns {
+            if row.contains_key(&col.name) && row.get(&col.name) != Some(&Value::Null) {
+                continue;
+            }
+            let Some(default) = &col.default else {
+                continue;
+            };
             let value = match default {
                 DefaultKind::Static(v) => v.clone(),
                 DefaultKind::Now => {
-                    let _now = std::time::SystemTime::now();
-                    let dt = std::time::UNIX_EPOCH.elapsed().map(|d| d.as_secs() as i64).unwrap_or(0);
-                    Value::String(format!("{dt}"))
+                    let now = iso_now();
+                    if col.storage_type == ColumnType::Date {
+                        Value::String(now[..10].to_string())
+                    } else {
+                        Value::String(now)
+                    }
                 }
                 DefaultKind::Uuid => Value::String(uuid::Uuid::new_v4().to_string()),
                 DefaultKind::Sequence(name) => {
-                    return Err(KitError::Validation(format!(
-                        "sequence default {name} not implemented"
-                    )))
+                    let start = self.db.allocate_sequence(name, 1)?;
+                    Value::Number(start.into())
                 }
                 DefaultKind::CustomName(name) => {
-                    return Err(KitError::Validation(format!(
-                        "custom default {name} not implemented"
-                    )))
+                    let provider = self.db.default_providers.get(name).ok_or_else(|| {
+                        KitError::Validation(format!(
+                            "custom default \"{name}\" is not registered"
+                        ))
+                    })?;
+                    provider()
                 }
             };
             row.insert(col.name.clone(), value);
         }
+        Ok(())
     }
-    Ok(())
 }
+
+// ── free helpers ───────────────────────────────────────────────────────────
 
 fn pk_matches(values: &Map<String, Value>, pk_map: &Map<String, Value>, table: &KitTable) -> bool {
     for name in &table.primary_key {
-        let expected = pk_map.get(name);
-        let actual = values.get(name);
-        if expected != actual {
+        if values.get(name) != pk_map.get(name) {
             return false;
         }
     }
     true
 }
 
-fn uq_key(values: &Map<String, Value>, _table: &KitTable, uq: &mongreldb_kit_core::schema::UniqueConstraint) -> String {
-    let mut parts: Vec<String> = Vec::with_capacity(uq.columns.len());
-    for name in &uq.columns {
-        let v = values.get(name).cloned().unwrap_or(Value::Null);
-        parts.push(value_to_key(&v));
-    }
-    parts.join(":")
+fn pk_guard_constraint(table: &KitTable) -> String {
+    format!("__pk_{}", table.name)
 }
 
-fn value_to_key(value: &Value) -> String {
+fn pk_guard_key(table: &KitTable, values: &Map<String, Value>) -> String {
+    encode_unique_key(
+        KIT_KEY_VERSION,
+        &pk_guard_constraint(table),
+        &pk_components(table, values),
+    )
+}
+
+/// Build the typed key component for a column value.
+pub(crate) fn key_component(col: &Column, value: Option<&Value>) -> KeyComponent {
     match value {
-        Value::Null => "\0".to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
+        None | Some(Value::Null) => KeyComponent::Null,
+        Some(v) => match col.storage_type {
+            ColumnType::Int8
+            | ColumnType::Int16
+            | ColumnType::Int32
+            | ColumnType::Int64
+            | ColumnType::TimestampNanos => KeyComponent::Int(v.as_i64().unwrap_or(0)),
+            _ => KeyComponent::Text(value_to_text(v)),
+        },
+    }
+}
+
+fn value_to_text(value: &Value) -> String {
+    match value {
         Value::String(s) => s.clone(),
-        Value::Array(a) => a.iter().map(value_to_key).collect::<Vec<_>>().join(","),
-        Value::Object(o) => {
-            let mut keys: Vec<String> = o.keys().cloned().collect();
-            keys.sort();
-            keys.iter()
-                .map(|k| format!("{k}={}", value_to_key(o.get(k).unwrap())))
-                .collect::<Vec<_>>()
-                .join(",")
-        }
+        other => other.to_string(),
     }
 }
 
-fn pk_value_to_string(pk: &Value, table: &KitTable) -> Result<String> {
-    if table.primary_key.len() == 1 {
-        match pk {
-            Value::String(s) => Ok(s.clone()),
-            Value::Number(n) => Ok(n.to_string()),
-            Value::Bool(b) => Ok(b.to_string()),
-            _ => Err(KitError::Validation("unsupported pk type".into())),
-        }
-    } else {
-        match pk {
-            Value::Object(obj) => {
-                let mut parts = Vec::new();
-                for name in &table.primary_key {
-                    let v = obj
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(Value::Null);
-                    parts.push(value_to_key(&v));
-                }
-                Ok(parts.join(":"))
+fn pk_components(table: &KitTable, values: &Map<String, Value>) -> Vec<KeyComponent> {
+    table
+        .primary_key
+        .iter()
+        .map(|name| {
+            let col = table.column(name);
+            match col {
+                Some(c) => key_component(c, values.get(name)),
+                None => KeyComponent::Null,
             }
-            _ => Err(KitError::Validation("composite pk must be object".into())),
-        }
-    }
+        })
+        .collect()
 }
 
-fn pk_string_to_value(pk: &str, table: &KitTable) -> Result<Value> {
-    if table.primary_key.len() == 1 {
-        let col = table.column(&table.primary_key[0]).ok_or_else(|| {
-            KitError::Integrity(format!("pk column {} not found", table.primary_key[0]))
-        })?;
-        match col.storage_type {
-            mongreldb_kit_core::schema::ColumnType::Text
-            | mongreldb_kit_core::schema::ColumnType::Date
-            | mongreldb_kit_core::schema::ColumnType::DateTime => Ok(Value::String(pk.to_string())),
-            mongreldb_kit_core::schema::ColumnType::Int8
-            | mongreldb_kit_core::schema::ColumnType::Int16
-            | mongreldb_kit_core::schema::ColumnType::Int32
-            | mongreldb_kit_core::schema::ColumnType::Int64
-            | mongreldb_kit_core::schema::ColumnType::TimestampNanos => Ok(Value::Number(
-                pk.parse::<i64>().map_err(|_| KitError::Validation(format!("invalid int pk {pk}")))?.into(),
-            )),
-            _ => Err(KitError::Validation("unsupported pk type".into())),
-        }
-    } else {
-        Err(KitError::Validation("composite pk not supported from string".into()))
-    }
+pub(crate) fn encoded_pk_for(table: &KitTable, values: &Map<String, Value>) -> String {
+    encode_pk(&pk_components(table, values))
 }
 
-fn pk_value_from_fk(
+pub(crate) fn unique_key(
+    table: &KitTable,
+    uq: &UniqueConstraint,
     values: &Map<String, Value>,
-    _child_table: &KitTable,
-    fk: &mongreldb_kit_core::schema::ForeignKey,
-    parent_table: &KitTable,
+) -> Option<String> {
+    let mut components = Vec::with_capacity(uq.columns.len());
+    for name in &uq.columns {
+        let col = table.column(name)?;
+        let component = key_component(col, values.get(name));
+        if component == KeyComponent::Null {
+            return None; // nullable-unique: nulls never collide
+        }
+        components.push(component);
+    }
+    Some(encode_unique_key(KIT_KEY_VERSION, &uq.name, &components))
+}
+
+pub(crate) fn fk_values_null(fk: &ForeignKey, values: &Map<String, Value>) -> bool {
+    fk.columns
+        .iter()
+        .any(|c| values.get(c).map(|v| v.is_null()).unwrap_or(true))
+}
+
+pub(crate) fn parent_pk_components(
+    values: &Map<String, Value>,
+    fk: &ForeignKey,
+    parent: &KitTable,
+) -> Vec<KeyComponent> {
+    fk.columns
+        .iter()
+        .zip(&parent.primary_key)
+        .map(|(child_col, parent_col)| {
+            let col = parent.column(parent_col);
+            match col {
+                Some(c) => key_component(c, values.get(child_col)),
+                None => KeyComponent::Null,
+            }
+        })
+        .collect()
+}
+
+fn parent_pk_value(
+    values: &Map<String, Value>,
+    fk: &ForeignKey,
+    parent: &KitTable,
 ) -> Result<Value> {
-    if parent_table.primary_key.len() == 1 {
+    if parent.primary_key.len() == 1 {
         let child_col = fk
             .columns
             .first()
             .ok_or_else(|| KitError::Integrity("fk has no columns".into()))?;
-        let v = values
-            .get(child_col)
-            .cloned()
-            .unwrap_or(Value::Null);
-        Ok(v)
+        Ok(values.get(child_col).cloned().unwrap_or(Value::Null))
     } else {
         let mut obj = Map::new();
-        for (child_col, parent_col) in fk.columns.iter().zip(&parent_table.primary_key) {
-            let v = values
-                .get(child_col)
-                .cloned()
-                .unwrap_or(Value::Null);
-            obj.insert(parent_col.clone(), v);
+        for (child_col, parent_col) in fk.columns.iter().zip(&parent.primary_key) {
+            obj.insert(
+                parent_col.clone(),
+                values.get(child_col).cloned().unwrap_or(Value::Null),
+            );
         }
         Ok(Value::Object(obj))
     }
@@ -545,17 +866,45 @@ fn pk_value_from_fk(
 
 fn fk_matches(
     child_values: &Map<String, Value>,
-    _child_table: &KitTable,
-    fk: &mongreldb_kit_core::schema::ForeignKey,
+    fk: &ForeignKey,
     parent_pk_map: &Map<String, Value>,
     parent_table: &KitTable,
 ) -> bool {
     for (child_col, parent_col) in fk.columns.iter().zip(&parent_table.primary_key) {
-        let child_val = child_values.get(child_col);
-        let parent_val = parent_pk_map.get(parent_col);
-        if child_val != parent_val {
+        if child_values.get(child_col) != parent_pk_map.get(parent_col) {
             return false;
         }
     }
     true
+}
+
+/// Decode an encoded primary key string back into a JSON value.
+///
+/// Single-column keys return the scalar value; composite keys return an object
+/// keyed by primary-key column name.
+fn pk_string_to_value(encoded: &str, table: &KitTable) -> Result<Value> {
+    let components = decode_pk(encoded);
+    if components.len() != table.primary_key.len() {
+        return Err(KitError::Validation(format!(
+            "encoded pk \"{encoded}\" has {} components, expected {}",
+            components.len(),
+            table.primary_key.len()
+        )));
+    }
+    if table.primary_key.len() == 1 {
+        return Ok(component_to_value(&components[0]));
+    }
+    let mut obj = Map::new();
+    for (name, component) in table.primary_key.iter().zip(&components) {
+        obj.insert(name.clone(), component_to_value(component));
+    }
+    Ok(Value::Object(obj))
+}
+
+fn component_to_value(component: &KeyComponent) -> Value {
+    match component {
+        KeyComponent::Null => Value::Null,
+        KeyComponent::Int(i) => Value::Number((*i).into()),
+        KeyComponent::Text(s) => Value::String(s.clone()),
+    }
 }

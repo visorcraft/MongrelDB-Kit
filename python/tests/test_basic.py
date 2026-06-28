@@ -185,3 +185,28 @@ def test_migrate_records_versions():
 
     with db.begin() as txn:
         assert txn.get_by_pk("users", 1) is None
+
+
+def test_allocate_sequence_and_table_names():
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+
+    assert db.allocate_sequence("ids") == 0
+    assert db.allocate_sequence("ids") == 1
+    assert db.allocate_sequence("ids", 5) == 2
+    assert db.allocate_sequence("ids") == 7
+
+    names = sorted(db.table_names())
+    assert names == ["items", "orders", "users"]
+    assert all(not n.startswith("__kit_") for n in names)
+
+
+def test_transaction_helper_commits():
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+
+    db.transaction(lambda txn: insert_user(txn, 1, "alice@example.com", "Alice"))
+
+    with db.begin() as txn:
+        row = txn.get_by_pk("users", 1)
+        assert row["email"] == "alice@example.com"

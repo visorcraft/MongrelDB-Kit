@@ -111,5 +111,22 @@ type ColumnToDefaultName<C> = C extends {
 
 type ColumnsWithDefault<T extends TableSpec> = ColumnToDefaultName<T['columns'][number]>;
 
-export type Insert<T extends TableSpec> = Omit<Row<T>, ColumnsWithDefault<T>>;
+type NullableColumnName<C> = C extends { name: infer N; nullable: infer Null }
+	? N extends string
+		? Null extends true
+			? N
+			: never
+		: never
+	: never;
+
+type NullableColumns<T extends TableSpec> = NullableColumnName<T['columns'][number]>;
+
+// Insert input: columns with a default/generated value are omitted (the kit
+// supplies them); nullable columns are optional (omitting one stores NULL);
+// everything else is required.
+export type Insert<T extends TableSpec> = Omit<
+	Row<T>,
+	ColumnsWithDefault<T> | NullableColumns<T>
+> &
+	Partial<Pick<Row<T>, Extract<NullableColumns<T>, keyof Row<T>>>>;
 export type Update<T extends TableSpec> = Partial<Row<T>>;

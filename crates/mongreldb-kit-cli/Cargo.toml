@@ -3,6 +3,10 @@ name = "mongreldb-kit-cli"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Command-line tools for MongrelDB Kit: schema validation, migration apply/plan/status, drift diffing, and typed code generation."
+repository = "https://github.com/visorcraft/MongrelDB-Kit"
+keywords = ["mongreldb", "database", "cli", "migrations", "codegen"]
+categories = ["database", "command-line-utilities"]
 
 [[bin]]
 name = "mongreldb-kit"

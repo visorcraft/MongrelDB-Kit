@@ -4,12 +4,19 @@ import { ColumnType, IndexKindSpec, ConditionKind } from 'mongreldb/native.js';
 import { tableFromIPC } from 'apache-arrow';
 import { KitDatabase } from './db.js';
 import type { Schema } from './schema.js';
-import type { TableSpec, ColumnSpec, IndexSpec, UniqueSpec, ForeignKeySpec, ColumnStorageType } from './types.js';
-import { toCells } from './constraints.js';
+import type { TableSpec, ColumnSpec, IndexSpec, UniqueSpec, ForeignKeySpec, ColumnStorageType, PkValue } from './types.js';
+import { toCells, pkValueFromRow, parentExists, type ConstraintKit } from './constraints.js';
 import { validateRow } from './validation.js';
+import { KIT_KEY_VERSION, encodedPk, encodeRowGuardKey, encodeUniqueKey } from './keys.js';
 
-import { KitMigrationError, KitSchemaDriftError } from './errors.js';
-import { kitSchemaMigrations, kitSchemaCatalog, kitMigrationLocks } from './internalTables.js';
+import { KitMigrationError, KitSchemaDriftError, KitForeignKeyError } from './errors.js';
+import {
+	kitSchemaMigrations,
+	kitSchemaCatalog,
+	kitMigrationLocks,
+	kitUniqueKeys,
+	kitRowGuards
+} from './internalTables.js';
 
 
 const I64_MIN = -9_223_372_036_854_775_808n;
@@ -18,9 +25,38 @@ const LOCK_NAME = 'default';
 const LOCK_HOLDER = 'kit';
 const LOCK_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * A declarative migration operation. Mirrors the Rust
+ * `mongreldb_kit_core::migrations::MigrationOp` enum. These describe *what* a
+ * migration changes; the imperative `up()` callback performs the change. When
+ * present on a migration they are folded into its content-aware checksum so
+ * editing the op list is detected as schema drift.
+ */
+export type MigrationOp =
+	| { kind: 'createTable'; name: string }
+	| { kind: 'dropTable'; name: string }
+	| { kind: 'addColumn'; table: string; column: string }
+	| { kind: 'dropColumn'; table: string; column: string }
+	| { kind: 'addIndex'; table: string; index: string }
+	| { kind: 'dropIndex'; table: string; index: string }
+	| { kind: 'addUnique'; table: string; constraint: string }
+	| { kind: 'dropUnique'; table: string; constraint: string }
+	| { kind: 'addForeignKey'; table: string; constraint: string }
+	| { kind: 'dropForeignKey'; table: string; constraint: string }
+	| { kind: 'addCheck'; table: string; constraint: string }
+	| { kind: 'dropCheck'; table: string; constraint: string }
+	| { kind: 'rawSql'; sql: string };
+
 export interface Migration {
 	version: number;
 	name: string;
+	/**
+	 * Optional declarative description of the migration's operations. Including
+	 * it makes the migration checksum content-aware so a later edit to the ops
+	 * is rejected as drift. When omitted the checksum covers `version`/`name`
+	 * with an empty op list.
+	 */
+	ops?: MigrationOp[];
 	up: (ctx: MigrationContext) => Promise<void> | void;
 }
 
@@ -178,8 +214,65 @@ function fullScanRows(db: NativeDatabase, table: TableSpec): { rowId: bigint; ro
 		.map((rowJs) => ({ rowId: rowJs.rowId, row: rowFromRowJs(table, rowJs) }));
 }
 
-function migrationChecksum(migration: Migration): string {
-	return createHash('sha256').update(`${migration.version}:${migration.name}`).digest('hex');
+/**
+ * Canonical, language-neutral serialization of a single migration op. The key
+ * order is fixed and string values use standard JSON escaping (`JSON.stringify`),
+ * so this is byte-for-byte identical to the Rust kit's `canonical_op`
+ * (`crates/mongreldb-kit-core/src/migrations.rs`).
+ */
+function canonicalOp(op: MigrationOp): string {
+	const s = (value: string): string => JSON.stringify(value);
+	switch (op.kind) {
+		case 'createTable':
+			return `{"op":"create_table","name":${s(op.name)}}`;
+		case 'dropTable':
+			return `{"op":"drop_table","name":${s(op.name)}}`;
+		case 'addColumn':
+			return `{"op":"add_column","table":${s(op.table)},"column":${s(op.column)}}`;
+		case 'dropColumn':
+			return `{"op":"drop_column","table":${s(op.table)},"column":${s(op.column)}}`;
+		case 'addIndex':
+			return `{"op":"add_index","table":${s(op.table)},"index":${s(op.index)}}`;
+		case 'dropIndex':
+			return `{"op":"drop_index","table":${s(op.table)},"index":${s(op.index)}}`;
+		case 'addUnique':
+			return `{"op":"add_unique","table":${s(op.table)},"constraint":${s(op.constraint)}}`;
+		case 'dropUnique':
+			return `{"op":"drop_unique","table":${s(op.table)},"constraint":${s(op.constraint)}}`;
+		case 'addForeignKey':
+			return `{"op":"add_foreign_key","table":${s(op.table)},"constraint":${s(op.constraint)}}`;
+		case 'dropForeignKey':
+			return `{"op":"drop_foreign_key","table":${s(op.table)},"constraint":${s(op.constraint)}}`;
+		case 'addCheck':
+			return `{"op":"add_check","table":${s(op.table)},"constraint":${s(op.constraint)}}`;
+		case 'dropCheck':
+			return `{"op":"drop_check","table":${s(op.table)},"constraint":${s(op.constraint)}}`;
+		case 'rawSql':
+			return `{"op":"raw_sql","sql":${s(op.sql)}}`;
+		default: {
+			const _exhaustive: never = op;
+			throw new Error(`Unknown migration op: ${JSON.stringify(_exhaustive)}`);
+		}
+	}
+}
+
+/**
+ * The canonical content string a migration's checksum is computed over. Shape:
+ * `{"version":<n>,"name":<json>,"ops":[<op>,...]}` with no insignificant
+ * whitespace, byte-identical to the Rust kit's `canonical_content`.
+ */
+export function migrationContent(migration: Migration): string {
+	const opsJson = (migration.ops ?? []).map(canonicalOp).join(',');
+	return `{"version":${migration.version},"name":${JSON.stringify(migration.name)},"ops":[${opsJson}]}`;
+}
+
+/**
+ * Content-aware SHA-256 checksum for a migration. Covers the version, name, and
+ * ordered op list via {@link migrationContent}; the same logical migration
+ * produces the identical checksum in TypeScript, Rust, and Python.
+ */
+export function migrationChecksum(migration: Migration): string {
+	return createHash('sha256').update(migrationContent(migration)).digest('hex');
 }
 
 function schemaCatalogJson(schema: Schema): string {
@@ -546,8 +639,61 @@ export async function createTable(kit: KitDatabase, table: TableSpec): Promise<v
 	createTableSync(kit, table);
 }
 
-export async function dropTable(_kit: KitDatabase, _tableName: string): Promise<void> {
-	throw new KitMigrationError('dropTable is not implemented yet');
+/**
+ * Drop `tableName` and remove every unique-key and row guard it owned. The
+ * application row data and its guards are gone after this; the schema catalog is
+ * re-persisted by the migration runner once all ops complete.
+ */
+export async function dropTable(kit: KitDatabase, tableName: string): Promise<void> {
+	const db = kit.nativeDb;
+	if (!db.tableNames().includes(tableName)) {
+		throw new KitMigrationError(`Table "${tableName}" does not exist`);
+	}
+	db.dropTable(tableName);
+	cleanTableGuards(kit, tableName);
+}
+
+/** Delete unique-key and row guards owned by a dropped table. */
+function cleanTableGuards(kit: KitDatabase, tableName: string): void {
+	const db = kit.nativeDb;
+
+	const ukHandle = db.table('__kit_unique_keys');
+	const ukGuards = ukHandle.query([
+		{
+			kind: ConditionKind.BitmapEq,
+			columnId: columnId(kitUniqueKeys, 'owner_table'),
+			text: tableName
+		}
+	]);
+	let ukMutated = false;
+	for (const guard of ukGuards) {
+		const key = guard.cells.find((c) => c.columnId === columnId(kitUniqueKeys, 'encoded_key'))?.text;
+		if (key) {
+			ukHandle.deleteByPkText(key);
+			ukMutated = true;
+		}
+	}
+	if (ukMutated) ukHandle.commit();
+
+	const rgHandle = db.table('__kit_row_guards');
+	const rgGuards = rgHandle.query([
+		{
+			kind: ConditionKind.BitmapEq,
+			columnId: columnId(kitRowGuards, 'table_name'),
+			text: tableName
+		}
+	]);
+	let rgMutated = false;
+	for (const guard of rgGuards) {
+		const key = guard.cells.find(
+			(c) => c.columnId === columnId(kitRowGuards, 'encoded_guard_key')
+		)?.text;
+		if (key) {
+			rgHandle.deleteByPkText(key);
+			rgMutated = true;
+		}
+	}
+	if (rgMutated) rgHandle.commit();
 }
 
 function computeDefaultValue(column: ColumnSpec, kit: KitDatabase): unknown {
@@ -654,14 +800,142 @@ export async function addIndex(kit: KitDatabase, tableName: string, index: Index
 	}
 }
 
-export async function addUnique(_kit: KitDatabase, _tableName: string, _unique: UniqueSpec): Promise<void> {
-	throw new KitMigrationError('addUnique is not implemented yet');
+/**
+ * Add a unique constraint and backfill its `__kit_unique_keys` guards for every
+ * existing row (PLAN "Migrations"). Rows whose unique columns are all non-null
+ * reserve a guard; a guard key produced by two different rows means the existing
+ * data already violates the constraint and the migration is rejected. The
+ * constraint is added to the in-memory table so subsequent writes enforce it.
+ */
+export async function addUnique(
+	kit: KitDatabase,
+	tableName: string,
+	unique: UniqueSpec
+): Promise<void> {
+	const db = kit.nativeDb;
+	const table = kit.schema.table(tableName);
+	if (table.unique.some((u) => u.name === unique.name)) {
+		throw new KitMigrationError(
+			`Unique constraint "${unique.name}" already exists on "${tableName}"`
+		);
+	}
+	for (const colName of unique.columns) {
+		if (!table.columns.some((c) => c.name === colName)) {
+			throw new KitMigrationError(`Unique column "${colName}" not found in table "${tableName}"`);
+		}
+	}
+
+	const ukHandle = db.table('__kit_unique_keys');
+	// Pre-existing guards for this table make the backfill idempotent.
+	const existingKeys = new Set<string>();
+	for (const guard of ukHandle.query([
+		{ kind: ConditionKind.BitmapEq, columnId: columnId(kitUniqueKeys, 'owner_table'), text: tableName }
+	])) {
+		const key = guard.cells.find((c) => c.columnId === columnId(kitUniqueKeys, 'encoded_key'))?.text;
+		if (key) existingKeys.add(key);
+	}
+
+	const seen = new Map<string, string>();
+	const now = isoNow();
+	let mutated = false;
+	for (const { row } of fullScanRows(db, table)) {
+		const values = unique.columns.map((colName) =>
+			row[colName] === undefined ? null : row[colName]
+		) as (string | bigint | null)[];
+		if (values.some((value) => value === null)) continue; // nullable-unique: nulls never collide
+		const encodedKey = encodeUniqueKey(KIT_KEY_VERSION, unique.name, values);
+		const ownerPk = encodedPk(pkValueFromRow(table, row));
+		const prior = seen.get(encodedKey);
+		if (prior !== undefined && prior !== ownerPk) {
+			throw new KitMigrationError(
+				`cannot add unique constraint "${unique.name}" on "${tableName}": existing rows violate it`
+			);
+		}
+		seen.set(encodedKey, ownerPk);
+		if (existingKeys.has(encodedKey)) continue;
+		ukHandle.put([
+			{ columnId: columnId(kitUniqueKeys, 'encoded_key'), text: encodedKey },
+			{ columnId: columnId(kitUniqueKeys, 'constraint_name'), text: unique.name },
+			{ columnId: columnId(kitUniqueKeys, 'owner_table'), text: tableName },
+			{ columnId: columnId(kitUniqueKeys, 'owner_pk'), text: ownerPk },
+			{ columnId: columnId(kitUniqueKeys, 'created_at'), text: now }
+		]);
+		mutated = true;
+	}
+	if (mutated) ukHandle.commit();
+
+	table.unique.push(unique);
 }
 
+/** Build the parent primary-key value referenced by a foreign key. */
+function buildFkParentPk(
+	parent: TableSpec,
+	fkValues: unknown[]
+): PkValue {
+	if (parent.primaryKey.length === 1) {
+		const value = fkValues[0];
+		if (typeof value !== 'string' && typeof value !== 'bigint') {
+			throw new KitMigrationError('Foreign key value must be string or bigint');
+		}
+		return value;
+	}
+	return fkValues.map((value) => {
+		if (value === null || value === undefined) return null;
+		if (typeof value !== 'string' && typeof value !== 'bigint') {
+			throw new KitMigrationError('Foreign key value must be string, bigint, or null');
+		}
+		return value;
+	});
+}
+
+/**
+ * Add a foreign key and backfill parent `__kit_row_guards` (PLAN "Migrations").
+ * Each existing child row with a non-null FK must reference an existing parent;
+ * a missing parent rejects the migration. The referenced parent's row guard is
+ * touched so a later concurrent parent delete conflicts. The FK is added to the
+ * in-memory table so subsequent writes enforce it.
+ */
 export async function addForeignKey(
-	_kit: KitDatabase,
-	_tableName: string,
-	_fk: ForeignKeySpec
+	kit: KitDatabase,
+	tableName: string,
+	fk: ForeignKeySpec
 ): Promise<void> {
-	throw new KitMigrationError('addForeignKey is not implemented yet');
+	const db = kit.nativeDb;
+	const table = kit.schema.table(tableName);
+	const parent = kit.schema.table(fk.referencesTable);
+	if (table.foreignKeys.some((f) => f.name === fk.name)) {
+		throw new KitMigrationError(`Foreign key "${fk.name}" already exists on "${tableName}"`);
+	}
+	const ckit: ConstraintKit = { db, schema: kit.schema };
+	const rgHandle = db.table('__kit_row_guards');
+	const touched = new Set<string>();
+	let mutated = false;
+
+	for (const { row } of fullScanRows(db, table)) {
+		const fkValues = fk.columns.map((colName) => row[colName]);
+		if (fkValues.some((value) => value === null || value === undefined)) continue;
+		const parentPk = buildFkParentPk(parent, fkValues);
+		if (!parentExists(ckit, parent.name, parentPk)) {
+			throw new KitForeignKeyError(tableName, fk.name);
+		}
+		const guardKey = encodeRowGuardKey(parent.name, parentPk);
+		if (touched.has(guardKey)) continue;
+		touched.add(guardKey);
+		const existing = rgHandle.getByPkText(guardKey);
+		const version = existing
+			? (existing.cells.find((c) => c.columnId === columnId(kitRowGuards, 'version'))?.int64 ??
+					0n) + 1n
+			: 1n;
+		rgHandle.put([
+			{ columnId: columnId(kitRowGuards, 'encoded_guard_key'), text: guardKey },
+			{ columnId: columnId(kitRowGuards, 'table_name'), text: parent.name },
+			{ columnId: columnId(kitRowGuards, 'primary_key'), text: encodedPk(parentPk) },
+			{ columnId: columnId(kitRowGuards, 'version'), int64: version },
+			{ columnId: columnId(kitRowGuards, 'updated_at'), text: isoNow() }
+		]);
+		mutated = true;
+	}
+	if (mutated) rgHandle.commit();
+
+	table.foreignKeys.push(fk);
 }

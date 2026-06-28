@@ -1,0 +1,31 @@
+{
+  "description": "Shared key-encoding conformance vectors. Each case feeds typed components (int/text/null) to one of the canonical encoders and pins the exact byte-identical output produced by every language's implementation.",
+  "components": {
+    "int": "{ \"int\": <i64> } encodes as i:<n>",
+    "text": "{ \"text\": <string> } encodes as s:<escaped> (':' -> '\\:', '\\' -> '\\\\')",
+    "null": "{ \"null\": true } encodes as n:null"
+  },
+  "cases": [
+    { "name": "pk_int_one", "kind": "pk", "components": [{ "int": 1 }], "expected": "i:1" },
+    { "name": "pk_text_one", "kind": "pk", "components": [{ "text": "1" }], "expected": "s:1" },
+    { "name": "pk_text_simple", "kind": "pk", "components": [{ "text": "hello" }], "expected": "s:hello" },
+    { "name": "pk_int_negative", "kind": "pk", "components": [{ "int": -42 }], "expected": "i:-42" },
+    { "name": "pk_int_zero", "kind": "pk", "components": [{ "int": 0 }], "expected": "i:0" },
+    { "name": "pk_null", "kind": "pk", "components": [{ "null": true }], "expected": "n:null" },
+    { "name": "pk_composite_text", "kind": "pk", "components": [{ "text": "a" }, { "text": "b" }], "expected": "s:a:s:b" },
+    { "name": "pk_composite_int", "kind": "pk", "components": [{ "int": 42 }, { "int": 7 }], "expected": "i:42:i:7" },
+    { "name": "pk_composite_mixed", "kind": "pk", "components": [{ "int": 42 }, { "text": "x" }, { "null": true }], "expected": "i:42:s:x:n:null" },
+    { "name": "pk_text_with_colon", "kind": "pk", "components": [{ "text": "a:b" }], "expected": "s:a\\:b" },
+    { "name": "pk_text_with_backslash", "kind": "pk", "components": [{ "text": "a\\b" }], "expected": "s:a\\\\b" },
+    { "name": "pk_text_colon_and_backslash", "kind": "pk", "components": [{ "text": "a:b\\c" }], "expected": "s:a\\:b\\\\c" },
+    { "name": "unique_single_text", "kind": "unique", "version": 1, "constraint": "users_email_uq", "components": [{ "text": "a@example.com" }], "expected": "uq:1:users_email_uq:s:a@example.com" },
+    { "name": "unique_composite_int", "kind": "unique", "version": 1, "constraint": "shares_trip_user_uq", "components": [{ "int": 42 }, { "int": 7 }], "expected": "uq:1:shares_trip_user_uq:i:42:i:7" },
+    { "name": "unique_text_int_collision_text", "kind": "unique", "version": 1, "constraint": "mixed_uq", "components": [{ "text": "1" }], "expected": "uq:1:mixed_uq:s:1" },
+    { "name": "unique_text_int_collision_int", "kind": "unique", "version": 1, "constraint": "mixed_uq", "components": [{ "int": 1 }], "expected": "uq:1:mixed_uq:i:1" },
+    { "name": "unique_null", "kind": "unique", "version": 1, "constraint": "uq_null", "components": [{ "null": true }], "expected": "uq:1:uq_null:n:null" },
+    { "name": "unique_escaped", "kind": "unique", "version": 1, "constraint": "uq_esc", "components": [{ "text": "a:b\\c" }], "expected": "uq:1:uq_esc:s:a\\:b\\\\c" },
+    { "name": "row_guard_int", "kind": "row_guard", "table": "trips", "components": [{ "int": 5 }], "expected": "rg:trips:i:5" },
+    { "name": "row_guard_text", "kind": "row_guard", "table": "users", "components": [{ "text": "alpha" }], "expected": "rg:users:s:alpha" },
+    { "name": "row_guard_composite", "kind": "row_guard", "table": "memberships", "components": [{ "int": 3 }, { "text": "admin" }], "expected": "rg:memberships:i:3:s:admin" }
+  ]
+}

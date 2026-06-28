@@ -3,6 +3,10 @@ name = "mongreldb-kit-core"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Core, language-neutral model for MongrelDB Kit: schema, key encoding, validation, constraint planning, migration planning, and query AST."
+repository = "https://github.com/visorcraft/MongrelDB-Kit"
+keywords = ["mongreldb", "database", "schema", "migrations", "query-builder"]
+categories = ["database"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

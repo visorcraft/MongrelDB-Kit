@@ -16,6 +16,9 @@ from .mongreldb_kit_py import (
     StorageError,
     ValidationError,
     migrate as _migrate,
+    encode_pk as _encode_pk,
+    encode_unique_key as _encode_unique_key,
+    encode_row_guard_key as _encode_row_guard_key,
 )
 from .mongreldb_kit_py import Database as _Database
 from .mongreldb_kit_py import Transaction as _Transaction
@@ -44,6 +47,12 @@ __all__ = [
     "unique",
     "fk",
     "check",
+    "agg",
+    "col",
+    "on_eq",
+    "encode_pk",
+    "encode_unique_key",
+    "encode_row_guard_key",
     "ConflictError",
     "DuplicateError",
     "ForeignKeyError",
@@ -86,6 +95,33 @@ class Database:
         schema_json = schema if isinstance(schema, str) else json.dumps(schema)
         self._handle.set_schema(schema_json)
 
+    def allocate_sequence(self, name: str, count: int = 1) -> int:
+        """Allocate ``count`` values from a named sequence, returning the first."""
+        return self._handle.allocate_sequence(name, count)
+
+    def table_names(self) -> list[str]:
+        """Application table names, excluding reserved ``__kit_*`` tables."""
+        return self._handle.table_names()
+
+    def transaction(self, fn: Any, max_retries: int = 5) -> Any:
+        """Run ``fn(txn)`` in a transaction, committing on success and retrying
+        the whole callback on retryable write-write conflicts."""
+        attempt = 0
+        while True:
+            txn = self.begin()
+            try:
+                result = fn(txn)
+                txn.commit()
+                return result
+            except ConflictError:
+                txn.rollback()
+                if attempt >= max_retries:
+                    raise
+                attempt += 1
+            except Exception:
+                txn.rollback()
+                raise
+
     def __enter__(self) -> "Database":
         return self
 
@@ -122,14 +158,84 @@ class Transaction:
         order: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        columns: Optional[Iterable[str]] = None,
+        distinct: bool = False,
+        ctes: Optional[Iterable[Any]] = None,
     ) -> list[dict[str, Any]]:
+        """Run a SELECT.
+
+        ``filter`` uses the friendly filter shape (see ``parse_filter`` in the
+        binding): per-column ``{"col": {"op": value}}`` with ops ``eq``/``ne``/
+        ``gt``/``gte``/``lt``/``lte``/``like``/``contains``/``in``/``not_in``/
+        ``is_null``/``is_not_null``/``in_subquery``, plus top-level ``and``/``or``/
+        ``not``/``exists``/``not_exists``. ``ctes`` is a list of
+        ``{"name", "table", "filter"?, ...}`` materialized before the body runs;
+        the body's ``table`` may then name a CTE.
+        """
         rows = self._handle.select(
             table,
             _to_json(filter) if filter is not None else None,
             order,
             limit,
             offset,
+            list(columns) if columns is not None else None,
+            distinct,
+            _to_json(list(ctes)) if ctes is not None else None,
         )
+        return [json.loads(r) for r in rows]
+
+    def aggregate(
+        self,
+        table: str,
+        aggregates: Iterable[Any],
+        filter: Optional[Any] = None,
+        group_by: Optional[Iterable[str]] = None,
+        having: Optional[Any] = None,
+    ) -> list[dict[str, Any]]:
+        """Run an aggregate / group-by / having query.
+
+        ``aggregates`` is a list of ``{"func", "column"?, "alias"}`` (use the
+        :func:`agg` helper); ``func`` is one of ``count``/``sum``/``min``/``max``/
+        ``avg``. Returns one row per group (group-key columns plus aliases).
+        """
+        rows = self._handle.aggregate(
+            table,
+            _to_json(list(aggregates)),
+            _to_json(filter) if filter is not None else None,
+            list(group_by) if group_by is not None else None,
+            _to_json(having) if having is not None else None,
+        )
+        return [json.loads(r) for r in rows]
+
+    def join(
+        self,
+        table: str,
+        joins: Iterable[Any],
+        alias: Optional[str] = None,
+        filter: Optional[Any] = None,
+        order_by: Optional[Iterable[Any]] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        """Run a nested-loop join.
+
+        ``joins`` is a list of ``{"kind", "table", "alias"?, "on"?}`` where
+        ``kind`` is ``inner``/``left``/``cross`` and ``on`` is a join predicate
+        (use :func:`on_eq`). Each result row is a dict keyed by table alias whose
+        values are the matched source rows (``None`` for an unmatched LEFT side).
+        """
+        query: dict[str, Any] = {"table": table, "joins": list(joins)}
+        if alias is not None:
+            query["alias"] = alias
+        if filter is not None:
+            query["filter"] = filter
+        if order_by is not None:
+            query["order_by"] = list(order_by)
+        if limit is not None:
+            query["limit"] = limit
+        if offset is not None:
+            query["offset"] = offset
+        rows = self._handle.join(_to_json(query))
         return [json.loads(r) for r in rows]
 
     def commit(self) -> None:
@@ -316,6 +422,58 @@ def fk(
 
 def check(name: str, expr: str) -> dict[str, Any]:
     return {"name": name, "expr": expr}
+
+
+# ---------------------------------------------------------------------------
+# Query builder helpers
+# ---------------------------------------------------------------------------
+
+
+def agg(func: str, alias: str, column: Optional[str] = None) -> dict[str, Any]:
+    """Build an aggregate spec, e.g. ``agg("sum", "total_sum", "total")``.
+
+    ``func`` is one of ``count``/``sum``/``min``/``max``/``avg``. ``column`` may
+    be omitted for ``count`` (``COUNT(*)``).
+    """
+    spec: dict[str, Any] = {"func": func, "alias": alias}
+    if column is not None:
+        spec["column"] = column
+    return spec
+
+
+def col(name: str) -> dict[str, Any]:
+    """A column reference expression, e.g. ``col("u.id")``."""
+    return {"column": name}
+
+
+def on_eq(left: str, right: str) -> dict[str, Any]:
+    """A join predicate equating two (usually qualified) columns."""
+    return {"eq": [col(left), col(right)]}
+
+
+# ---------------------------------------------------------------------------
+# Key encoding
+# ---------------------------------------------------------------------------
+#
+# ``components`` is a list of typed values, each one of ``{"int": <int>}``,
+# ``{"text": <str>}``, or ``{"null": True}``. The encoding is byte-identical to
+# the TypeScript and Rust kits, so typed components never collide (the integer
+# ``1`` encodes as ``i:1`` and the text ``"1"`` as ``s:1``).
+
+
+def encode_pk(components: Iterable[Any]) -> str:
+    """Encode a primary key value from its typed components."""
+    return _encode_pk(json.dumps(list(components)))
+
+
+def encode_unique_key(version: int, constraint: str, components: Iterable[Any]) -> str:
+    """Encode a unique-constraint key (``uq:<version>:<constraint>:<components>``)."""
+    return _encode_unique_key(version, constraint, json.dumps(list(components)))
+
+
+def encode_row_guard_key(table: str, components: Iterable[Any]) -> str:
+    """Encode a row-guard key (``rg:<table>:<encoded_pk>``)."""
+    return _encode_row_guard_key(table, json.dumps(list(components)))
 
 
 # ---------------------------------------------------------------------------

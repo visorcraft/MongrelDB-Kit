@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Engine-free checks. The `mongreldb-kit-core` crate has no dependency on the
+  # MongrelDB engine, and `tsc --noEmit` / Python facade imports do not exercise
+  # the native addon, so these run without checking out the engine repo.
+  lint-and-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (rustfmt, clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      - name: clippy (core crate)
+        run: cargo clippy -p mongreldb-kit-core --all-targets -- -D warnings
+
+      - name: Rust core tests
+        run: cargo test -p mongreldb-kit-core
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: TypeScript typecheck
+        working-directory: packages/kit
+        run: |
+          npm install --no-save
+          npm run check
+
+      - name: Python facade import
+        run: python -c "import sys; sys.path.insert(0, 'python/mongreldb_kit'); import mongreldb_kit._schema"
+
+  # Full integration. Requires the MongrelDB engine repo checked out as a sibling
+  # directory so the `../../../mongreldb/...` Cargo path deps and the
+  # `mongreldb` Node addon resolve. Set the MONGRELDB_TOKEN secret if the engine
+  # repo is private; otherwise the default GITHUB_TOKEN is used.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kit
+        uses: actions/checkout@v4
+        with:
+          path: MongrelDB-Kit
+
+      - name: Checkout MongrelDB engine (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: visorcraft/mongreldb
+          path: mongreldb
+          token: ${{ secrets.MONGRELDB_TOKEN || github.token }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: MongrelDB-Kit
+
+      - name: clippy (workspace)
+        working-directory: MongrelDB-Kit
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust workspace tests
+        working-directory: MongrelDB-Kit
+        run: cargo test --workspace
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build MongrelDB Node addon
+        working-directory: mongreldb/crates/mongreldb-node
+        run: |
+          npm install --no-save
+          npm run build
+
+      - name: Link engine addon for the kit
+        working-directory: MongrelDB-Kit/packages/kit
+        run: |
+          mkdir -p node_modules
+          ln -sfn ../../../mongreldb/crates/mongreldb-node node_modules/mongreldb
+
+      - name: TypeScript build + tests
+        working-directory: MongrelDB-Kit/packages/kit
+        run: |
+          npm install --no-save
+          npm run build
+          npm test
+
+      - name: Python build (PyO3) + tests
+        working-directory: MongrelDB-Kit
+        run: |
+          python -m pip install --upgrade pip maturin pytest
+          maturin develop -m crates/mongreldb-kit-python/Cargo.toml
+          PYTHONPATH=python/mongreldb_kit python -m pytest python/tests -q
+
+      - name: Conformance (Rust)
+        working-directory: MongrelDB-Kit
+        run: cargo test -p mongreldb-kit-conformance

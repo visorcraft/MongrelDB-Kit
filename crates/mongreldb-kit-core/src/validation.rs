@@ -37,19 +37,33 @@ impl ValidationError {
 pub fn validate_row(table: &Table, row: &Map<String, Value>) -> Result<(), ValidationError> {
     for col in &table.columns {
         let value = row.get(&col.name);
-        validate_column(table, col, value)?;
+        validate_column(table, col, value, row)?;
     }
 
     for check in &table.check_constraints {
-        // The core crate stores check constraints as names only; actual
-        // evaluation is performed by the runtime engine that registers the
-        // named expression.
         if check.expr.trim().is_empty() {
             return Err(ValidationError::new(
                 &table.name,
                 "",
                 format!("check constraint \"{}\" has an empty expression", check.name),
             ));
+        }
+        match crate::check::eval_check(&check.expr, row) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(ValidationError::new(
+                    &table.name,
+                    "",
+                    format!("check constraint \"{}\" failed", check.name),
+                ));
+            }
+            Err(e) => {
+                return Err(ValidationError::new(
+                    &table.name,
+                    "",
+                    format!("check constraint \"{}\" is invalid: {}", check.name, e.0),
+                ));
+            }
         }
     }
 
@@ -60,6 +74,7 @@ fn validate_column(
     table: &Table,
     col: &Column,
     value: Option<&Value>,
+    row: &Map<String, Value>,
 ) -> Result<(), ValidationError> {
     let value = match value {
         Some(Value::Null) | None => {
@@ -190,12 +205,33 @@ fn validate_column(
         _ => {}
     }
 
-    if col.check_expr.as_ref().is_some_and(|e| e.trim().is_empty()) {
-        return Err(ValidationError::new(
-            &table.name,
-            &col.name,
-            "column check expression is empty",
-        ));
+    if let Some(expr) = &col.check_expr {
+        if expr.trim().is_empty() {
+            return Err(ValidationError::new(
+                &table.name,
+                &col.name,
+                "column check expression is empty",
+            ));
+        }
+        // Column checks are evaluated against the full row so they may
+        // reference the column by name (and any sibling column).
+        match crate::check::eval_check(expr, row) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(ValidationError::new(
+                    &table.name,
+                    &col.name,
+                    "column check constraint failed",
+                ));
+            }
+            Err(e) => {
+                return Err(ValidationError::new(
+                    &table.name,
+                    &col.name,
+                    format!("column check constraint is invalid: {}", e.0),
+                ));
+            }
+        }
     }
 
     Ok(())

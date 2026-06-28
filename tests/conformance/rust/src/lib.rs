@@ -1,5 +1,6 @@
 use mongreldb_kit::{
-    Database, Direction, Expr, KitError, Literal, Migration, OrderBy, Query, Row, Schema, Select,
+    encode_pk, encode_row_guard_key, encode_unique_key, Database, Direction, Expr, KeyComponent,
+    KitError, Literal, Migration, OrderBy, Query, Row, Schema, Select,
 };
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -335,6 +336,152 @@ fn run_query(
 
 fn row_to_value(row: &Row) -> Value {
     Value::Object(row.values.clone())
+}
+
+// ---------------------------------------------------------------------------
+// Key-encoding conformance
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct KeyCase {
+    name: String,
+    kind: String,
+    components: Vec<Value>,
+    #[serde(default)]
+    version: Option<u32>,
+    #[serde(default)]
+    constraint: Option<String>,
+    #[serde(default)]
+    table: Option<String>,
+    expected: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct KeyFixture {
+    cases: Vec<KeyCase>,
+}
+
+fn parse_key_component(value: &Value) -> Result<KeyComponent, String> {
+    if let Some(i) = value.get("int") {
+        let n = i
+            .as_i64()
+            .ok_or_else(|| format!("int component not an i64: {value}"))?;
+        Ok(KeyComponent::Int(n))
+    } else if let Some(t) = value.get("text") {
+        let s = t
+            .as_str()
+            .ok_or_else(|| format!("text component not a string: {value}"))?;
+        Ok(KeyComponent::Text(s.to_string()))
+    } else if value.get("null").is_some() {
+        Ok(KeyComponent::Null)
+    } else {
+        Err(format!("invalid key component: {value}"))
+    }
+}
+
+pub fn run_key_encoding() -> Result<(), String> {
+    let fixture: KeyFixture = load_json(&fixtures_dir().join("keys.json"))?;
+    for case in &fixture.cases {
+        let comps: Vec<KeyComponent> = case
+            .components
+            .iter()
+            .map(parse_key_component)
+            .collect::<Result<_, _>>()?;
+        let actual = match case.kind.as_str() {
+            "pk" => encode_pk(&comps),
+            "unique" => encode_unique_key(
+                case.version
+                    .ok_or_else(|| format!("{} missing version", case.name))?,
+                case.constraint
+                    .as_deref()
+                    .ok_or_else(|| format!("{} missing constraint", case.name))?,
+                &comps,
+            ),
+            "row_guard" => encode_row_guard_key(
+                case.table
+                    .as_deref()
+                    .ok_or_else(|| format!("{} missing table", case.name))?,
+                &encode_pk(&comps),
+            ),
+            other => return Err(format!("{} unknown key kind {other}", case.name)),
+        };
+        if actual != case.expected {
+            return Err(format!(
+                "{} key mismatch\n  actual:   {}\n  expected: {}",
+                case.name, actual, case.expected
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Migration-failure conformance
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct SeedRow {
+    table: String,
+    row: Map<String, Value>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct MigrationFailureFixture {
+    expected_error: String,
+    create_schema: Schema,
+    migrated_schema: Schema,
+    create_migration: Migration,
+    failing_migration: Migration,
+    seed: Vec<SeedRow>,
+}
+
+pub fn run_migration_failure() -> Result<(), String> {
+    let fixture: MigrationFailureFixture =
+        load_json(&fixtures_dir().join("migration_failure.json"))?;
+    let MigrationFailureFixture {
+        expected_error,
+        create_schema,
+        migrated_schema,
+        create_migration,
+        failing_migration,
+        seed,
+    } = fixture;
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let mut db = Database::create(tmp.path(), create_schema).map_err(|e| e.to_string())?;
+    mongreldb_kit::migrate(&mut db, std::slice::from_ref(&create_migration))
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        for s in &seed {
+            txn.insert(&s.table, s.row.clone())
+                .map_err(|e| e.to_string())?;
+        }
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    // Swap in the schema that declares the unique constraint so the backfill can
+    // resolve it. The prior inserts were allowed because the constraint was
+    // absent from the active schema.
+    db.set_schema(migrated_schema);
+
+    let migrations = vec![create_migration, failing_migration];
+    match mongreldb_kit::migrate(&mut db, &migrations) {
+        Ok(()) => Err(format!(
+            "migration_failure expected error {expected_error} but migrate succeeded"
+        )),
+        Err(e) => {
+            let code = error_code(&e);
+            if code == expected_error {
+                Ok(())
+            } else {
+                Err(format!(
+                    "migration_failure error mismatch: {code} != {expected_error}"
+                ))
+            }
+        }
+    }
 }
 
 pub fn run_conformance() -> Result<(), String> {

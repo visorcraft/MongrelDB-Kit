@@ -1,86 +1,492 @@
-//! Query execution for kit `Select` statements.
+//! Query execution for kit statements.
 //!
 //! The implementation is intentionally simple: it materializes every visible row
-//! from the target table, evaluates the filter expression in Rust, sorts, and
-//! applies limit/offset. This keeps the crate independent of MongrelDB core's
-//! native query primitives while remaining correct for the supported subset.
+//! from the target table(s), evaluates predicates in Rust, then sorts, groups,
+//! joins, and reduces in memory. This keeps the crate independent of MongrelDB
+//! core's native query primitives while remaining correct for the supported
+//! subset.
+//!
+//! ponytail: every operator here is computed in-memory after a full scan; there
+//! is no predicate/projection pushdown into MongrelDB native conditions on the
+//! Rust path. That is the deliberate non-pushdown ceiling — the async SQL engine
+//! path is out of scope for this crate.
 
 use crate::error::{KitError, Result};
 use crate::schema::{core_row_to_json, Row};
 use mongreldb_core::memtable::Row as CoreRow;
-use mongreldb_kit_core::query::{Direction, Expr, Literal, OrderBy, Query, Select};
-use mongreldb_kit_core::schema::Table as KitTable;
+use mongreldb_kit_core::query::{
+    AggFunc, Aggregate, AggregateQuery, Direction, Expr, JoinKind, JoinQuery, Literal, OrderBy,
+    Query, Select,
+};
+use mongreldb_kit_core::schema::{Schema as KitSchema, Table as KitTable};
 use serde_json::{Map, Value};
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+
+/// A combined join row: a JSON object keyed by table alias whose values are the
+/// matched source rows (or JSON `null` for an unmatched right side of a `LEFT`
+/// join). See [`JoinQuery`] for the documented shape.
+pub type JoinRow = Map<String, Value>;
+
+/// Fetches the visible rows for a real (non-CTE) table at a read snapshot.
+type TableFetch<'a> = Box<dyn Fn(&str) -> Result<Vec<Row>> + 'a>;
+
+/// Resolves the base rows for a table name and carries materialized CTEs.
+///
+/// CTE materializations shadow real tables, so a later query can read a `with`
+/// result by name. Subqueries and joins evaluate against the same context, which
+/// is how cross-table reads stay consistent at the transaction's read snapshot.
+pub(crate) struct ExecCtx<'a> {
+    schema: Option<&'a KitSchema>,
+    fetch: TableFetch<'a>,
+    ctes: HashMap<String, Vec<Row>>,
+}
+
+impl<'a> ExecCtx<'a> {
+    pub(crate) fn new(
+        schema: Option<&'a KitSchema>,
+        fetch: impl Fn(&str) -> Result<Vec<Row>> + 'a,
+    ) -> Self {
+        Self {
+            schema,
+            fetch: Box::new(fetch),
+            ctes: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn add_cte(&mut self, name: String, rows: Vec<Row>) {
+        self.ctes.insert(name, rows);
+    }
+
+    fn table_rows(&self, name: &str) -> Result<Vec<Row>> {
+        if let Some(rows) = self.ctes.get(name) {
+            return Ok(rows.clone());
+        }
+        (self.fetch)(name)
+    }
+
+    fn table_def(&self, name: &str) -> Option<&KitTable> {
+        self.schema.and_then(|s| s.table(name))
+    }
+}
+
+/// A name-resolution scope for predicate/value evaluation.
+trait Scope {
+    fn get(&self, name: &str) -> Value;
+}
+
+/// Resolves bare column names against a single flat row.
+struct FlatScope<'a>(&'a Map<String, Value>);
+
+impl Scope for FlatScope<'_> {
+    fn get(&self, name: &str) -> Value {
+        self.0.get(name).cloned().unwrap_or(Value::Null)
+    }
+}
+
+/// Resolves `alias.column` (and, as a fallback, bare column) names against a
+/// combined join row keyed by table alias.
+struct JoinScope<'a>(&'a Map<String, Value>);
+
+impl Scope for JoinScope<'_> {
+    fn get(&self, name: &str) -> Value {
+        if let Some((alias, col)) = name.split_once('.') {
+            return self
+                .0
+                .get(alias)
+                .and_then(|t| t.as_object())
+                .and_then(|o| o.get(col))
+                .cloned()
+                .unwrap_or(Value::Null);
+        }
+        for value in self.0.values() {
+            if let Some(obj) = value.as_object() {
+                if let Some(v) = obj.get(name) {
+                    return v.clone();
+                }
+            }
+        }
+        Value::Null
+    }
+}
+
+// ── public entry points ─────────────────────────────────────────────────────
 
 /// Execute a kit [`Query::Select`] against the supplied visible rows.
 ///
 /// `rows` must be the newest visible version of every non-deleted row in the
-/// target table at the transaction's read snapshot.
-pub fn execute_select(table: &KitTable, visible_rows: Vec<CoreRow>, select: &Select) -> Result<Vec<Row>> {
-    let mut rows: Vec<Row> = visible_rows
+/// target table at the transaction's read snapshot. This standalone form cannot
+/// resolve other tables, so subqueries/joins referencing a different table fail.
+pub fn execute_select(
+    table: &KitTable,
+    visible_rows: Vec<CoreRow>,
+    select: &Select,
+) -> Result<Vec<Row>> {
+    let rows: Vec<Row> = visible_rows
         .into_iter()
         .map(|r| core_row_to_json(&r, table))
         .collect::<Result<Vec<_>>>()?;
+    let mut ctx = ExecCtx::new(None, |name: &str| {
+        Err(KitError::Validation(format!(
+            "table {name} is not available outside a transaction context"
+        )))
+    });
+    ctx.add_cte(table.name.clone(), rows);
+    run_select(&ctx, select)
+}
+
+/// Execute any supported kit query statement against visible rows.
+pub fn execute_query(table: &KitTable, visible_rows: Vec<CoreRow>, query: &Query) -> Result<Vec<Row>> {
+    match query {
+        Query::Select(select) => execute_select(table, visible_rows, select),
+        _ => Err(KitError::Validation(
+            "only SELECT queries are supported by execute_query".into(),
+        )),
+    }
+}
+
+// ── select ──────────────────────────────────────────────────────────────────
+
+pub(crate) fn run_select(ctx: &ExecCtx, select: &Select) -> Result<Vec<Row>> {
+    let mut rows = ctx.table_rows(&select.table)?;
 
     if let Some(filter) = &select.filter {
-        rows.retain(|r| eval_expr(filter, &r.values, table).unwrap_or(false));
+        let mut kept = Vec::with_capacity(rows.len());
+        for r in rows {
+            if eval_pred(filter, &FlatScope(&r.values), ctx)? {
+                kept.push(r);
+            }
+        }
+        rows = kept;
     }
 
     for order in &select.order_by {
-        sort_rows(&mut rows, order, table)?;
+        sort_rows(ctx, &mut rows, &select.table, order)?;
     }
 
-    let offset = select.offset.unwrap_or(0);
-    let limit = select.limit;
-
-    if offset > 0 || limit.is_some() {
-        let start = offset.min(rows.len());
-        let end = limit.map(|l| start + l).unwrap_or(rows.len()).min(rows.len());
-        rows = rows.drain(start..end).collect();
-    }
-
+    apply_limit_offset(&mut rows, select.limit, select.offset);
     Ok(rows)
 }
 
-fn eval_expr(expr: &Expr, row: &Map<String, Value>, table: &KitTable) -> Result<bool> {
-    Ok(match expr {
-        Expr::Column(name) => truthy(row.get(name).unwrap_or(&Value::Null)),
-        Expr::Literal(lit) => truthy(&literal_to_value(lit)),
-        Expr::And(parts) => parts.iter().all(|p| eval_expr(p, row, table).unwrap_or(false)),
-        Expr::Or(parts) => parts.iter().any(|p| eval_expr(p, row, table).unwrap_or(false)),
-        Expr::Not(inner) => !eval_expr(inner, row, table)?,
-        Expr::Eq(a, b) => compare(a, b, row, table)? == Some(std::cmp::Ordering::Equal),
-        Expr::Ne(a, b) => compare(a, b, row, table)? != Some(std::cmp::Ordering::Equal),
-        Expr::Gt(a, b) => compare(a, b, row, table)? == Some(std::cmp::Ordering::Greater),
-        Expr::Gte(a, b) => compare(a, b, row, table)?
-            .is_some_and(|o| o == std::cmp::Ordering::Greater || o == std::cmp::Ordering::Equal),
-        Expr::Lt(a, b) => compare(a, b, row, table)? == Some(std::cmp::Ordering::Less),
-        Expr::Lte(a, b) => compare(a, b, row, table)?
-            .is_some_and(|o| o == std::cmp::Ordering::Less || o == std::cmp::Ordering::Equal),
-        Expr::In(col, list) => {
-            let v = eval_value(col, row, table)?;
-            list.iter().any(|lit| v == literal_to_value(lit))
+/// Project to `select.columns` (when given) then drop duplicate rows, preserving
+/// first-seen order. Used by `select_distinct`.
+pub(crate) fn project_distinct(select: &Select, rows: Vec<Row>) -> Vec<Row> {
+    let cols: Vec<String> = select
+        .columns
+        .iter()
+        .filter_map(|e| match e {
+            Expr::Column(n) => Some(n.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for r in rows {
+        let values = if cols.is_empty() {
+            r.values
+        } else {
+            let mut m = Map::new();
+            for c in &cols {
+                m.insert(c.clone(), r.values.get(c).cloned().unwrap_or(Value::Null));
+            }
+            m
+        };
+        let key = serde_json::to_string(&values).unwrap_or_default();
+        if seen.insert(key) {
+            out.push(Row { row_id: 0, values });
         }
-        Expr::NotIn(col, list) => {
-            let v = eval_value(col, row, table)?;
-            list.iter().all(|lit| v != literal_to_value(lit))
-        }
-        Expr::IsNull(inner) => eval_value(inner, row, table)?.is_null(),
-        Expr::IsNotNull(inner) => !eval_value(inner, row, table)?.is_null(),
-        Expr::Like(col, pattern) => {
-            let v = eval_value(col, row, table)?;
-            if let Value::String(s) = v {
-                like(&s, pattern)
-            } else {
-                false
+    }
+    out
+}
+
+// ── aggregates / group by / having ──────────────────────────────────────────
+
+pub(crate) fn run_aggregate(ctx: &ExecCtx, query: &AggregateQuery) -> Result<Vec<Row>> {
+    let mut rows = ctx.table_rows(&query.table)?;
+
+    if let Some(filter) = &query.filter {
+        let mut kept = Vec::with_capacity(rows.len());
+        for r in rows {
+            if eval_pred(filter, &FlatScope(&r.values), ctx)? {
+                kept.push(r);
             }
         }
+        rows = kept;
+    }
+
+    // Group rows by the key columns, preserving first-seen group order.
+    let mut groups: Vec<(Vec<Value>, Vec<Row>)> = Vec::new();
+    if query.group_by.is_empty() {
+        groups.push((Vec::new(), rows));
+    } else {
+        let mut index: HashMap<String, usize> = HashMap::new();
+        for r in rows {
+            let key_vals: Vec<Value> = query
+                .group_by
+                .iter()
+                .map(|c| r.values.get(c).cloned().unwrap_or(Value::Null))
+                .collect();
+            let key_str = serde_json::to_string(&key_vals).unwrap_or_default();
+            match index.get(&key_str) {
+                Some(&i) => groups[i].1.push(r),
+                None => {
+                    index.insert(key_str, groups.len());
+                    groups.push((key_vals, vec![r]));
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::with_capacity(groups.len());
+    for (key_vals, group_rows) in groups {
+        let mut values = Map::new();
+        for (col, val) in query.group_by.iter().zip(key_vals.iter()) {
+            values.insert(col.clone(), val.clone());
+        }
+        for agg in &query.aggregates {
+            values.insert(agg.alias.clone(), compute_aggregate(agg, &group_rows)?);
+        }
+        if let Some(having) = &query.having {
+            if !eval_pred(having, &FlatScope(&values), ctx)? {
+                continue;
+            }
+        }
+        out.push(Row { row_id: 0, values });
+    }
+    Ok(out)
+}
+
+fn compute_aggregate(agg: &Aggregate, rows: &[Row]) -> Result<Value> {
+    match agg.func {
+        AggFunc::Count => {
+            let n = match &agg.column {
+                None => rows.len(),
+                Some(col) => rows
+                    .iter()
+                    .filter(|r| !r.values.get(col).map(Value::is_null).unwrap_or(true))
+                    .count(),
+            };
+            Ok(Value::Number((n as i64).into()))
+        }
+        AggFunc::Sum | AggFunc::Avg => {
+            let col = require_agg_column(agg)?;
+            let nums = numeric_values(rows, col);
+            if nums.is_empty() {
+                return Ok(Value::Null);
+            }
+            let sum: f64 = nums.iter().sum();
+            if matches!(agg.func, AggFunc::Avg) {
+                return Ok(number_value(sum / nums.len() as f64));
+            }
+            // Preserve integer-ness when every summand was an integer.
+            if rows
+                .iter()
+                .filter_map(|r| r.values.get(col))
+                .filter(|v| !v.is_null())
+                .all(|v| v.as_i64().is_some())
+            {
+                Ok(Value::Number((sum as i64).into()))
+            } else {
+                Ok(number_value(sum))
+            }
+        }
+        AggFunc::Min | AggFunc::Max => {
+            let col = require_agg_column(agg)?;
+            let mut best: Option<&Value> = None;
+            for r in rows {
+                let Some(v) = r.values.get(col) else { continue };
+                if v.is_null() {
+                    continue;
+                }
+                best = Some(match best {
+                    None => v,
+                    Some(cur) => {
+                        let take = matches!(
+                            (json_cmp(v, cur), agg.func),
+                            (Some(Ordering::Less), AggFunc::Min)
+                                | (Some(Ordering::Greater), AggFunc::Max)
+                        );
+                        if take {
+                            v
+                        } else {
+                            cur
+                        }
+                    }
+                });
+            }
+            Ok(best.cloned().unwrap_or(Value::Null))
+        }
+    }
+}
+
+fn require_agg_column(agg: &Aggregate) -> Result<&String> {
+    agg.column.as_ref().ok_or_else(|| {
+        KitError::Validation(format!("aggregate {:?} requires a column", agg.func))
     })
 }
 
-fn eval_value(expr: &Expr, row: &Map<String, Value>, _table: &KitTable) -> Result<Value> {
+fn numeric_values(rows: &[Row], col: &str) -> Vec<f64> {
+    rows.iter()
+        .filter_map(|r| r.values.get(col))
+        .filter_map(num_of)
+        .collect()
+}
+
+fn num_of(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        _ => None,
+    }
+}
+
+fn number_value(f: f64) -> Value {
+    serde_json::Number::from_f64(f)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
+}
+
+// ── joins ───────────────────────────────────────────────────────────────────
+
+pub(crate) fn run_join(ctx: &ExecCtx, query: &JoinQuery) -> Result<Vec<JoinRow>> {
+    let base_alias = query.alias.clone().unwrap_or_else(|| query.table.clone());
+    let mut acc: Vec<JoinRow> = ctx
+        .table_rows(&query.table)?
+        .into_iter()
+        .map(|r| {
+            let mut m = Map::new();
+            m.insert(base_alias.clone(), Value::Object(r.values));
+            m
+        })
+        .collect();
+
+    for join in &query.joins {
+        let right_alias = join.alias.clone().unwrap_or_else(|| join.table.clone());
+        let right_rows = ctx.table_rows(&join.table)?;
+        let mut next = Vec::new();
+        for left in acc {
+            let mut matched = false;
+            for rr in &right_rows {
+                let mut combined = left.clone();
+                combined.insert(right_alias.clone(), Value::Object(rr.values.clone()));
+                let keep = match join.kind {
+                    JoinKind::Cross => true,
+                    _ => match &join.on {
+                        Some(on) => eval_pred(on, &JoinScope(&combined), ctx)?,
+                        None => true,
+                    },
+                };
+                if keep {
+                    matched = true;
+                    next.push(combined);
+                }
+            }
+            if !matched && join.kind == JoinKind::Left {
+                let mut combined = left;
+                combined.insert(right_alias.clone(), Value::Null);
+                next.push(combined);
+            }
+        }
+        acc = next;
+    }
+
+    if let Some(filter) = &query.filter {
+        let mut kept = Vec::with_capacity(acc.len());
+        for row in acc {
+            if eval_pred(filter, &JoinScope(&row), ctx)? {
+                kept.push(row);
+            }
+        }
+        acc = kept;
+    }
+
+    for order in &query.order_by {
+        let key = match &order.expr {
+            Expr::Column(n) => n.clone(),
+            other => return Err(KitError::Validation(format!("unsupported order by: {other:?}"))),
+        };
+        acc.sort_by(|a, b| {
+            let av = JoinScope(a).get(&key);
+            let bv = JoinScope(b).get(&key);
+            let ord = json_cmp(&av, &bv).unwrap_or(Ordering::Equal);
+            match order.direction {
+                Direction::Asc => ord,
+                Direction::Desc => ord.reverse(),
+            }
+        });
+    }
+
+    apply_limit_offset(&mut acc, query.limit, query.offset);
+    Ok(acc)
+}
+
+// ── expression evaluation ───────────────────────────────────────────────────
+
+fn eval_pred<S: Scope>(expr: &Expr, scope: &S, ctx: &ExecCtx) -> Result<bool> {
     Ok(match expr {
-        Expr::Column(name) => row.get(name).cloned().unwrap_or(Value::Null),
+        Expr::Column(name) => truthy(&scope.get(name)),
+        Expr::Literal(lit) => truthy(&literal_to_value(lit)),
+        Expr::And(parts) => {
+            for p in parts {
+                if !eval_pred(p, scope, ctx)? {
+                    return Ok(false);
+                }
+            }
+            true
+        }
+        Expr::Or(parts) => {
+            for p in parts {
+                if eval_pred(p, scope, ctx)? {
+                    return Ok(true);
+                }
+            }
+            false
+        }
+        Expr::Not(inner) => !eval_pred(inner, scope, ctx)?,
+        Expr::Eq(a, b) => cmp(a, b, scope, ctx)? == Some(Ordering::Equal),
+        Expr::Ne(a, b) => cmp(a, b, scope, ctx)? != Some(Ordering::Equal),
+        Expr::Gt(a, b) => cmp(a, b, scope, ctx)? == Some(Ordering::Greater),
+        Expr::Gte(a, b) => {
+            cmp(a, b, scope, ctx)?.is_some_and(|o| o != Ordering::Less)
+        }
+        Expr::Lt(a, b) => cmp(a, b, scope, ctx)? == Some(Ordering::Less),
+        Expr::Lte(a, b) => cmp(a, b, scope, ctx)?.is_some_and(|o| o != Ordering::Greater),
+        Expr::In(col, list) => {
+            let v = eval_val(col, scope, ctx)?;
+            list.iter().any(|lit| v == literal_to_value(lit))
+        }
+        Expr::NotIn(col, list) => {
+            let v = eval_val(col, scope, ctx)?;
+            list.iter().all(|lit| v != literal_to_value(lit))
+        }
+        Expr::IsNull(inner) => eval_val(inner, scope, ctx)?.is_null(),
+        Expr::IsNotNull(inner) => !eval_val(inner, scope, ctx)?.is_null(),
+        Expr::Like(col, pattern) => match eval_val(col, scope, ctx)? {
+            Value::String(s) => like(&s, pattern),
+            _ => false,
+        },
+        Expr::Contains(col, needle) => match eval_val(col, scope, ctx)? {
+            Value::String(s) => s.contains(needle.as_str()),
+            _ => false,
+        },
+        Expr::InSubquery(col, sub) => {
+            // ponytail: subqueries are uncorrelated — the sub-SELECT is evaluated
+            // once against the same snapshot/CTEs and cannot reference the outer
+            // row. That covers `id IN (SELECT ...)` and EXISTS-of-a-condition; a
+            // correlated executor is the deferred ceiling.
+            let v = eval_val(col, scope, ctx)?;
+            let key = subquery_column(sub);
+            run_select(ctx, sub)?
+                .iter()
+                .any(|r| subquery_value(r, key.as_deref()) == v)
+        }
+        Expr::Exists(sub) => !run_select(ctx, sub)?.is_empty(),
+        Expr::NotExists(sub) => run_select(ctx, sub)?.is_empty(),
+    })
+}
+
+fn eval_val<S: Scope>(expr: &Expr, scope: &S, _ctx: &ExecCtx) -> Result<Value> {
+    Ok(match expr {
+        Expr::Column(name) => scope.get(name),
         Expr::Literal(lit) => literal_to_value(lit),
         other => {
             return Err(KitError::Validation(format!(
@@ -88,6 +494,26 @@ fn eval_value(expr: &Expr, row: &Map<String, Value>, _table: &KitTable) -> Resul
             )))
         }
     })
+}
+
+fn cmp<S: Scope>(a: &Expr, b: &Expr, scope: &S, ctx: &ExecCtx) -> Result<Option<Ordering>> {
+    Ok(json_cmp(&eval_val(a, scope, ctx)?, &eval_val(b, scope, ctx)?))
+}
+
+/// The column name a subquery exposes for `IN`: the first projected `Column`, or
+/// `None` to fall back to the first value of each result row.
+fn subquery_column(select: &Select) -> Option<String> {
+    select.columns.iter().find_map(|e| match e {
+        Expr::Column(n) => Some(n.clone()),
+        _ => None,
+    })
+}
+
+fn subquery_value(row: &Row, key: Option<&str>) -> Value {
+    match key {
+        Some(k) => row.values.get(k).cloned().unwrap_or(Value::Null),
+        None => row.values.values().next().cloned().unwrap_or(Value::Null),
+    }
 }
 
 fn literal_to_value(lit: &Literal) -> Value {
@@ -101,14 +527,7 @@ fn literal_to_value(lit: &Literal) -> Value {
     }
 }
 
-fn compare(a: &Expr, b: &Expr, row: &Map<String, Value>, table: &KitTable) -> Result<Option<std::cmp::Ordering>> {
-    let av = eval_value(a, row, table)?;
-    let bv = eval_value(b, row, table)?;
-    Ok(json_cmp(&av, &bv))
-}
-
-fn json_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
-    use std::cmp::Ordering;
+fn json_cmp(a: &Value, b: &Value) -> Option<Ordering> {
     match (a, b) {
         (Value::Null, Value::Null) => Some(Ordering::Equal),
         (Value::Null, _) | (_, Value::Null) => None,
@@ -129,26 +548,23 @@ fn json_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     }
 }
 
-fn compare_arrays(a: &[Value], b: &[Value]) -> Option<std::cmp::Ordering> {
+fn compare_arrays(a: &[Value], b: &[Value]) -> Option<Ordering> {
     let len_cmp = a.len().partial_cmp(&b.len())?;
-    if len_cmp != std::cmp::Ordering::Equal {
+    if len_cmp != Ordering::Equal {
         return Some(len_cmp);
     }
     for (x, y) in a.iter().zip(b.iter()) {
         match json_cmp(x, y) {
-            Some(std::cmp::Ordering::Equal) => {}
+            Some(Ordering::Equal) => {}
             other => return other,
         }
     }
-    Some(std::cmp::Ordering::Equal)
+    Some(Ordering::Equal)
 }
 
-fn compare_objects(
-    a: &serde_json::Map<String, Value>,
-    b: &serde_json::Map<String, Value>,
-) -> Option<std::cmp::Ordering> {
+fn compare_objects(a: &Map<String, Value>, b: &Map<String, Value>) -> Option<Ordering> {
     let len_cmp = a.len().partial_cmp(&b.len())?;
-    if len_cmp != std::cmp::Ordering::Equal {
+    if len_cmp != Ordering::Equal {
         return Some(len_cmp);
     }
     let mut a_keys: Vec<&String> = a.keys().collect();
@@ -157,17 +573,17 @@ fn compare_objects(
     b_keys.sort();
     for (ak, bk) in a_keys.iter().zip(b_keys.iter()) {
         match ak.cmp(bk) {
-            std::cmp::Ordering::Equal => {}
+            Ordering::Equal => {}
             other => return Some(other),
         }
         let av = a.get(*ak).unwrap();
         let bv = b.get(*bk).unwrap();
         match json_cmp(av, bv) {
-            Some(std::cmp::Ordering::Equal) => {}
+            Some(Ordering::Equal) => {}
             other => return other,
         }
     }
-    Some(std::cmp::Ordering::Equal)
+    Some(Ordering::Equal)
 }
 
 fn truthy(v: &Value) -> bool {
@@ -181,25 +597,38 @@ fn truthy(v: &Value) -> bool {
     }
 }
 
-fn sort_rows(rows: &mut [Row], order: &OrderBy, table: &KitTable) -> Result<()> {
+fn sort_rows(ctx: &ExecCtx, rows: &mut [Row], table: &str, order: &OrderBy) -> Result<()> {
     let col_name = match &order.expr {
         Expr::Column(name) => name.clone(),
         other => return Err(KitError::Validation(format!("unsupported order by: {other:?}"))),
     };
-    if table.column(&col_name).is_none() {
-        return Err(KitError::Validation(format!("unknown order column {col_name}")));
+    // Validate against the schema when the table is known; CTE/virtual tables are
+    // not in the schema and are sorted leniently (missing values sort as null).
+    if let Some(t) = ctx.table_def(table) {
+        if t.column(&col_name).is_none() {
+            return Err(KitError::Validation(format!("unknown order column {col_name}")));
+        }
     }
 
     rows.sort_by(|a, b| {
         let av = a.values.get(&col_name).cloned().unwrap_or(Value::Null);
         let bv = b.values.get(&col_name).cloned().unwrap_or(Value::Null);
-        let ord = json_cmp(&av, &bv).unwrap_or(std::cmp::Ordering::Equal);
+        let ord = json_cmp(&av, &bv).unwrap_or(Ordering::Equal);
         match order.direction {
             Direction::Asc => ord,
             Direction::Desc => ord.reverse(),
         }
     });
     Ok(())
+}
+
+fn apply_limit_offset<T>(rows: &mut Vec<T>, limit: Option<usize>, offset: Option<usize>) {
+    let offset = offset.unwrap_or(0);
+    if offset > 0 || limit.is_some() {
+        let start = offset.min(rows.len());
+        let end = limit.map(|l| start + l).unwrap_or(rows.len()).min(rows.len());
+        *rows = rows.drain(start..end).collect();
+    }
 }
 
 fn like(text: &str, pattern: &str) -> bool {
@@ -228,14 +657,4 @@ fn regex_like(pattern: &str) -> Result<regex::Regex> {
     }
     out.push('$');
     regex::Regex::new(&out).map_err(|e| KitError::Validation(format!("invalid LIKE pattern: {e}")))
-}
-
-/// Execute any supported kit query statement against visible rows.
-pub fn execute_query(table: &KitTable, visible_rows: Vec<CoreRow>, query: &Query) -> Result<Vec<Row>> {
-    match query {
-        Query::Select(select) => execute_select(table, visible_rows, select),
-        _ => Err(KitError::Validation(
-            "only SELECT queries are supported by execute_query".into(),
-        )),
-    }
 }

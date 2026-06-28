@@ -1,9 +1,33 @@
 {
 	"name": "@mongreldb/kit",
 	"version": "0.1.0",
+	"description": "Application persistence layer for MongrelDB: schema DSL, typed query builder, migrations, and relational constraints (unique, foreign keys, cascade/set-null/restrict).",
+	"license": "MIT OR Apache-2.0",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"!dist/**/*.test.*"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/visorcraft/MongrelDB-Kit.git",
+		"directory": "packages/kit"
+	},
+	"homepage": "https://github.com/visorcraft/MongrelDB-Kit#readme",
+	"keywords": ["mongreldb", "database", "orm", "query-builder", "migrations", "schema"],
+	"sideEffects": false,
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
 	"scripts": {
 		"build": "tsc",
 		"check": "tsc --noEmit",

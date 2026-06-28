@@ -1,0 +1,57 @@
+{
+  "name": "duplicate_unique_backfill",
+  "description": "Adding a unique constraint whose existing rows already collide must surface a migration error in every language. The table is created and seeded with two rows sharing the same email under a schema without the constraint, then a migration that adds the unique constraint backfills its guards, detects the collision, and fails.",
+  "expected_error": "MIGRATION",
+  "table": "accounts",
+  "unique": { "name": "accounts_email_uq", "columns": ["email"] },
+  "create_schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "accounts",
+        "columns": [
+          { "id": 1, "name": "id", "storage_type": "int64", "application_type": "int64", "nullable": false, "primary_key": true, "generated": false },
+          { "id": 2, "name": "email", "storage_type": "text", "application_type": "text", "nullable": false, "primary_key": false, "generated": false }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "foreign_keys": [],
+        "unique_constraints": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "migrated_schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "accounts",
+        "columns": [
+          { "id": 1, "name": "id", "storage_type": "int64", "application_type": "int64", "nullable": false, "primary_key": true, "generated": false },
+          { "id": 2, "name": "email", "storage_type": "text", "application_type": "text", "nullable": false, "primary_key": false, "generated": false }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "foreign_keys": [],
+        "unique_constraints": [
+          { "name": "accounts_email_uq", "columns": ["email"] }
+        ],
+        "check_constraints": []
+      }
+    ]
+  },
+  "create_migration": {
+    "version": 1,
+    "name": "create_accounts",
+    "ops": [{ "create_table": { "name": "accounts" } }]
+  },
+  "failing_migration": {
+    "version": 2,
+    "name": "add_accounts_email_unique",
+    "ops": [{ "add_unique": { "table": "accounts", "constraint": "accounts_email_uq" } }]
+  },
+  "seed": [
+    { "table": "accounts", "row": { "id": 1, "email": "dup@example.com" } },
+    { "table": "accounts", "row": { "id": 2, "email": "dup@example.com" } }
+  ]
+}

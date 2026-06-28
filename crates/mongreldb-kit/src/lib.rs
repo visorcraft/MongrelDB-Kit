@@ -5,6 +5,7 @@
 
 pub mod db;
 pub mod error;
+pub(crate) mod internal;
 pub mod migrate;
 pub mod query;
 pub mod schema;
@@ -13,6 +14,7 @@ pub mod txn;
 pub use db::Database;
 pub use error::{KitError, Result};
 pub use migrate::migrate;
+pub use query::JoinRow;
 pub use schema::Row;
 pub use txn::Transaction;
 

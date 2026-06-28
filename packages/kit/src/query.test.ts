@@ -3,9 +3,28 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, unique, index, foreignKey, timestamp, date } from './schema.js';
+import { Schema, table, int, text, real, unique, index, foreignKey, timestamp, date } from './schema.js';
 import { nowDefault } from './defaults.js';
-import { eq, asc, desc, and } from './query.js';
+import {
+	eq,
+	gt,
+	asc,
+	desc,
+	and,
+	not,
+	like,
+	contains,
+	notInList,
+	inSubquery,
+	exists,
+	notExists,
+	count,
+	sum,
+	min,
+	max,
+	avg
+} from './query.js';
+import type { JoinRow } from './query.js';
 import { KitDuplicateError, KitForeignKeyError } from './errors.js';
 
 function makeTempDir(): string {
@@ -41,7 +60,23 @@ const events = table('events', {
 	primaryKey: ['id']
 });
 
-const testSchema = new Schema([users, posts, groupMembers, events]);
+const orders = table('orders', {
+	columns: [
+		int('id', { primaryKey: true }),
+		int('userId', { nullable: false }),
+		text('status', { nullable: false }),
+		int('amount', { nullable: false }),
+		real('total', { nullable: false })
+	],
+	primaryKey: ['id']
+});
+
+const tags = table('tags', {
+	columns: [int('id', { primaryKey: true }), text('label', { nullable: false })],
+	primaryKey: ['id']
+});
+
+const testSchema = new Schema([users, posts, groupMembers, events, orders, tags]);
 
 async function withDb(fn: (db: KitDatabase) => Promise<void>): Promise<void> {
 	const dir = makeTempDir();
@@ -259,6 +294,232 @@ describe('query builder', () => {
 
 			const remaining = db.selectFrom(users).executeSync();
 			expect(remaining).toHaveLength(0);
+		});
+	});
+});
+
+describe('query builder extensions', () => {
+	async function seedOrders(db: KitDatabase): Promise<void> {
+		await db.insertInto(users).values({ id: 1n, email: 'alice@example.com' }).execute();
+		await db.insertInto(users).values({ id: 2n, email: 'bob@example.org' }).execute();
+		await db.insertInto(users).values({ id: 3n, email: 'carol@example.com' }).execute();
+		// user 1: two paid orders; user 2: one pending; user 3: no orders.
+		await db
+			.insertInto(orders)
+			.values({ id: 1n, userId: 1n, status: 'paid', amount: 100n, total: 10.5 })
+			.execute();
+		await db
+			.insertInto(orders)
+			.values({ id: 2n, userId: 1n, status: 'paid', amount: 200n, total: 20.0 })
+			.execute();
+		await db
+			.insertInto(orders)
+			.values({ id: 3n, userId: 2n, status: 'pending', amount: 50n, total: 5.25 })
+			.execute();
+	}
+
+	const at = (r: JoinRow, t: string, c: string): unknown => (r[t] as Record<string, unknown>)[c];
+
+	it('computes sum/min/max/avg honoring where', async () => {
+		await withDb(async (db) => {
+			await seedOrders(db);
+
+			expect(await db.selectFrom(orders).selectSum(orders.amount).execute()).toBe(350n);
+			expect(
+				await db
+					.selectFrom(orders)
+					.where(eq(orders.status, 'paid'))
+					.selectSum(orders.amount)
+					.execute()
+			).toBe(300n);
+			expect(await db.selectFrom(orders).selectMin(orders.amount).execute()).toBe(50n);
+			expect(await db.selectFrom(orders).selectMax(orders.amount).execute()).toBe(200n);
+			expect(await db.selectFrom(orders).selectAvg(orders.amount).execute()).toBeCloseTo(350 / 3);
+
+			// a float column sums to a number, not a bigint
+			const floatSum = await db.selectFrom(orders).selectSum(orders.total).execute();
+			expect(typeof floatSum).toBe('number');
+			expect(floatSum).toBeCloseTo(35.75);
+
+			// aggregates over an empty set: null for max, 0 for sum
+			expect(
+				await db
+					.selectFrom(orders)
+					.where(eq(orders.status, 'void'))
+					.selectMax(orders.amount)
+					.execute()
+			).toBeNull();
+			expect(
+				await db
+					.selectFrom(orders)
+					.where(eq(orders.status, 'void'))
+					.selectSum(orders.amount)
+					.execute()
+			).toBe(0n);
+		});
+	});
+
+	it('supports distinct', async () => {
+		await withDb(async (db) => {
+			await seedOrders(db);
+			const statuses = await db
+				.selectFrom(orders)
+				.select([orders.status])
+				.distinct()
+				.orderBy(asc(orders.status))
+				.execute();
+			expect(statuses).toEqual([{ status: 'paid' }, { status: 'pending' }]);
+		});
+	});
+
+	it('supports like, contains, notInList, and not', async () => {
+		await withDb(async (db) => {
+			await seedOrders(db);
+
+			const dotCom = await db
+				.selectFrom(users)
+				.where(like(users.email, '%example.com'))
+				.orderBy(asc(users.id))
+				.execute();
+			expect(dotCom.map((u) => u.id)).toEqual([1n, 3n]);
+
+			const hasBob = await db.selectFrom(users).where(contains(users.email, 'bob')).execute();
+			expect(hasBob.map((u) => u.id)).toEqual([2n]);
+
+			const others = await db.selectFrom(users).where(notInList(users.id, [1n, 2n])).execute();
+			expect(others.map((u) => u.id)).toEqual([3n]);
+
+			const notFirst = await db
+				.selectFrom(users)
+				.where(not(eq(users.id, 1n)))
+				.orderBy(asc(users.id))
+				.execute();
+			expect(notFirst.map((u) => u.id)).toEqual([2n, 3n]);
+		});
+	});
+
+	it('performs inner, left, and cross joins', async () => {
+		await withDb(async (db) => {
+			await seedOrders(db);
+			await db.insertInto(tags).values({ id: 1n, label: 'red' }).execute();
+			await db.insertInto(tags).values({ id: 2n, label: 'blue' }).execute();
+
+			const inner = db
+				.selectFrom(users)
+				.innerJoin(orders, (r) => at(r, 'orders', 'userId') === at(r, 'users', 'id'))
+				.executeSync();
+			expect(inner).toHaveLength(3); // user1 x2, user2 x1, user3 x0
+			for (const row of inner) {
+				expect(at(row, 'users', 'id')).toBe(at(row, 'orders', 'userId'));
+			}
+
+			const left = db
+				.selectFrom(users)
+				.leftJoin(orders, (r) => at(r, 'orders', 'userId') === at(r, 'users', 'id'))
+				.where((r) => at(r, 'users', 'id') === 3n)
+				.executeSync();
+			expect(left).toHaveLength(1);
+			expect(left[0].orders).toBeNull();
+			expect(at(left[0], 'users', 'id')).toBe(3n);
+
+			const cross = db.selectFrom(tags).crossJoin(orders).executeSync();
+			expect(cross).toHaveLength(6); // 2 tags x 3 orders
+		});
+	});
+
+	it('supports inSubquery, exists, and notExists', async () => {
+		await withDb(async (db) => {
+			await seedOrders(db);
+
+			const bigSpenders = db
+				.selectFrom(orders)
+				.where(gt(orders.amount, 80n))
+				.select([orders.userId]);
+			const buyers = await db
+				.selectFrom(users)
+				.where(inSubquery(users.id, bigSpenders))
+				.orderBy(asc(users.id))
+				.execute();
+			expect(buyers.map((u) => u.id)).toEqual([1n]);
+
+			const pending = db.selectFrom(orders).where(eq(orders.status, 'pending'));
+			expect(await db.selectFrom(users).where(exists(pending)).execute()).toHaveLength(3);
+
+			const voids = db.selectFrom(orders).where(eq(orders.status, 'void'));
+			expect(await db.selectFrom(users).where(exists(voids)).execute()).toHaveLength(0);
+			expect(await db.selectFrom(users).where(notExists(voids)).execute()).toHaveLength(3);
+		});
+	});
+
+	it('groups with aggregates and having', async () => {
+		await withDb(async (db) => {
+			await seedOrders(db);
+
+			const byStatus = db
+				.selectFrom(orders)
+				.groupBy(orders.status)
+				.aggregate({
+					n: count(),
+					total: sum(orders.amount),
+					lo: min(orders.amount),
+					hi: max(orders.amount),
+					mean: avg(orders.amount)
+				})
+				.executeSync();
+
+			const paid = byStatus.find((g) => g.status === 'paid')!;
+			expect(paid.n).toBe(2n);
+			expect(paid.total).toBe(300n);
+			expect(paid.lo).toBe(100n);
+			expect(paid.hi).toBe(200n);
+			expect(paid.mean).toBeCloseTo(150);
+
+			const pending = byStatus.find((g) => g.status === 'pending')!;
+			expect(pending.n).toBe(1n);
+			expect(pending.total).toBe(50n);
+
+			const big = db
+				.selectFrom(orders)
+				.groupBy(orders.status)
+				.aggregate({ total: sum(orders.amount) })
+				.having((g) => (g.total as bigint) >= 100n)
+				.executeSync();
+			expect(big).toHaveLength(1);
+			expect(big[0].status).toBe('paid');
+		});
+	});
+
+	it('materializes a CTE for a later selectFrom', async () => {
+		await withDb(async (db) => {
+			await seedOrders(db);
+
+			const scope = db.with('big_orders', db.selectFrom(orders).where(gt(orders.amount, 80n)));
+
+			const all = await scope.selectFrom('big_orders').orderBy(asc(orders.id)).execute();
+			expect(all.map((r) => r.id)).toEqual([1n, 2n]);
+
+			// the materialized rows can be filtered again in memory
+			const filtered = await scope
+				.selectFrom('big_orders')
+				.where(gt(orders.amount, 150n))
+				.execute();
+			expect(filtered).toHaveLength(1);
+			expect(filtered[0].id).toBe(2n);
+
+			// count over a CTE works too
+			const paidCount = await db
+				.with('paid', db.selectFrom(orders).where(eq(orders.status, 'paid')))
+				.selectFrom('paid')
+				.selectCount()
+				.execute();
+			expect(paidCount).toBe(2n);
+		});
+	});
+
+	it('exposes the native database as a raw escape hatch', async () => {
+		await withDb(async (db) => {
+			await seedOrders(db);
+			expect(db.nativeDb.table('orders').count()).toBe(3n);
 		});
 	});
 });

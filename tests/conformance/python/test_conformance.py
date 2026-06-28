@@ -119,6 +119,50 @@ def run_query(db, scenario, expected):
         )
 
 
+def test_key_encoding():
+    cases = load_json("keys.json")["cases"]
+    for case in cases:
+        kind = case["kind"]
+        if kind == "pk":
+            actual = kit.encode_pk(case["components"])
+        elif kind == "unique":
+            actual = kit.encode_unique_key(
+                case["version"], case["constraint"], case["components"]
+            )
+        elif kind == "row_guard":
+            actual = kit.encode_row_guard_key(case["table"], case["components"])
+        else:
+            raise AssertionError(f"unknown key kind {kind}")
+        assert actual == case["expected"], (
+            f"{case['name']} key mismatch: {actual} != {case['expected']}"
+        )
+
+
+def test_migration_failure():
+    fail = load_json("migration_failure.json")
+    with tempfile.TemporaryDirectory() as tmp:
+        db = kit.Database.create(tmp, fail["create_schema"])
+        db.migrate([fail["create_migration"]])
+
+        txn = db.begin()
+        for seed in fail["seed"]:
+            txn.insert(seed["table"], seed["row"])
+        txn.commit()
+
+        # Swap in the schema that declares the unique constraint so the backfill
+        # can resolve it; the prior inserts were allowed because it was absent.
+        db.set_schema(fail["migrated_schema"])
+
+        try:
+            db.migrate([fail["create_migration"], fail["failing_migration"]])
+        except Exception as exc:  # noqa: BLE001 - asserting the error category
+            assert error_code(exc) == fail["expected_error"], (
+                f"migration failure error mismatch: {error_code(exc)} != {fail['expected_error']}"
+            )
+        else:
+            raise AssertionError("expected the unique-backfill migration to fail")
+
+
 def test_conformance():
     schema = load_json("schema.json")
     migrations = load_json("migrations.json")

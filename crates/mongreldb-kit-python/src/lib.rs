@@ -4,7 +4,13 @@
 //! transactions with CRUD, migrations, and stable error categories.
 
 use mongreldb_kit::{Database, KitError, Transaction};
-use mongreldb_kit_core::query::{Expr, OrderBy, Query, Select};
+use mongreldb_kit_core::keys::{
+    encode_pk as core_encode_pk, encode_row_guard_key as core_encode_row_guard_key,
+    encode_unique_key as core_encode_unique_key, KeyComponent,
+};
+use mongreldb_kit_core::query::{
+    Aggregate, AggregateQuery, Cte, Direction, Expr, JoinQuery, Literal, OrderBy, Query, Select,
+};
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
@@ -100,6 +106,19 @@ impl PyDatabase {
         self.db.set_schema(schema);
         Ok(())
     }
+
+    /// Allocate `count` values from a named sequence, returning the first value.
+    /// Retries internally on write-write conflicts.
+    #[pyo3(signature = (name, count = 1))]
+    fn allocate_sequence(&self, name: &str, count: i64) -> PyResult<i64> {
+        self.db.allocate_sequence(name, count).map_err(map_err)
+    }
+
+    /// Application table names, excluding the reserved `__kit_*` tables. This is
+    /// the Python analogue of the raw database accessor.
+    fn table_names(&self) -> Vec<String> {
+        self.db.table_names()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +183,8 @@ impl PyTransaction {
         }
     }
 
+    #[pyo3(signature = (table, filter_json=None, order=None, limit=None, offset=None, columns=None, distinct=false, ctes_json=None))]
+    #[allow(clippy::too_many_arguments)]
     fn select(
         &self,
         table: &str,
@@ -171,6 +192,9 @@ impl PyTransaction {
         order: Option<&str>,
         limit: Option<usize>,
         offset: Option<usize>,
+        columns: Option<Vec<String>>,
+        distinct: bool,
+        ctes_json: Option<&str>,
     ) -> PyResult<Vec<String>> {
         let txn = self
             .txn
@@ -181,9 +205,61 @@ impl PyTransaction {
             Some(s) => Some(serde_json::from_str::<Value>(s).map_err(py_json_err)?),
             None => None,
         };
-        let query = build_select_query(table, filter, order, limit, offset).map_err(map_err)?;
-        let rows = txn.select(&query).map_err(map_err)?;
+        let select =
+            build_select_stmt(table, filter, order, limit, offset, columns).map_err(map_err)?;
+        let rows = if let Some(cj) = ctes_json {
+            let ctes = parse_ctes(cj).map_err(map_err)?;
+            txn.select_with(&ctes, &select).map_err(map_err)?
+        } else if distinct {
+            txn.select_distinct(&Query::Select(select)).map_err(map_err)?
+        } else {
+            txn.select(&Query::Select(select)).map_err(map_err)?
+        };
         rows.iter().map(row_to_json).collect()
+    }
+
+    /// Run an aggregate / group-by / having query. `aggregates_json` is a JSON
+    /// array of `{func, column?, alias}`; `filter_json`/`having_json` use the same
+    /// friendly filter shape as `select`. Returns one JSON row per group.
+    #[pyo3(signature = (table, aggregates_json, filter_json=None, group_by=None, having_json=None))]
+    fn aggregate(
+        &self,
+        table: &str,
+        aggregates_json: &str,
+        filter_json: Option<&str>,
+        group_by: Option<Vec<String>>,
+        having_json: Option<&str>,
+    ) -> PyResult<Vec<String>> {
+        let txn = self
+            .txn
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))?;
+
+        let aggregates: Vec<Aggregate> =
+            serde_json::from_str(aggregates_json).map_err(py_json_err)?;
+        let query = AggregateQuery {
+            table: table.into(),
+            filter: parse_optional_filter(filter_json)?,
+            group_by: group_by.unwrap_or_default(),
+            aggregates,
+            having: parse_optional_filter(having_json)?,
+        };
+        let rows = txn.aggregate(&query).map_err(map_err)?;
+        rows.iter().map(row_to_json).collect()
+    }
+
+    /// Run a nested-loop join described by a serialized `JoinQuery`. Returns one
+    /// JSON object per combined row, keyed by table alias (see `JoinQuery`).
+    fn join(&self, query_json: &str) -> PyResult<Vec<String>> {
+        let txn = self
+            .txn
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))?;
+        let query: JoinQuery = serde_json::from_str(query_json).map_err(py_json_err)?;
+        let rows = txn.join(&query).map_err(map_err)?;
+        rows.iter()
+            .map(|m| serde_json::to_string(m).map_err(|e| StorageError::new_err(e.to_string())))
+            .collect()
     }
 
     fn commit(&mut self) -> PyResult<()> {
@@ -206,24 +282,7 @@ impl PyTransaction {
 // Query construction
 // ---------------------------------------------------------------------------
 
-fn build_select_query(
-    table: &str,
-    filter: Option<Value>,
-    order: Option<&str>,
-    limit: Option<usize>,
-    offset: Option<usize>,
-) -> Result<Query, KitError> {
-    use mongreldb_kit_core::query::Direction;
-
-    let parsed_filter = match filter {
-        Some(Value::Object(map)) => {
-            let expr = object_filter_to_expr(&map)?;
-            Some(expr)
-        }
-        Some(_) => return Err(KitError::Validation("filter must be a JSON object".into())),
-        None => None,
-    };
-
+fn parse_order(order: Option<&str>) -> Vec<OrderBy> {
     let mut order_by = Vec::new();
     if let Some(order_str) = order {
         for part in order_str.split(',') {
@@ -244,63 +303,191 @@ fn build_select_query(
             });
         }
     }
+    order_by
+}
 
-    Ok(Query::Select(Select {
+fn build_select_stmt(
+    table: &str,
+    filter: Option<Value>,
+    order: Option<&str>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    columns: Option<Vec<String>>,
+) -> Result<Select, KitError> {
+    let parsed_filter = match filter {
+        Some(Value::Object(map)) => Some(parse_filter(&map)?),
+        Some(Value::Null) | None => None,
+        Some(_) => return Err(KitError::Validation("filter must be a JSON object".into())),
+    };
+    let columns = columns
+        .unwrap_or_default()
+        .into_iter()
+        .map(Expr::Column)
+        .collect();
+
+    Ok(Select {
         table: table.into(),
-        columns: Vec::new(),
+        columns,
         filter: parsed_filter,
-        order_by,
+        order_by: parse_order(order),
         limit,
         offset,
-    }))
+    })
 }
 
-/// Convert a simple object filter into a kit `Expr`.
-///
-/// Supported shapes:
-/// - `{ "column": { "op": value } }` where op is one of `eq`, `ne`, `gt`, `gte`, `lt`, `lte`.
-/// - `{ "column": value }` is shorthand for `eq`.
-fn object_filter_to_expr(map: &Map<String, Value>) -> Result<Expr, KitError> {
-    use mongreldb_kit_core::query::{Expr, Literal};
-
-    let mut parts = Vec::new();
-    for (col, val) in map {
-        match val {
-            Value::Object(op_map) if op_map.len() == 1 => {
-                let (op, operand) = op_map.iter().next().unwrap();
-                let operand = Expr::Literal(value_to_literal(operand));
-                let col_expr = Expr::Column(col.clone());
-                let expr = match op.as_str() {
-                    "eq" => Expr::Eq(Box::new(col_expr), Box::new(operand)),
-                    "ne" => Expr::Ne(Box::new(col_expr), Box::new(operand)),
-                    "gt" => Expr::Gt(Box::new(col_expr), Box::new(operand)),
-                    "gte" => Expr::Gte(Box::new(col_expr), Box::new(operand)),
-                    "lt" => Expr::Lt(Box::new(col_expr), Box::new(operand)),
-                    "lte" => Expr::Lte(Box::new(col_expr), Box::new(operand)),
-                    _ => return Err(KitError::Validation(format!("unknown operator {op}"))),
-                };
-                parts.push(expr);
-            }
-            _ => {
-                parts.push(Expr::Eq(
-                    Box::new(Expr::Column(col.clone())),
-                    Box::new(Expr::Literal(value_to_literal(val))),
-                ));
-            }
+fn parse_optional_filter(filter_json: Option<&str>) -> PyResult<Option<Expr>> {
+    match filter_json {
+        Some(s) => {
+            let map: Map<String, Value> = serde_json::from_str(s).map_err(py_json_err)?;
+            Ok(Some(parse_filter(&map).map_err(map_err)?))
         }
-    }
-
-    if parts.is_empty() {
-        Ok(Expr::Literal(Literal::Bool(true)))
-    } else if parts.len() == 1 {
-        Ok(parts.into_iter().next().unwrap())
-    } else {
-        Ok(Expr::And(parts))
+        None => Ok(None),
     }
 }
 
-fn value_to_literal(value: &Value) -> mongreldb_kit_core::query::Literal {
-    use mongreldb_kit_core::query::Literal;
+/// Convert a friendly object filter into a kit `Expr`.
+///
+/// Per-column shapes: `{ "col": { "op": value } }` where `op` is one of `eq`,
+/// `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `contains`, `in`, `not_in`,
+/// `is_null`, `is_not_null`, `in_subquery`. `{ "col": value }` is shorthand for
+/// `eq`. Top-level logical keys: `and`/`or` (array of filters), `not` (a filter),
+/// `exists`/`not_exists` (a subselect). Multiple keys are AND-ed.
+fn parse_filter(map: &Map<String, Value>) -> Result<Expr, KitError> {
+    let mut parts = Vec::new();
+    for (key, val) in map {
+        let expr = match key.as_str() {
+            "and" => Expr::And(parse_filter_array(val)?),
+            "or" => Expr::Or(parse_filter_array(val)?),
+            "not" => Expr::Not(Box::new(parse_filter_node(val)?)),
+            "exists" => Expr::Exists(Box::new(parse_subselect(val)?)),
+            "not_exists" => Expr::NotExists(Box::new(parse_subselect(val)?)),
+            column => column_predicate(column, val)?,
+        };
+        parts.push(expr);
+    }
+
+    Ok(match parts.len() {
+        0 => Expr::Literal(Literal::Bool(true)),
+        1 => parts.into_iter().next().unwrap(),
+        _ => Expr::And(parts),
+    })
+}
+
+fn parse_filter_node(val: &Value) -> Result<Expr, KitError> {
+    match val {
+        Value::Object(map) => parse_filter(map),
+        _ => Err(KitError::Validation("filter must be a JSON object".into())),
+    }
+}
+
+fn parse_filter_array(val: &Value) -> Result<Vec<Expr>, KitError> {
+    match val {
+        Value::Array(items) => items.iter().map(parse_filter_node).collect(),
+        _ => Err(KitError::Validation("and/or expects an array of filters".into())),
+    }
+}
+
+fn column_predicate(column: &str, val: &Value) -> Result<Expr, KitError> {
+    let col_expr = || Expr::Column(column.to_string());
+    match val {
+        Value::Object(op_map) if op_map.len() == 1 => {
+            let (op, operand) = op_map.iter().next().unwrap();
+            let operand_lit = || Expr::Literal(value_to_literal(operand));
+            Ok(match op.as_str() {
+                "eq" => Expr::Eq(Box::new(col_expr()), Box::new(operand_lit())),
+                "ne" => Expr::Ne(Box::new(col_expr()), Box::new(operand_lit())),
+                "gt" => Expr::Gt(Box::new(col_expr()), Box::new(operand_lit())),
+                "gte" => Expr::Gte(Box::new(col_expr()), Box::new(operand_lit())),
+                "lt" => Expr::Lt(Box::new(col_expr()), Box::new(operand_lit())),
+                "lte" => Expr::Lte(Box::new(col_expr()), Box::new(operand_lit())),
+                "like" => Expr::Like(Box::new(col_expr()), as_str(operand, "like")?),
+                "contains" => Expr::Contains(Box::new(col_expr()), as_str(operand, "contains")?),
+                "in" => Expr::In(Box::new(col_expr()), as_literal_list(operand)?),
+                "not_in" => Expr::NotIn(Box::new(col_expr()), as_literal_list(operand)?),
+                "is_null" => Expr::IsNull(Box::new(col_expr())),
+                "is_not_null" => Expr::IsNotNull(Box::new(col_expr())),
+                "in_subquery" => {
+                    Expr::InSubquery(Box::new(col_expr()), Box::new(parse_subselect(operand)?))
+                }
+                other => return Err(KitError::Validation(format!("unknown operator {other}"))),
+            })
+        }
+        _ => Ok(Expr::Eq(
+            Box::new(col_expr()),
+            Box::new(Expr::Literal(value_to_literal(val))),
+        )),
+    }
+}
+
+fn as_str(value: &Value, op: &str) -> Result<String, KitError> {
+    value
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| KitError::Validation(format!("{op} expects a string")))
+}
+
+fn as_literal_list(value: &Value) -> Result<Vec<Literal>, KitError> {
+    match value {
+        Value::Array(items) => Ok(items.iter().map(value_to_literal).collect()),
+        _ => Err(KitError::Validation("in/not_in expects an array".into())),
+    }
+}
+
+/// Parse a JSON array of friendly CTE definitions. Each item is a subselect
+/// object (`{ "table", "filter"?, ... }`) plus a `"name"` key.
+fn parse_ctes(json: &str) -> Result<Vec<Cte>, KitError> {
+    let items: Vec<Value> = serde_json::from_str(json).map_err(KitError::from)?;
+    items
+        .iter()
+        .map(|item| {
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| KitError::Validation("cte requires a name".into()))?
+                .to_string();
+            Ok(Cte {
+                name,
+                query: Box::new(parse_subselect(item)?),
+            })
+        })
+        .collect()
+}
+
+/// Parse a `{ "table", "filter"?, "columns"?, "limit"?, "offset"? }` object into
+/// a kit `Select` for use as a subquery / CTE / `exists` body.
+fn parse_subselect(value: &Value) -> Result<Select, KitError> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| KitError::Validation("subquery must be a JSON object".into()))?;
+    let table = obj
+        .get("table")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| KitError::Validation("subquery requires a table".into()))?
+        .to_string();
+    let filter = match obj.get("filter") {
+        Some(Value::Object(map)) => Some(parse_filter(map)?),
+        Some(Value::Null) | None => None,
+        Some(_) => return Err(KitError::Validation("subquery filter must be an object".into())),
+    };
+    let columns = match obj.get("columns") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(|s| Expr::Column(s.to_string()))
+            .collect(),
+        _ => Vec::new(),
+    };
+    Ok(Select {
+        table,
+        columns,
+        filter,
+        order_by: Vec::new(),
+        limit: obj.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize),
+        offset: obj.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize),
+    })
+}
+
+fn value_to_literal(value: &Value) -> Literal {
     match value {
         Value::Null => Literal::Null,
         Value::Bool(b) => Literal::Bool(*b),
@@ -328,11 +515,69 @@ fn migrate(db: &Bound<'_, PyDatabase>, migrations_json: &str) -> PyResult<()> {
     mongreldb_kit::migrate(&mut db.db, &migrations).map_err(map_err)
 }
 
+// ---------------------------------------------------------------------------
+// Key encoding. Components are passed as a JSON array of typed values so the
+// canonical, byte-identical encoding can be shared with the TypeScript and Rust
+// kits. Each component is `{"int": <i64>}`, `{"text": <string>}`, or
+// `{"null": true}`.
+// ---------------------------------------------------------------------------
+
+fn parse_key_components(components_json: &str) -> PyResult<Vec<KeyComponent>> {
+    let value: Value = serde_json::from_str(components_json).map_err(py_json_err)?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| ValidationError::new_err("key components must be a JSON array"))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        if let Some(i) = item.get("int") {
+            let n = i
+                .as_i64()
+                .ok_or_else(|| ValidationError::new_err("int component must be an integer"))?;
+            out.push(KeyComponent::Int(n));
+        } else if let Some(t) = item.get("text") {
+            let s = t
+                .as_str()
+                .ok_or_else(|| ValidationError::new_err("text component must be a string"))?;
+            out.push(KeyComponent::Text(s.to_string()));
+        } else if item.get("null").is_some() {
+            out.push(KeyComponent::Null);
+        } else {
+            return Err(ValidationError::new_err(format!(
+                "invalid key component: {item}"
+            )));
+        }
+    }
+    Ok(out)
+}
+
+#[pyfunction]
+fn encode_pk(components_json: &str) -> PyResult<String> {
+    Ok(core_encode_pk(&parse_key_components(components_json)?))
+}
+
+#[pyfunction]
+fn encode_unique_key(version: u32, constraint: &str, components_json: &str) -> PyResult<String> {
+    Ok(core_encode_unique_key(
+        version,
+        constraint,
+        &parse_key_components(components_json)?,
+    ))
+}
+
+#[pyfunction]
+fn encode_row_guard_key(table: &str, components_json: &str) -> PyResult<String> {
+    let comps = parse_key_components(components_json)?;
+    Ok(core_encode_row_guard_key(table, &core_encode_pk(&comps)))
+}
+
 #[pymodule]
 fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDatabase>()?;
     m.add_class::<PyTransaction>()?;
     m.add_wrapped(wrap_pyfunction!(migrate))?;
+    m.add_wrapped(wrap_pyfunction!(encode_pk))?;
+    m.add_wrapped(wrap_pyfunction!(encode_unique_key))?;
+    m.add_wrapped(wrap_pyfunction!(encode_row_guard_key))?;
 
     let py = m.py();
     m.add("ValidationError", py.get_type::<ValidationError>())?;

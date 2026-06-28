@@ -31,14 +31,14 @@ Each migration is an object with `version`, `name`, and `ops`:
 | Operation | JSON | Notes |
 |---|---|---|
 | Create table | `{"create_table": {"name": "users"}}` | Creates the table from the current schema |
-| Drop table | `{"drop_table": {"name": "users"}}` | Destructive |
+| Drop table | `{"drop_table": {"name": "users"}}` | Destructive; also clears the table's unique-key and row guards |
 | Add column | `{"add_column": {"table": "users", "column": "bio"}}` | Column must be nullable or have a default |
 | Drop column | `{"drop_column": {"table": "users", "column": "bio"}}` | Destructive |
 | Add index | `{"add_index": {"table": "users", "index": "idx_email"}}` | |
 | Drop index | `{"drop_index": {"table": "users", "index": "idx_email"}}` | |
-| Add unique | `{"add_unique": {"table": "users", "constraint": "uq_email"}}` | Backfills guards |
-| Drop unique | `{"drop_unique": {"table": "users", "constraint": "uq_email"}}` | Cleans guards |
-| Add foreign key | `{"add_foreign_key": {"table": "posts", "constraint": "fk_posts_user"}}` | Verifies existing rows |
+| Add unique | `{"add_unique": {"table": "users", "constraint": "uq_email"}}` | Backfills `__kit_unique_keys` guards for existing rows; **fails** if existing data already violates the constraint |
+| Drop unique | `{"drop_unique": {"table": "users", "constraint": "uq_email"}}` | Cleans the constraint's guards |
+| Add foreign key | `{"add_foreign_key": {"table": "posts", "constraint": "fk_posts_user"}}` | Touches parent `__kit_row_guards` for existing children; **fails** if a child references a missing parent |
 | Drop foreign key | `{"drop_foreign_key": {"table": "posts", "constraint": "fk_posts_user"}}` | |
 | Add check | `{"add_check": {"table": "users", "constraint": "chk_email"}}` | Validates existing rows |
 | Drop check | `{"drop_check": {"table": "users", "constraint": "chk_email"}}` | |
@@ -57,7 +57,19 @@ The runner is idempotent: running it twice applies nothing the second time.
 
 ## Migration checksums
 
-Each migration is checksummed as `sha256(version:name)`. This is stored in the migration record and is the same across all languages.
+Each migration carries a **content-aware** SHA-256 checksum computed over a single
+canonical serialization of its `version`, `name`, and ordered `ops` list:
+
+```
+sha256('{"version":<n>,"name":<json>,"ops":[<op>,...]}')
+```
+
+The canonical form fixes the key order (`op` first, then the op's fields) and uses
+standard JSON string escaping, so TypeScript, Rust, and Python produce **byte-identical**
+checksums for the same logical migration. Editing or reordering a migration's ops changes
+its checksum, which is how drift detection rejects a tampered or re-meaning'd migration
+that was already applied. (In TypeScript the `ops` array is optional; when omitted the
+checksum covers the version and name with an empty op list.)
 
 ## CLI commands
 
@@ -119,7 +131,35 @@ The `MigrationContext` provides:
 - `db` — the native MongrelDB database object
 - `ensureTable(table)` — create a table from the schema if it does not exist
 - `addColumn(tableName, column)` — add a column, backfilling non-nullable columns with their default
-- `sql(sql)` — run raw SQL (async migrations only)
+- `sql(sql)` — run raw SQL (async migrations only; throws in `migrateSync`)
+
+For the other schema changes, import the standalone helpers and call them from `up()` with
+`ctx.kit` (these are async, so use the async `migrate()` runner):
+
+```ts
+import { dropTable, addUnique, addForeignKey, addIndex } from '@mongreldb/kit';
+
+await migrate(db, schema, [
+  {
+    version: 3,
+    name: 'tighten_accounts',
+    ops: [{ kind: 'addUnique', table: 'accounts', constraint: 'accounts_email_uq' }],
+    async up({ kit }) {
+      await addUnique(kit, 'accounts', unique(['email'], { name: 'accounts_email_uq' }));
+    }
+  }
+]);
+```
+
+- `dropTable(kit, tableName)` — drop a table and clear its unique-key/row guards.
+- `addUnique(kit, tableName, uniqueSpec)` — add a unique constraint, backfilling guards
+  (rejects existing data that already violates it).
+- `addForeignKey(kit, tableName, fkSpec)` — add a foreign key, touching parent row guards
+  (rejects existing children with a missing parent).
+- `addIndex(kit, tableName, indexSpec)` — add an index by rebuilding the table.
+
+Listing the matching declarative `ops` on the migration keeps its content-aware checksum
+in sync with the imperative `up()` so a later edit is detected as drift.
 
 ## Rust migrations
 
@@ -154,9 +194,25 @@ db.migrate([
 ])
 ```
 
-## Backfilling
+## Backfilling and guard maintenance
 
-When adding a non-nullable column, the column must have a default. The runner scans the existing table and writes the default value into every row before committing.
+Several ops scan existing rows and reconcile the kit's guard tables
+(`__kit_unique_keys`, `__kit_row_guards`) so that constraints added after data already
+exists stay consistent. All backfills are idempotent — re-running leaves existing guards
+untouched.
+
+- **Add column (non-nullable).** The column must have a default. The runner scans the
+  table and writes the default into every row before committing.
+- **Add unique.** For each existing row whose unique columns are all non-null, the runner
+  reserves a `__kit_unique_keys` guard. If two rows produce the same key the existing data
+  already violates the constraint and the migration **fails** (rejecting the change).
+  Rows with a null in any unique column are skipped (nulls never collide).
+- **Add foreign key.** For each existing child row with a non-null foreign key, the runner
+  verifies the referenced parent exists and touches the parent's `__kit_row_guards` entry
+  (so a later concurrent parent delete conflicts). A missing parent **fails** the
+  migration.
+- **Drop table / drop unique.** The runner removes the unique-key and row guards owned by
+  the dropped table or constraint.
 
 ## Failed migrations
 

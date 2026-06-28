@@ -31,7 +31,12 @@ import {
 	KitForeignKeyError,
 	KitRestrictError,
 	KitNotFoundError,
-	KitMigrationError
+	KitMigrationError,
+	migrate,
+	addUnique,
+	encodedPk,
+	encodeUniqueKey,
+	encodeRowGuardKey
 } from '../../../packages/kit/src/index.js';
 import type { TableSpec, ColumnSpec, DefaultValue, Migration } from '../../../packages/kit/src/index.js';
 
@@ -320,7 +325,69 @@ async function runScenario(scenario: any, expected: any, kit: KitDatabase, schem
 	}
 }
 
+function keyComponent(c: any): string | bigint | null {
+	if (c.int !== undefined) return BigInt(c.int);
+	if (c.text !== undefined) return c.text as string;
+	if (c.null !== undefined) return null;
+	throw new Error(`invalid key component: ${JSON.stringify(c)}`);
+}
+
 describe('mongreldb-kit conformance', () => {
+	it('encodes keys byte-identically to the shared vectors', () => {
+		const fixture = loadJson('keys.json');
+		for (const c of fixture.cases) {
+			const comps = c.components.map(keyComponent);
+			const pkValue = comps.length === 1 ? comps[0] : comps;
+			let actual: string;
+			switch (c.kind) {
+				case 'pk':
+					actual = encodedPk(pkValue);
+					break;
+				case 'unique':
+					actual = encodeUniqueKey(c.version, c.constraint, comps);
+					break;
+				case 'row_guard':
+					actual = encodeRowGuardKey(c.table, pkValue);
+					break;
+				default:
+					throw new Error(`unknown key kind: ${c.kind}`);
+			}
+			expect(actual, c.name).toBe(c.expected);
+		}
+	});
+
+	it('rejects a unique-constraint backfill that existing rows violate', async () => {
+		const fail = loadJson('migration_failure.json');
+		const createSchema = schemaFromFixture(fail.create_schema);
+		const accounts = createSchema.table(fail.table);
+		const createMigration: Migration = {
+			version: fail.create_migration.version,
+			name: fail.create_migration.name,
+			up: (ctx) => ctx.ensureTable(accounts)
+		};
+		const failingMigration: Migration = {
+			version: fail.failing_migration.version,
+			name: fail.failing_migration.name,
+			up: async (ctx) => {
+				await addUnique(ctx.kit, fail.table, unique(fail.unique.columns, { name: fail.unique.name }));
+			}
+		};
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-migfail-'));
+		const kit = KitDatabase.openSync(tmpDir, createSchema);
+		try {
+			await migrate(kit, createSchema, [createMigration]);
+			for (const s of fail.seed) {
+				kit.insertInto(accounts).values(normalizeRowForTs(accounts, s.row)).executeSync();
+			}
+			await expect(migrate(kit, createSchema, [createMigration, failingMigration])).rejects.toBeInstanceOf(
+				KitMigrationError
+			);
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it('runs shared fixtures against the TypeScript kit', async () => {
 		const schemaRaw = loadJson('schema.json');
 		const migrationsRaw = loadJson('migrations.json');

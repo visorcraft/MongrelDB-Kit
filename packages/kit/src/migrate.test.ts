@@ -2,11 +2,31 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ConditionKind } from 'mongreldb/native.js';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, index } from './schema.js';
-import { migrate, type Migration } from './migrate.js';
-import { kitSchemaMigrations, kitSchemaCatalog, kitMigrationLocks } from './internalTables.js';
-import { KitMigrationError, KitSchemaDriftError } from './errors.js';
+import { Schema, table, int, text, index, unique, foreignKey } from './schema.js';
+import {
+	migrate,
+	migrationChecksum,
+	dropTable,
+	addUnique,
+	addForeignKey,
+	type Migration
+} from './migrate.js';
+import type { TableSpec } from './types.js';
+import {
+	kitSchemaMigrations,
+	kitSchemaCatalog,
+	kitMigrationLocks,
+	kitUniqueKeys,
+	kitRowGuards
+} from './internalTables.js';
+import {
+	KitMigrationError,
+	KitSchemaDriftError,
+	KitDuplicateError,
+	KitForeignKeyError
+} from './errors.js';
 import './query.js';
 
 function makeTempDir(): string {
@@ -352,6 +372,256 @@ describe('migrateSync', () => {
 				{ version: 1, name: 'edited', up: () => undefined }
 			];
 			expect(() => db.migrateSync(new Schema([users]), renamed)).toThrow(KitSchemaDriftError);
+		});
+	});
+});
+
+describe('migrationChecksum', () => {
+	it('is content-aware and matches the Rust kit vectors', () => {
+		// These exact hexes are also asserted by the Rust kit
+		// (`crates/mongreldb-kit-core/src/migrations.rs`) for the same logical
+		// migration, proving the canonical serialization is byte-identical.
+		expect(
+			migrationChecksum({
+				version: 1,
+				name: 'init',
+				ops: [{ kind: 'createTable', name: 'users' }],
+				up: () => undefined
+			})
+		).toBe('fe2f521793591207bd4d8645c2631e4b7ce43e30fe7ea5691a2846c74ea71cc3');
+		expect(
+			migrationChecksum({
+				version: 2,
+				name: 'add_email',
+				ops: [
+					{ kind: 'addColumn', table: 'users', column: 'email' },
+					{ kind: 'addUnique', table: 'users', constraint: 'uq_email' }
+				],
+				up: () => undefined
+			})
+		).toBe('5b05a0c349b9c6091e7bd6329a64e2a0e1960a1867471896458de79ca996f2d3');
+		expect(migrationChecksum({ version: 1, name: 'init', up: () => undefined })).toBe(
+			'6408373a4372a2c49859db2a4548ea43308e5ba7dd3609998ca376606cf09757'
+		);
+	});
+
+	it('changes when version, name, or any op changes', () => {
+		const base = migrationChecksum({
+			version: 1,
+			name: 'init',
+			ops: [{ kind: 'createTable', name: 'users' }],
+			up: () => undefined
+		});
+		expect(base).not.toBe(
+			migrationChecksum({
+				version: 1,
+				name: 'init',
+				ops: [{ kind: 'createTable', name: 'accounts' }],
+				up: () => undefined
+			})
+		);
+		expect(base).not.toBe(
+			migrationChecksum({
+				version: 1,
+				name: 'init',
+				ops: [{ kind: 'dropTable', name: 'users' }],
+				up: () => undefined
+			})
+		);
+		expect(base).not.toBe(migrationChecksum({ version: 1, name: 'init', up: () => undefined }));
+		expect(base).not.toBe(
+			migrationChecksum({
+				version: 2,
+				name: 'init',
+				ops: [{ kind: 'createTable', name: 'users' }],
+				up: () => undefined
+			})
+		);
+	});
+
+	it('rejects a migration whose ops were edited after it was applied', async () => {
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([]));
+		try {
+			const original: Migration[] = [
+				{
+					version: 1,
+					name: 'init',
+					ops: [{ kind: 'createTable', name: 'users' }],
+					up: async (ctx) => {
+						await ctx.ensureTable(users);
+					}
+				}
+			];
+			await migrate(db, new Schema([users]), original);
+
+			// Same version + name, but the declared ops changed: drift.
+			const edited: Migration[] = [
+				{
+					version: 1,
+					name: 'init',
+					ops: [{ kind: 'createTable', name: 'accounts' }],
+					up: async (ctx) => {
+						await ctx.ensureTable(users);
+					}
+				}
+			];
+			await expect(migrate(db, new Schema([users]), edited)).rejects.toBeInstanceOf(
+				KitSchemaDriftError
+			);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe('migration ops', () => {
+	async function withSchemaDb(
+		tables: TableSpec[],
+		fn: (db: KitDatabase) => Promise<void>
+	): Promise<void> {
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema(tables));
+		try {
+			await fn(db);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	function accountsTable() {
+		return table('accounts', {
+			columns: [int('id', { primaryKey: true }), text('email', { nullable: false })],
+			primaryKey: ['id']
+		});
+	}
+
+	function ownersTable() {
+		return table('owners', {
+			columns: [int('id', { primaryKey: true }), text('name', { nullable: false })],
+			primaryKey: ['id']
+		});
+	}
+
+	function petsTable() {
+		return table('pets', {
+			columns: [
+				int('id', { primaryKey: true }),
+				int('owner_id', { nullable: false }),
+				text('name', { nullable: false })
+			],
+			primaryKey: ['id']
+		});
+	}
+
+	// The all-text internal guard tables cannot be full-scanned via selectFrom;
+	// query them through their bitmap index instead.
+	function guardCount(
+		db: KitDatabase,
+		internalTable: TableSpec,
+		columnName: string,
+		value: string
+	): number {
+		const col = internalTable.columns.find((c) => c.name === columnName);
+		if (!col) throw new Error(`column ${columnName} not found`);
+		return db.nativeDb
+			.table(internalTable.name)
+			.query([{ kind: ConditionKind.BitmapEq, columnId: col.id, text: value }]).length;
+	}
+
+	it('dropTable removes the table and its guards', async () => {
+		const accounts = accountsTable();
+		await withSchemaDb([accounts], async (db) => {
+			await db.insertInto(accounts).values({ id: 1n, email: 'a@example.com' }).execute();
+			await addUnique(db, 'accounts', unique(['email'], { name: 'uq_accounts_email' }));
+
+			expect(db.tableNames()).toContain('accounts');
+			expect(guardCount(db, kitUniqueKeys, 'owner_table', 'accounts')).toBe(1);
+
+			await dropTable(db, 'accounts');
+
+			expect(db.tableNames()).not.toContain('accounts');
+			expect(guardCount(db, kitUniqueKeys, 'owner_table', 'accounts')).toBe(0);
+		});
+	});
+
+	it('dropTable rejects an unknown table', async () => {
+		await withSchemaDb([], async (db) => {
+			await expect(dropTable(db, 'nope')).rejects.toBeInstanceOf(KitMigrationError);
+		});
+	});
+
+	it('addUnique backfills guards and enforces the constraint afterward', async () => {
+		const accounts = accountsTable();
+		await withSchemaDb([accounts], async (db) => {
+			await db.insertInto(accounts).values({ id: 1n, email: 'a@example.com' }).execute();
+			await db.insertInto(accounts).values({ id: 2n, email: 'b@example.com' }).execute();
+
+			await addUnique(db, 'accounts', unique(['email'], { name: 'uq_accounts_email' }));
+
+			expect(guardCount(db, kitUniqueKeys, 'owner_table', 'accounts')).toBe(2);
+
+			// Constraint now enforced: a duplicate email is rejected.
+			await expect(
+				db.insertInto(accounts).values({ id: 3n, email: 'a@example.com' }).execute()
+			).rejects.toBeInstanceOf(KitDuplicateError);
+
+			// A fresh email is still accepted.
+			await db.insertInto(accounts).values({ id: 4n, email: 'c@example.com' }).execute();
+		});
+	});
+
+	it('addUnique rejects existing data that already violates uniqueness', async () => {
+		const accounts = accountsTable();
+		await withSchemaDb([accounts], async (db) => {
+			await db.insertInto(accounts).values({ id: 1n, email: 'dup@example.com' }).execute();
+			await db.insertInto(accounts).values({ id: 2n, email: 'dup@example.com' }).execute();
+
+			await expect(
+				addUnique(db, 'accounts', unique(['email'], { name: 'uq_accounts_email' }))
+			).rejects.toBeInstanceOf(KitMigrationError);
+		});
+	});
+
+	it('addForeignKey backfills parent row guards and enforces the FK afterward', async () => {
+		const owners = ownersTable();
+		const pets = petsTable();
+		await withSchemaDb([owners, pets], async (db) => {
+			await db.insertInto(owners).values({ id: 1n, name: 'Ada' }).execute();
+			await db.insertInto(pets).values({ id: 1n, owner_id: 1n, name: 'Rex' }).execute();
+
+			await addForeignKey(
+				db,
+				'pets',
+				foreignKey(['owner_id'], { table: 'owners', columns: ['id'] }, { name: 'fk_pets_owner' })
+			);
+
+			expect(guardCount(db, kitRowGuards, 'table_name', 'owners')).toBe(1);
+
+			// FK now enforced: a child pointing at a missing parent is rejected.
+			await expect(
+				db.insertInto(pets).values({ id: 2n, owner_id: 99n, name: 'Lost' }).execute()
+			).rejects.toBeInstanceOf(KitForeignKeyError);
+		});
+	});
+
+	it('addForeignKey rejects existing children that reference a missing parent', async () => {
+		const owners = ownersTable();
+		const pets = petsTable();
+		await withSchemaDb([owners, pets], async (db) => {
+			await db.insertInto(owners).values({ id: 1n, name: 'Ada' }).execute();
+			// Insert an orphan child while no FK is enforced yet.
+			await db.insertInto(pets).values({ id: 1n, owner_id: 42n, name: 'Orphan' }).execute();
+
+			await expect(
+				addForeignKey(
+					db,
+					'pets',
+					foreignKey(['owner_id'], { table: 'owners', columns: ['id'] }, { name: 'fk_pets_owner' })
+				)
+			).rejects.toBeInstanceOf(KitForeignKeyError);
 		});
 	});
 });

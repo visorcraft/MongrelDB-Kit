@@ -3,6 +3,10 @@ name = "mongreldb-kit-python"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "PyO3 bindings for MongrelDB Kit: a schema-aware persistence layer with migrations, constraints, and a query builder."
+repository = "https://github.com/visorcraft/MongrelDB-Kit"
+keywords = ["mongreldb", "database", "pyo3", "migrations", "bindings"]
+categories = ["database"]
 
 [lib]
 name = "mongreldb_kit_py"

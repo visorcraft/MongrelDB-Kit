@@ -1,10 +1,12 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use mongreldb_kit::{
-    migrate as run_migrations, Database, Migration, MigrationOp, Query, Schema, Select,
+    migrate as run_migrations, Column, ColumnType, Database, Migration, MigrationOp, Query, Schema,
+    Select, Table,
 };
 use mongreldb_kit_core::migrations::plan_migrations;
 use serde::{Deserialize, Serialize};
@@ -151,6 +153,14 @@ enum GenerateCmd {
         #[arg(long)]
         from: PathBuf,
     },
+    /// Generate typed row/insert/update definitions for a language.
+    Types {
+        /// Schema JSON file to read.
+        schema: PathBuf,
+        /// Target language: `ts`, `rust`, or `python`.
+        #[arg(long)]
+        lang: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -180,6 +190,7 @@ fn main() -> Result<()> {
         Command::Diff { schema, path } => cmd_diff(&schema, &path),
         Command::Generate(cmd) => match cmd {
             GenerateCmd::Migration { schema, from } => cmd_generate_migration(&schema, &from),
+            GenerateCmd::Types { schema, lang } => cmd_generate_types(&schema, &lang),
         },
         Command::Fixture(cmd) => match cmd {
             FixtureCmd::Create { path, tables } => cmd_fixture_create(&path, &tables),
@@ -238,8 +249,85 @@ fn cmd_schema_print(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A permissive view of a schema used to check stable table/column IDs without
+/// the structural validation `Schema::new` performs. Unknown fields (column
+/// types, constraints, ...) are ignored.
+#[derive(Debug, Deserialize)]
+struct RawSchema {
+    #[serde(default)]
+    tables: Vec<RawTable>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTable {
+    id: u32,
+    name: String,
+    #[serde(default)]
+    columns: Vec<RawColumn>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawColumn {
+    id: u32,
+    name: String,
+}
+
+/// Reject duplicate or reused stable table/column IDs with a clear message.
+fn validate_stable_ids(raw: &RawSchema) -> Result<()> {
+    let mut table_ids: HashMap<u32, String> = HashMap::new();
+    let mut table_names: HashMap<String, u32> = HashMap::new();
+    for table in &raw.tables {
+        if let Some(prev) = table_ids.insert(table.id, table.name.clone()) {
+            bail!(
+                "duplicate/reused table id {} used by \"{}\" and \"{}\"",
+                table.id,
+                prev,
+                table.name
+            );
+        }
+        if let Some(prev_id) = table_names.insert(table.name.clone(), table.id) {
+            bail!(
+                "duplicate table name \"{}\" (ids {} and {})",
+                table.name,
+                prev_id,
+                table.id
+            );
+        }
+
+        let mut col_ids: HashMap<u32, String> = HashMap::new();
+        let mut col_names: HashMap<String, u32> = HashMap::new();
+        for col in &table.columns {
+            if let Some(prev) = col_ids.insert(col.id, col.name.clone()) {
+                bail!(
+                    "table \"{}\": duplicate/reused column id {} used by \"{}\" and \"{}\"",
+                    table.name,
+                    col.id,
+                    prev,
+                    col.name
+                );
+            }
+            if let Some(prev_id) = col_names.insert(col.name.clone(), col.id) {
+                bail!(
+                    "table \"{}\": duplicate column name \"{}\" (ids {} and {})",
+                    table.name,
+                    col.name,
+                    prev_id,
+                    col.id
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn cmd_schema_validate(schema_path: &Path) -> Result<()> {
-    let _schema = read_schema(schema_path)?;
+    let text =
+        fs::read_to_string(schema_path).context(format!("failed to read {}", schema_path.display()))?;
+    // Stable-ID checks first so the message names the offending id.
+    let raw: RawSchema = serde_json::from_str(&text).context("failed to parse schema JSON")?;
+    validate_stable_ids(&raw)?;
+    // Full structural validation (primary keys, index/foreign-key references).
+    let _schema: Schema = serde_json::from_str(&text).context("schema failed validation")?;
     println!("OK: {}", schema_path.display());
     Ok(())
 }
@@ -296,41 +384,195 @@ fn cmd_diff(schema_path: &Path, path: &Path) -> Result<()> {
     let stored = db.schema();
 
     let mut drift = false;
+    let mut note = |line: String| {
+        drift = true;
+        println!("{line}");
+    };
 
+    // Table add/remove.
     for table in &code.tables {
         if stored.table(&table.name).is_none() {
-            drift = true;
-            println!("+ table {}", table.name);
+            note(format!("+ table {}", table.name));
         }
     }
     for table in &stored.tables {
         if code.table(&table.name).is_none() {
-            drift = true;
-            println!("- table {}", table.name);
+            note(format!("- table {}", table.name));
         }
     }
 
+    // Per-table column and constraint diffs for tables present on both sides.
     for table in &code.tables {
-        if let Some(stored_table) = stored.table(&table.name) {
-            for col in &table.columns {
-                if stored_table.column(&col.name).is_none() {
-                    drift = true;
-                    println!("+ column {}.{}", table.name, col.name);
-                }
-            }
-            for col in &stored_table.columns {
-                if table.column(&col.name).is_none() {
-                    drift = true;
-                    println!("- column {}.{}", table.name, col.name);
-                }
-            }
-        }
+        let Some(stored_table) = stored.table(&table.name) else {
+            continue;
+        };
+        diff_columns(&table.name, stored_table, table, &mut note);
+        diff_named(
+            "unique",
+            &table.name,
+            stored_table.unique_constraints.iter().map(|u| &u.name),
+            table.unique_constraints.iter().map(|u| &u.name),
+            &mut note,
+        );
+        diff_unique_columns(&table.name, stored_table, table, &mut note);
+        diff_named(
+            "foreign_key",
+            &table.name,
+            stored_table.foreign_keys.iter().map(|f| &f.name),
+            table.foreign_keys.iter().map(|f| &f.name),
+            &mut note,
+        );
+        diff_foreign_keys(&table.name, stored_table, table, &mut note);
+        diff_named(
+            "index",
+            &table.name,
+            stored_table.indexes.iter().map(|i| &i.name),
+            table.indexes.iter().map(|i| &i.name),
+            &mut note,
+        );
+        diff_indexes(&table.name, stored_table, table, &mut note);
     }
 
     if !drift {
         println!("no drift");
     }
     Ok(())
+}
+
+/// Report added/removed columns, type/nullability/default changes, and stable
+/// column-ID reuse between a stored table and the code table.
+fn diff_columns(
+    name: &str,
+    stored: &Table,
+    code: &Table,
+    note: &mut impl FnMut(String),
+) {
+    for col in &code.columns {
+        if stored.column(&col.name).is_none() {
+            note(format!("+ column {name}.{}", col.name));
+        }
+    }
+    for col in &stored.columns {
+        if code.column(&col.name).is_none() {
+            note(format!("- column {name}.{}", col.name));
+        }
+    }
+    // Property changes for columns present on both sides (matched by name).
+    for col in &code.columns {
+        if let Some(prev) = stored.column(&col.name) {
+            if prev.storage_type != col.storage_type {
+                note(format!(
+                    "~ column {name}.{} type: {:?} -> {:?}",
+                    col.name, prev.storage_type, col.storage_type
+                ));
+            }
+            if prev.nullable != col.nullable {
+                note(format!(
+                    "~ column {name}.{} nullable: {} -> {}",
+                    col.name, prev.nullable, col.nullable
+                ));
+            }
+            if prev.default != col.default {
+                note(format!(
+                    "~ column {name}.{} default: {:?} -> {:?}",
+                    col.name, prev.default, col.default
+                ));
+            }
+        }
+    }
+    // Stable column-ID reuse: the same id now names a different column.
+    let stored_by_id: HashMap<u32, &str> =
+        stored.columns.iter().map(|c| (c.id, c.name.as_str())).collect();
+    for col in &code.columns {
+        if let Some(&prev_name) = stored_by_id.get(&col.id) {
+            if prev_name != col.name {
+                note(format!(
+                    "! column id {} on {name} reused: \"{}\" -> \"{}\"",
+                    col.id, prev_name, col.name
+                ));
+            }
+        }
+    }
+}
+
+/// Report added/removed members of a named set (constraints/indexes).
+fn diff_named<'a>(
+    kind: &str,
+    table: &str,
+    stored: impl Iterator<Item = &'a String>,
+    code: impl Iterator<Item = &'a String>,
+    note: &mut impl FnMut(String),
+) {
+    let stored: Vec<&String> = stored.collect();
+    let code: Vec<&String> = code.collect();
+    for name in &code {
+        if !stored.contains(name) {
+            note(format!("+ {kind} {table}.{name}"));
+        }
+    }
+    for name in &stored {
+        if !code.contains(name) {
+            note(format!("- {kind} {table}.{name}"));
+        }
+    }
+}
+
+fn diff_unique_columns(name: &str, stored: &Table, code: &Table, note: &mut impl FnMut(String)) {
+    for uq in &code.unique_constraints {
+        if let Some(prev) = stored.unique_constraints.iter().find(|u| u.name == uq.name) {
+            if prev.columns != uq.columns {
+                note(format!(
+                    "~ unique {name}.{} columns: {:?} -> {:?}",
+                    uq.name, prev.columns, uq.columns
+                ));
+            }
+        }
+    }
+}
+
+fn diff_foreign_keys(name: &str, stored: &Table, code: &Table, note: &mut impl FnMut(String)) {
+    for fk in &code.foreign_keys {
+        if let Some(prev) = stored.foreign_keys.iter().find(|f| f.name == fk.name) {
+            if prev.columns != fk.columns
+                || prev.references_table != fk.references_table
+                || prev.references_columns != fk.references_columns
+            {
+                note(format!(
+                    "~ foreign_key {name}.{} references: {}({}) -> {}({})",
+                    fk.name,
+                    prev.references_table,
+                    prev.references_columns.join(","),
+                    fk.references_table,
+                    fk.references_columns.join(",")
+                ));
+            }
+            if prev.on_delete != fk.on_delete {
+                note(format!(
+                    "~ foreign_key {name}.{} on_delete: {:?} -> {:?}",
+                    fk.name, prev.on_delete, fk.on_delete
+                ));
+            }
+        }
+    }
+}
+
+fn diff_indexes(name: &str, stored: &Table, code: &Table, note: &mut impl FnMut(String)) {
+    for idx in &code.indexes {
+        if let Some(prev) = stored.indexes.iter().find(|i| i.name == idx.name) {
+            if prev.columns != idx.columns {
+                note(format!(
+                    "~ index {name}.{} columns: {:?} -> {:?}",
+                    idx.name, prev.columns, idx.columns
+                ));
+            }
+            if prev.unique != idx.unique {
+                note(format!(
+                    "~ index {name}.{} unique: {} -> {}",
+                    idx.name, prev.unique, idx.unique
+                ));
+            }
+        }
+    }
 }
 
 fn cmd_generate_migration(schema_path: &Path, from: &Path) -> Result<()> {
@@ -368,6 +610,232 @@ fn cmd_generate_migration(schema_path: &Path, from: &Path) -> Result<()> {
         .context("failed to serialize migration")?;
     println!("{json}");
     Ok(())
+}
+
+/// Convert a `snake_case` / `kebab-case` name to `PascalCase`.
+fn pascal_case(name: &str) -> String {
+    name.split(['_', '-', ' '])
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let mut chars = s.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// A column is omitted from the insert type when the kit supplies its value
+/// (it has a default or is generated).
+fn col_omitted_in_insert(col: &Column) -> bool {
+    col.default.is_some() || col.generated
+}
+
+fn cmd_generate_types(schema_path: &Path, lang: &str) -> Result<()> {
+    let schema = read_schema(schema_path)?;
+    let out = match lang {
+        "ts" | "typescript" => gen_ts(&schema),
+        "rust" | "rs" => gen_rust(&schema),
+        "python" | "py" => gen_python(&schema),
+        other => bail!("unsupported lang \"{other}\" (expected ts, rust, or python)"),
+    };
+    print!("{out}");
+    Ok(())
+}
+
+fn ts_type(ty: ColumnType) -> &'static str {
+    match ty {
+        ColumnType::Bool => "boolean",
+        ColumnType::Int8 | ColumnType::Int16 | ColumnType::Int32 => "number",
+        ColumnType::Int64 | ColumnType::TimestampNanos => "bigint",
+        ColumnType::Float32 | ColumnType::Float64 => "number",
+        ColumnType::Text | ColumnType::Date | ColumnType::DateTime => "string",
+        ColumnType::Bytes => "Uint8Array",
+        ColumnType::Json => "unknown",
+    }
+}
+
+fn gen_ts(schema: &Schema) -> String {
+    let mut out = String::from("// Generated by mongreldb-kit. Do not edit.\n");
+    for table in &schema.tables {
+        let base = pascal_case(&table.name);
+
+        out.push_str(&format!("\nexport interface {base}Row {{\n"));
+        for col in &table.columns {
+            let nullable = if col.nullable { " | null" } else { "" };
+            out.push_str(&format!("\t{}: {}{nullable};\n", col.name, ts_type(col.storage_type)));
+        }
+        out.push_str("}\n");
+
+        out.push_str(&format!("\nexport interface {base}Insert {{\n"));
+        for col in &table.columns {
+            if col_omitted_in_insert(col) {
+                continue;
+            }
+            let ty = ts_type(col.storage_type);
+            if col.nullable {
+                out.push_str(&format!("\t{}?: {ty} | null;\n", col.name));
+            } else {
+                out.push_str(&format!("\t{}: {ty};\n", col.name));
+            }
+        }
+        out.push_str("}\n");
+
+        out.push_str(&format!("\nexport interface {base}Update {{\n"));
+        for col in &table.columns {
+            let nullable = if col.nullable { " | null" } else { "" };
+            out.push_str(&format!("\t{}?: {}{nullable};\n", col.name, ts_type(col.storage_type)));
+        }
+        out.push_str("}\n");
+    }
+    out
+}
+
+fn rust_type(ty: ColumnType) -> &'static str {
+    match ty {
+        ColumnType::Bool => "bool",
+        ColumnType::Int8 => "i8",
+        ColumnType::Int16 => "i16",
+        ColumnType::Int32 => "i32",
+        ColumnType::Int64 | ColumnType::TimestampNanos => "i64",
+        ColumnType::Float32 => "f32",
+        ColumnType::Float64 => "f64",
+        ColumnType::Text | ColumnType::Date | ColumnType::DateTime => "String",
+        ColumnType::Bytes => "Vec<u8>",
+        ColumnType::Json => "serde_json::Value",
+    }
+}
+
+fn rust_field_type(col: &Column) -> String {
+    let base = rust_type(col.storage_type);
+    if col.nullable {
+        format!("Option<{base}>")
+    } else {
+        base.to_string()
+    }
+}
+
+fn gen_rust(schema: &Schema) -> String {
+    let mut out = String::from("// Generated by mongreldb-kit. Do not edit.\n");
+    for table in &schema.tables {
+        let base = pascal_case(&table.name);
+
+        out.push_str(&format!(
+            "\n#[derive(Debug, Clone, PartialEq)]\npub struct {base}Row {{\n"
+        ));
+        for col in &table.columns {
+            out.push_str(&format!("    pub {}: {},\n", col.name, rust_field_type(col)));
+        }
+        out.push_str("}\n");
+
+        out.push_str(&format!(
+            "\n#[derive(Debug, Clone, PartialEq)]\npub struct {base}Insert {{\n"
+        ));
+        for col in &table.columns {
+            if col_omitted_in_insert(col) {
+                continue;
+            }
+            out.push_str(&format!("    pub {}: {},\n", col.name, rust_field_type(col)));
+        }
+        out.push_str("}\n");
+
+        out.push_str(&format!(
+            "\n#[derive(Debug, Clone, Default, PartialEq)]\npub struct {base}Update {{\n"
+        ));
+        for col in &table.columns {
+            out.push_str(&format!(
+                "    pub {}: Option<{}>,\n",
+                col.name,
+                rust_type(col.storage_type)
+            ));
+        }
+        out.push_str("}\n");
+    }
+    out
+}
+
+fn python_type(ty: ColumnType) -> &'static str {
+    match ty {
+        ColumnType::Bool => "bool",
+        ColumnType::Int8
+        | ColumnType::Int16
+        | ColumnType::Int32
+        | ColumnType::Int64
+        | ColumnType::TimestampNanos => "int",
+        ColumnType::Float32 | ColumnType::Float64 => "float",
+        ColumnType::Text | ColumnType::Date | ColumnType::DateTime => "str",
+        ColumnType::Bytes => "bytes",
+        ColumnType::Json => "Any",
+    }
+}
+
+fn python_field_type(col: &Column) -> String {
+    let base = python_type(col.storage_type);
+    if col.nullable {
+        format!("Optional[{base}]")
+    } else {
+        base.to_string()
+    }
+}
+
+fn gen_python(schema: &Schema) -> String {
+    let mut out = String::from("# Generated by mongreldb-kit. Do not edit.\n");
+    out.push_str("from __future__ import annotations\n");
+    out.push_str("from dataclasses import dataclass\n");
+    out.push_str("from typing import Any, Optional\n");
+
+    for table in &schema.tables {
+        let base = pascal_case(&table.name);
+
+        out.push_str(&format!("\n\n@dataclass\nclass {base}Row:\n"));
+        if table.columns.is_empty() {
+            out.push_str("    pass\n");
+        } else {
+            for col in &table.columns {
+                out.push_str(&format!("    {}: {}\n", col.name, python_field_type(col)));
+            }
+        }
+
+        // Dataclass fields without a default must precede those with one, so emit
+        // required (non-nullable) insert fields before omittable ones.
+        out.push_str(&format!("\n\n@dataclass\nclass {base}Insert:\n"));
+        let insert_cols: Vec<&Column> = table
+            .columns
+            .iter()
+            .filter(|c| !col_omitted_in_insert(c))
+            .collect();
+        let required: Vec<&Column> = insert_cols.iter().copied().filter(|c| !c.nullable).collect();
+        let optional: Vec<&Column> = insert_cols.iter().copied().filter(|c| c.nullable).collect();
+        if required.is_empty() && optional.is_empty() {
+            out.push_str("    pass\n");
+        } else {
+            for col in &required {
+                out.push_str(&format!("    {}: {}\n", col.name, python_field_type(col)));
+            }
+            for col in &optional {
+                out.push_str(&format!(
+                    "    {}: {} = None\n",
+                    col.name,
+                    python_field_type(col)
+                ));
+            }
+        }
+
+        out.push_str(&format!("\n\n@dataclass\nclass {base}Update:\n"));
+        if table.columns.is_empty() {
+            out.push_str("    pass\n");
+        } else {
+            for col in &table.columns {
+                out.push_str(&format!(
+                    "    {}: Optional[{}] = None\n",
+                    col.name,
+                    python_type(col.storage_type)
+                ));
+            }
+        }
+    }
+    out
 }
 
 fn cmd_fixture_create(path: &Path, tables: &[String]) -> Result<()> {

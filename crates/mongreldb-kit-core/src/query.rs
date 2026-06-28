@@ -52,8 +52,19 @@ pub enum Expr {
     IsNull(Box<Expr>),
     /// IS NOT NULL test.
     IsNotNull(Box<Expr>),
-    /// SQL `LIKE` pattern match.
+    /// SQL `LIKE` pattern match (`%`/`_` wildcards).
     Like(Box<Expr>, String),
+    /// Case-sensitive substring containment. Equivalent to `LIKE '%needle%'`
+    /// but without treating `%`/`_` in the needle as wildcards.
+    Contains(Box<Expr>, String),
+    /// Membership in the rows produced by a sub-`SELECT` (its first projected
+    /// column). The subquery is evaluated against the same execution context, so
+    /// it may read other tables or materialized CTEs.
+    InSubquery(Box<Expr>, Box<Select>),
+    /// `EXISTS (subquery)` — true when the subquery yields at least one row.
+    Exists(Box<Select>),
+    /// `NOT EXISTS (subquery)` — true when the subquery yields no rows.
+    NotExists(Box<Select>),
 }
 
 /// Sort direction for `ORDER BY`.
@@ -119,6 +130,101 @@ pub enum Query {
     Insert(Insert),
     Update(Update),
     Delete(Delete),
+    Aggregate(AggregateQuery),
+    Join(JoinQuery),
+}
+
+/// An aggregate function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AggFunc {
+    Count,
+    Sum,
+    Min,
+    Max,
+    Avg,
+}
+
+/// A single aggregate output column, e.g. `SUM(total) AS total_sum`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Aggregate {
+    pub func: AggFunc,
+    /// Source column. `None` means `COUNT(*)` (only valid for `Count`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+    /// Output column name in each result row.
+    pub alias: String,
+}
+
+/// A grouped/aggregated query. Rows are scanned, optionally filtered, grouped by
+/// `group_by` key columns, reduced with `aggregates`, and finally filtered by
+/// `having`. With no `group_by`, the whole (filtered) table is one group.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AggregateQuery {
+    pub table: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Expr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_by: Vec<String>,
+    pub aggregates: Vec<Aggregate>,
+    /// Predicate applied to each produced group row. Column references resolve to
+    /// the group key columns or aggregate aliases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub having: Option<Expr>,
+}
+
+/// The kind of join to perform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinKind {
+    #[default]
+    Inner,
+    Left,
+    Cross,
+}
+
+/// One joined table in a [`JoinQuery`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Join {
+    #[serde(default)]
+    pub kind: JoinKind,
+    pub table: String,
+    /// Optional alias; defaults to the table name when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    /// Join predicate. Column references must be qualified (`alias.column`).
+    /// Ignored (and may be omitted) for `Cross` joins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<Expr>,
+}
+
+/// A nested-loop join query. The result is a list of combined rows; each combined
+/// row is a JSON object keyed by table alias whose values are that source's row
+/// object (or JSON `null` for an unmatched right side of a `LEFT` join). Column
+/// references in `filter`/`order_by`/join `on` must be qualified (`alias.column`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JoinQuery {
+    pub table: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joins: Vec<Join>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Expr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order_by: Vec<OrderBy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
+}
+
+/// A common table expression: a named, materialized subquery. A later query can
+/// read from `name` as if it were a table.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Cte {
+    pub name: String,
+    pub query: Box<Select>,
 }
 
 #[cfg(test)]
@@ -167,6 +273,88 @@ mod tests {
         let json = serde_json::to_string(&q).unwrap();
         let back: Query = serde_json::from_str(&json).unwrap();
         assert_eq!(q, back);
+    }
+
+    #[test]
+    fn extended_exprs_and_queries_roundtrip() {
+        let sub = Select {
+            table: "orders".into(),
+            columns: vec![Expr::Column("user_id".into())],
+            filter: Some(Expr::Gt(
+                Box::new(Expr::Column("total".into())),
+                Box::new(Expr::Literal(Literal::Int(100))),
+            )),
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        };
+        let select = Select {
+            table: "users".into(),
+            columns: vec![],
+            filter: Some(Expr::And(vec![
+                Expr::Contains(Box::new(Expr::Column("email".into())), "@x".into()),
+                Expr::InSubquery(Box::new(Expr::Column("id".into())), Box::new(sub.clone())),
+                Expr::Exists(Box::new(sub.clone())),
+                Expr::Not(Box::new(Expr::NotExists(Box::new(sub.clone())))),
+            ])),
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        };
+        let q = Query::Select(select);
+        let back: Query = serde_json::from_str(&serde_json::to_string(&q).unwrap()).unwrap();
+        assert_eq!(q, back);
+
+        let agg = Query::Aggregate(AggregateQuery {
+            table: "orders".into(),
+            filter: None,
+            group_by: vec!["user_id".into()],
+            aggregates: vec![
+                Aggregate {
+                    func: AggFunc::Count,
+                    column: None,
+                    alias: "n".into(),
+                },
+                Aggregate {
+                    func: AggFunc::Sum,
+                    column: Some("total".into()),
+                    alias: "total_sum".into(),
+                },
+            ],
+            having: Some(Expr::Gt(
+                Box::new(Expr::Column("n".into())),
+                Box::new(Expr::Literal(Literal::Int(1))),
+            )),
+        });
+        let back: Query = serde_json::from_str(&serde_json::to_string(&agg).unwrap()).unwrap();
+        assert_eq!(agg, back);
+
+        let join = Query::Join(JoinQuery {
+            table: "users".into(),
+            alias: None,
+            joins: vec![Join {
+                kind: JoinKind::Left,
+                table: "orders".into(),
+                alias: None,
+                on: Some(Expr::Eq(
+                    Box::new(Expr::Column("users.id".into())),
+                    Box::new(Expr::Column("orders.user_id".into())),
+                )),
+            }],
+            filter: None,
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        });
+        let back: Query = serde_json::from_str(&serde_json::to_string(&join).unwrap()).unwrap();
+        assert_eq!(join, back);
+
+        let cte = Cte {
+            name: "big".into(),
+            query: Box::new(sub),
+        };
+        let back: Cte = serde_json::from_str(&serde_json::to_string(&cte).unwrap()).unwrap();
+        assert_eq!(cte, back);
     }
 
     #[test]

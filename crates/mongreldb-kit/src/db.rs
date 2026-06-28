@@ -1,17 +1,24 @@
 //! Database handle for `mongreldb-kit`.
 
 use crate::error::{KitError, Result};
-use crate::migrate::MIGRATIONS_TABLE;
+use crate::internal::{ensure_internal_tables, internal_tables_core};
 use crate::schema::to_core_schema;
+use mongreldb_core::epoch::Snapshot;
 use mongreldb_core::Database as CoreDatabase;
 use mongreldb_core::memtable::Row as CoreRow;
-use mongreldb_core::schema::{Schema as CoreSchema, TypeId};
+use mongreldb_core::memtable::Value as CoreValue;
+use mongreldb_core::schema::Schema as CoreSchema;
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
+use serde_json::Value;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const SCHEMA_FILE: &str = "kit_schema.json";
+
+/// A named default-value provider registered by the application.
+pub type DefaultProvider = Box<dyn Fn() -> Value + Send + Sync>;
 
 /// A kit database handle.
 ///
@@ -21,6 +28,8 @@ pub struct Database {
     pub(crate) inner: CoreDatabase,
     pub(crate) schema: KitSchema,
     pub(crate) root: PathBuf,
+    /// Application-registered named default providers (`DefaultKind::CustomName`).
+    pub(crate) default_providers: HashMap<String, DefaultProvider>,
 }
 
 impl Database {
@@ -28,10 +37,13 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let inner = CoreDatabase::open(path)?;
         let schema = load_schema(path)?;
+        // Ensure reserved tables exist for databases created by older versions.
+        ensure_internal_tables(&inner)?;
         Ok(Self {
             inner,
             schema,
             root: path.to_path_buf(),
+            default_providers: HashMap::new(),
         })
     }
 
@@ -40,8 +52,9 @@ impl Database {
         std::fs::create_dir_all(path)?;
         let inner = CoreDatabase::create(path)?;
 
-        // Create internal tables first so we can record migrations.
-        create_core_table(&inner, MIGRATIONS_TABLE, migrations_table_core())?;
+        // Create the reserved kit tables first so we can record migrations,
+        // reserve unique keys, and touch row guards.
+        ensure_internal_tables(&inner)?;
 
         // Persist the kit schema to a sidecar file (core tables cannot update
         // a specific row by id, so a file is the pragmatic stable store).
@@ -56,7 +69,119 @@ impl Database {
             inner,
             schema,
             root: path.to_path_buf(),
+            default_providers: HashMap::new(),
         })
+    }
+
+    /// Register a named default provider used by `DefaultKind::CustomName`
+    /// columns. Returns the database for chaining.
+    pub fn register_default(
+        &mut self,
+        name: impl Into<String>,
+        provider: impl Fn() -> Value + Send + Sync + 'static,
+    ) {
+        self.default_providers
+            .insert(name.into(), Box::new(provider));
+    }
+
+    /// The raw, unguarded MongrelDB core database. This is the Rust analogue of
+    /// the TypeScript kit's `nativeDb` escape hatch: writes made directly
+    /// against it bypass all kit constraints.
+    pub fn raw(&self) -> &CoreDatabase {
+        &self.inner
+    }
+
+    /// Application table names, excluding the reserved `__kit_*` tables.
+    pub fn table_names(&self) -> Vec<String> {
+        self.schema
+            .tables
+            .iter()
+            .map(|t| t.name.clone())
+            .filter(|n| !n.starts_with("__kit_"))
+            .collect()
+    }
+
+    /// Allocate `count` values from the named sequence, returning the first
+    /// allocated value. Mirrors the TypeScript `allocateSequenceSync`: a fresh
+    /// sequence starts at `0`. The allocation runs in its own committed
+    /// transaction and retries on write-write conflicts.
+    pub fn allocate_sequence(&self, name: &str, count: i64) -> Result<i64> {
+        use crate::internal::cols;
+        let mut attempt = 0;
+        loop {
+            let mut txn = self.inner.begin();
+            let snapshot = txn.read_snapshot();
+            let existing = self
+                .visible_core_rows_at(crate::internal::SEQUENCES, snapshot)?
+                .into_iter()
+                .find(|r| internal_bytes(r, cols::SEQ_NAME) == Some(name.to_string()));
+
+            let now = crate::internal::iso_now();
+            let (start, next, old_row_id) = match &existing {
+                Some(row) => {
+                    let current = match row.columns.get(&cols::SEQ_NEXT) {
+                        Some(CoreValue::Int64(i)) => *i,
+                        _ => 0,
+                    };
+                    (current, current + count, Some(row.row_id))
+                }
+                None => (0, count, None),
+            };
+
+            if let Some(rid) = old_row_id {
+                txn.delete(crate::internal::SEQUENCES, rid)
+                    .map_err(KitError::from)?;
+            }
+            txn.put(
+                crate::internal::SEQUENCES,
+                vec![
+                    (cols::SEQ_NAME, CoreValue::Bytes(name.as_bytes().to_vec())),
+                    (cols::SEQ_NEXT, CoreValue::Int64(next)),
+                    (cols::SEQ_UPDATED, CoreValue::Bytes(now.into_bytes())),
+                ],
+            )
+            .map_err(KitError::from)?;
+            match txn.commit() {
+                Ok(_) => return Ok(start),
+                Err(mongreldb_core::MongrelError::Conflict(_)) if attempt < 10_000 => {
+                    attempt += 1;
+                    std::thread::yield_now();
+                    continue;
+                }
+                Err(e) => return Err(KitError::from(e)),
+            }
+        }
+    }
+
+    /// Run `f` inside a kit transaction, committing on success and retrying on
+    /// retryable write-write conflicts up to `max_retries` times.
+    pub fn transaction<T, F>(&self, max_retries: usize, mut f: F) -> Result<T>
+    where
+        F: FnMut(&mut crate::txn::Transaction<'_>) -> Result<T>,
+    {
+        let mut attempt = 0;
+        loop {
+            let mut txn = self.begin()?;
+            match f(&mut txn) {
+                Ok(value) => match txn.commit() {
+                    Ok(()) => return Ok(value),
+                    Err(KitError::Conflict(_)) if attempt < max_retries => {
+                        attempt += 1;
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                },
+                Err(KitError::Conflict(_)) if attempt < max_retries => {
+                    txn.rollback();
+                    attempt += 1;
+                    continue;
+                }
+                Err(e) => {
+                    txn.rollback();
+                    return Err(e);
+                }
+            }
+        }
     }
 
     /// Look up a table definition by name.
@@ -80,7 +205,7 @@ impl Database {
         self.schema = schema;
     }
 
-    /// Verify that the sidecar schema file and internal `_migrations` table
+    /// Verify that the sidecar schema file and all reserved `__kit_*` tables
     /// are present.
     pub fn check_internal_tables(&self) -> Result<()> {
         let schema_file = self.root.join(SCHEMA_FILE);
@@ -90,15 +215,17 @@ impl Database {
                 schema_file.display()
             )));
         }
-        if self.inner.table_id(MIGRATIONS_TABLE).is_err() {
-            return Err(KitError::Integrity(
-                "internal _migrations table is missing".into(),
-            ));
+        for (name, _) in internal_tables_core() {
+            if self.inner.table_id(name).is_err() {
+                return Err(KitError::Integrity(format!(
+                    "internal table {name} is missing"
+                )));
+            }
         }
         Ok(())
     }
 
-    /// Return the migrations already recorded in `_migrations`.
+    /// Return the migrations already recorded in `__kit_schema_migrations`.
     pub fn applied_migrations(&self) -> Result<Vec<mongreldb_kit_core::migrations::Migration>> {
         crate::migrate::load_applied_migrations(&self.inner)
     }
@@ -111,11 +238,16 @@ impl Database {
         &self.root
     }
 
-    /// All visible core rows for a table at the current snapshot.
-    pub(crate) fn visible_core_rows(&self, table_name: &str) -> Result<Vec<CoreRow>> {
+    /// All visible core rows for a table at a specific read snapshot. Used so
+    /// kit transactions read at their own snapshot (repeatable reads) rather
+    /// than the latest committed state.
+    pub(crate) fn visible_core_rows_at(
+        &self,
+        table_name: &str,
+        snapshot: Snapshot,
+    ) -> Result<Vec<CoreRow>> {
         let handle = self.inner.table(table_name).map_err(KitError::from)?;
         let guard = handle.lock();
-        let snapshot = guard.snapshot();
         guard.visible_rows(snapshot).map_err(KitError::from)
     }
 
@@ -129,47 +261,20 @@ impl Database {
     }
 }
 
-pub(crate) fn migrations_table_core() -> CoreSchema {
-    CoreSchema {
-        schema_id: u64::MAX - 1,
-        columns: vec![
-            mongreldb_core::schema::ColumnDef {
-                id: 1,
-                name: "version".into(),
-                ty: TypeId::Int64,
-                flags: mongreldb_core::schema::ColumnFlags::empty()
-                    .with(mongreldb_core::schema::ColumnFlags::PRIMARY_KEY),
-            },
-            mongreldb_core::schema::ColumnDef {
-                id: 2,
-                name: "name".into(),
-                ty: TypeId::Bytes,
-                flags: mongreldb_core::schema::ColumnFlags::empty(),
-            },
-            mongreldb_core::schema::ColumnDef {
-                id: 3,
-                name: "checksum".into(),
-                ty: TypeId::Bytes,
-                flags: mongreldb_core::schema::ColumnFlags::empty(),
-            },
-            mongreldb_core::schema::ColumnDef {
-                id: 4,
-                name: "applied_at".into(),
-                ty: TypeId::Bytes,
-                flags: mongreldb_core::schema::ColumnFlags::empty(),
-            },
-        ],
-        indexes: Vec::new(),
-        colocation: Vec::new(),
-    }
-}
-
-fn create_core_table(db: &CoreDatabase, name: &str, schema: CoreSchema) -> Result<()> {
+pub(crate) fn create_core_table(db: &CoreDatabase, name: &str, schema: CoreSchema) -> Result<()> {
     if db.table_id(name).is_ok() {
         return Ok(());
     }
     db.create_table(name, schema).map_err(KitError::from)?;
     Ok(())
+}
+
+/// Read a `Bytes` column from an internal-table core row as a UTF-8 string.
+pub(crate) fn internal_bytes(row: &CoreRow, col_id: u16) -> Option<String> {
+    match row.columns.get(&col_id) {
+        Some(CoreValue::Bytes(b)) => String::from_utf8(b.clone()).ok(),
+        _ => None,
+    }
 }
 
 pub(crate) fn load_schema(path: &Path) -> Result<KitSchema> {

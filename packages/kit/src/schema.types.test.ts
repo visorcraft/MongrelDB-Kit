@@ -36,7 +36,8 @@ describe('schema type inference', () => {
 		expectTypeOf<UsersInsert>().toHaveProperty('id');
 		expectTypeOf<UsersInsert>().toHaveProperty('email');
 		expectTypeOf<UsersInsert>().not.toHaveProperty('createdAt');
-		expectTypeOf<UsersInsert['nickname']>().toEqualTypeOf<string | null>();
+		// Nullable columns are optional on insert (omitting one stores NULL).
+		expectTypeOf<UsersInsert['nickname']>().toEqualTypeOf<string | null | undefined>();
 	});
 
 	it('infers Update types', () => {
