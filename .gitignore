@@ -67,6 +67,9 @@ pip-wheel-metadata/
 *.egg
 *.whl
 MANIFEST
+python/**/*.so
+python/**/*.pyd
+python/**/*.dylib
 
 # Virtual environments
 .venv/

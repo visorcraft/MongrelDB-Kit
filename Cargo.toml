@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/mongreldb-kit-core", "crates/mongreldb-kit"]
+members = ["crates/mongreldb-kit-core", "crates/mongreldb-kit", "crates/mongreldb-kit-python"]
 resolver = "2"
