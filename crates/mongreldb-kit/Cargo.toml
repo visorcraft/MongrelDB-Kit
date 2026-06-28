@@ -6,3 +6,12 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 mongreldb-kit-core = { path = "../mongreldb-kit-core" }
+mongreldb-core = { path = "../../../mongreldb/crates/mongreldb-core" }
+serde_json = "1"
+thiserror = "1"
+parking_lot = "0.12"
+regex = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,8 +1,20 @@
 //! Storage-backed MongrelDB Kit crate.
 //!
-//! This crate builds on `mongreldb-kit-core` and will eventually provide the
-//! native database adapter, transaction runner, query builder, and migration
-//! engine. For now it re-exports the core model so downstream consumers can
-//! depend on a single crate.
+//! This crate wraps MongrelDB core with the kit schema model, transaction
+//! semantics, query execution, and migration runner.
 
+pub mod db;
+pub mod error;
+pub mod migrate;
+pub mod query;
+pub mod schema;
+pub mod txn;
+
+pub use db::Database;
+pub use error::{KitError, Result};
+pub use migrate::migrate;
+pub use schema::Row;
+pub use txn::Transaction;
+
+// Re-export the core model so downstream consumers can depend on a single crate.
 pub use mongreldb_kit_core::*;
