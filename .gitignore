@@ -14,6 +14,9 @@ Thumbs.db
 !.env.test
 *.local
 
+# Local planning notes
+PLAN.md
+
 # Logs
 *.log
 npm-debug.log*
