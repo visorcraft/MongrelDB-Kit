@@ -8,3 +8,4 @@ export * from './keys.js';
 export * from './constraints.js';
 export * from './db.js';
 export * from './query.js';
+export * from './migrate.js';

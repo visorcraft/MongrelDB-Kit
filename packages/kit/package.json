@@ -13,6 +13,7 @@
 		"node": ">=22.0.0"
 	},
 	"dependencies": {
+		"apache-arrow": "^21.1.0",
 		"mongreldb": "file:../../../mongreldb/crates/mongreldb-node"
 	},
 	"devDependencies": {
