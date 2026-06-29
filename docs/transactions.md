@@ -168,8 +168,7 @@ Auto-increment ids come from sequences (`sequenceDefault(...)`), allocated by
 `db.allocateSequenceSync(name, count?)` / `await db.allocateSequence(name, count?)`. Two
 properties matter:
 
-- **Sequences are 1-based** — the first id handed out is `1n`, never `0n` (`0` is falsy and
-  collides with the null sentinel that nullable foreign keys read back as).
+- **Sequences are 1-based** — the first id handed out is `1n`, never `0n`.
 - **Allocation commits in its own transaction**, separately from whatever mutation requested
   it. So if an insert allocates an id and then fails — a validation error, a constraint
   violation, or a rolled-back surrounding transaction — the id is **already spent**. The next

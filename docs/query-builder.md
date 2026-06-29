@@ -176,6 +176,28 @@ row.tier; // 'free' — staticDefault applied
 omitted (see [Types](./types.md) for the `Insert<T>` shape). Remember that `int64` values are
 `bigint`: `price_cents: 500n`, not `500`.
 
+### Insert many — one transaction for a batch
+
+`insertInto(table).valuesMany(rows).executeSync()` inserts an array of rows in a **single
+transaction** and returns the stored `Row<T>[]` in input order. It is the same as calling
+`.values(row).executeSync()` in a loop — defaults, validation, sequence-assigned ids, and
+foreign-key / unique / PK guards all still run per row — but it commits once instead of once per
+row, which is dramatically faster for bulk loads.
+
+```ts
+const rows = db.insertInto(products).valuesMany([
+  { sku: 'A-1', name: 'Anvil',  price_cents: 2500n },
+  { sku: 'B-1', name: 'Bucket', price_cents: 400n  },
+  { sku: 'C-1', name: 'Cog',    price_cents: 150n  },
+]).executeSync();
+rows.map((r) => r.id); // [1n, 2n, 3n] — sequence ids assigned in order
+```
+
+Because the whole batch is one transaction, it is **all-or-nothing**: if any row fails a guard or
+validator the transaction rolls back and nothing is inserted. For tables with a single-column
+primary key the batch pre-loads existing keys once, so duplicate detection stays O(1) per row
+rather than a scan per row. An empty array inserts nothing and returns `[]`.
+
 ### Update — returns the updated `Row[]`
 
 `updateTable(table).set(patch).where(predicate).executeSync()` merges `patch` into every matched

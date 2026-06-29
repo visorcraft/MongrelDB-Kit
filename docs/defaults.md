@@ -97,9 +97,8 @@ int('id', { primaryKey: true, default: sequenceDefault('customers_id_seq') }),
 
 Behavior, all verified against the engine:
 
-- **1-based.** The first allocated id is `1`, never `0`. (`0` is falsy and collides with the
-  "unset" sentinel apps use for nullable foreign keys, so it is deliberately skipped — same as SQL
-  `AUTO_INCREMENT` / `SERIAL`.)
+- **1-based.** The first allocated id is `1`, never `0` — matching SQL `AUTO_INCREMENT` /
+  `SERIAL`, so an assigned id is always truthy.
 - **Backed by the `__kit_sequences` table.** Each named sequence stores its `next_value`; see
   [Internal tables](./internal-tables.md).
 - **Allocated transactionally.** Allocation runs in its own committed transaction before the row is

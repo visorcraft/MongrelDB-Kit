@@ -35,7 +35,8 @@ Monitor these signals:
 - Index columns used in equality filters and joins.
 - Avoid large unfiltered full-table scans in hot paths.
 - Keep transactions short to reduce conflict retries.
-- Use batch inserts when supported by the adapter.
+- Use batch inserts (`valuesMany` / `insert_many`) for bulk loads — one transaction is far
+  cheaper than a row-at-a-time loop.
 
 ## Migrations
 

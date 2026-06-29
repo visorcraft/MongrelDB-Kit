@@ -190,6 +190,26 @@ txn.commit()?;
 
 Use `txn.rollback()` to abort.
 
+### Batch insert
+
+`txn.insert_many(table, rows)` stages a whole `Vec` of rows in the open transaction and returns
+the stored `Vec<Row>` in order — the same per-row defaults, validation, sequence ids, and guards
+as `insert`, but staged in one pass so a single `commit()` writes the batch. For a single-column
+primary key it preloads the existing keys once, so the per-row duplicate check stays O(1).
+
+```rust
+let mut a = Map::new();
+a.insert("sku".into(), json!("A-1"));
+a.insert("name".into(), json!("Anvil"));
+let mut b = Map::new();
+b.insert("sku".into(), json!("B-1"));
+b.insert("name".into(), json!("Bucket"));
+
+let mut txn = db.begin()?;
+let rows = txn.insert_many("products", vec![a, b])?; // returns Vec<Row> in order
+txn.commit()?; // all-or-nothing: any row erroring rolls the batch back
+```
+
 ## Query AST
 
 The kit exposes a language-neutral AST in `mongreldb_kit_core::query`:

@@ -199,11 +199,13 @@ db.insertInto(memberships).values({ user_id: 1n, group_id: 2n, role: 'member' })
 // throws KitDuplicateError (constraint "__pk_memberships")
 ```
 
-> **Single-column primary keys are not guard-checked.** In normal use the id comes from a
-> sequence default (`sequenceDefault(...)`), so collisions never arise. If you instead
-> supply an explicit id that already exists, the underlying storage **upserts** it
-> (last-writer-wins) rather than raising an error. When you need a scalar column to be
-> unique, declare it in `unique`, do not rely on it being a single-column primary key.
+> **How single-column primary keys are checked.** In normal use the id comes from a
+> sequence default (`sequenceDefault(...)`), and an auto-assigned id is unique by
+> construction, so the Kit skips the duplicate check entirely — keeping single inserts and
+> bulk loads cheap. If you instead supply an **explicit** id that already exists, the insert
+> throws **`KitDuplicateError`** (constraint `__pk_<table>`); the Kit checks the id against
+> the existing rows directly rather than reserving a guard row. A non-primary-key scalar
+> column still needs `unique(...)` to reject duplicates.
 
 ## Foreign keys
 
@@ -297,7 +299,7 @@ const catalog = table('catalog', {
 
 db.deleteFrom(categories).where(eq(categories.id, cat.id)).executeSync();
 const item = db.selectFrom(catalog).where(eq(catalog.id, hammer.id)).executeSync()[0];
-// item still exists; item.category_id is now the null sentinel (0n) — see the gotcha below.
+// item still exists; item.category_id is now null.
 ```
 
 > If a `set null` target column is **not** nullable, the cleared row fails re-validation and
@@ -305,14 +307,14 @@ const item = db.selectFrom(catalog).where(eq(catalog.id, hammer.id)).executeSync
 
 ## Gotchas
 
-- **Null reads back as a typed zero sentinel.** The Kit stores a `null` as the type's zero
-  value, so a nullable `int64` reads back as `0n` and a nullable `text` as `''` — not a
-  JavaScript `null`. Consequently `isNull(column)` does **not** match rows that were written
-  with `null`. Keep this in mind for nullable foreign keys and `set null` results: the
-  reference is cleared, but a `category_id` reads back as `0n`, not `null`.
+- **Null round-trips as `null`.** A column written with `null` — omitted on insert, set to
+  `null`, or cleared by a `set null` cascade — reads back as a JavaScript `null`, and
+  `isNull(column)` matches it (`isNotNull(column)` excludes it). Nullable foreign keys and
+  `set null` results behave as expected: a cleared `category_id` reads back as `null`.
 - **Unique indexes are not enforced** — use `unique(...)`, not `index(..., { unique: true })`.
-- **Single-column primary keys are not duplicate-checked** — an explicit colliding id
-  upserts. Use sequence defaults, or `unique(...)` for scalar uniqueness.
+- **Single-column primary keys reject explicit duplicates** — supplying an id that already
+  exists throws `KitDuplicateError`; an omitted id is filled from the sequence and is unique
+  by construction. Use `unique(...)` for non-PK scalar uniqueness.
 - **Validators run in-process**, in declaration order, on the full row — they are not pushed
   into the storage engine. A column `check`/table `check` is your own predicate function.
 

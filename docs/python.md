@@ -191,6 +191,23 @@ except Exception:
     txn.rollback()
 ```
 
+### Batch insert
+
+`txn.insert_many(table, rows)` stages an iterable of rows in the open transaction and returns the
+stored rows as a `list[dict]` in order. It runs the same per-row defaults, validation, sequence
+ids, and guards as `insert`, but stages the whole batch so one commit writes it — far faster than
+a row-at-a-time loop, and all-or-nothing on failure. A single-column primary key preloads existing
+keys once so the per-row duplicate check stays O(1).
+
+```python
+with db.begin() as txn:
+    rows = txn.insert_many("products", [
+        {"sku": "A-1", "name": "Anvil"},
+        {"sku": "B-1", "name": "Bucket"},
+    ])
+    # rows[0]["id"] == 1, rows[1]["id"] == 2  — sequence ids assigned in order
+```
+
 ## Queries
 
 `txn.select` accepts a friendly object filter and an order string:

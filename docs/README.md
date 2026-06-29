@@ -89,7 +89,7 @@ Start here, then dive into the topic that fits your task.
 | [Schema DSL](./schema.md) | Tables, columns, types, column options, indexes, and assembling a `Schema`. |
 | [Types](./types.md) | `Row<T>`, `Insert<T>`, `Update<T>` inference and typed CRUD. |
 | [Defaults & sequences](./defaults.md) | Static / now / uuid / sequence / custom defaults and auto-increment ids. |
-| [Query builder](./query-builder.md) | Select, insert, update, delete, predicates, ordering, pagination, projections, aggregates, distinct, joins, group/having, subqueries, exists, CTEs, and the raw escape hatch. |
+| [Query builder](./query-builder.md) | Select, insert (single and batch), update, delete, predicates, ordering, pagination, projections, aggregates, distinct, joins, group/having, subqueries, exists, CTEs, and the raw escape hatch. |
 | [Constraints](./constraints.md) | Not-null, checks, unique / composite-unique, foreign keys, and delete actions (cascade / set-null / restrict). |
 | [Transactions](./transactions.md) | `begin`/`commit`/`rollback`, the retrying `transaction()` helper, conflicts, and the concurrency model. |
 | [Migrations](./migrations.md) | Migration files, the runner, checksums, the supported operations, and the lifecycle. |
