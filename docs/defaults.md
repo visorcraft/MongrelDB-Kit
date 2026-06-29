@@ -99,11 +99,15 @@ Behavior, all verified against the engine:
 
 - **1-based.** The first allocated id is `1`, never `0` — matching SQL `AUTO_INCREMENT` /
   `SERIAL`, so an assigned id is always truthy.
-- **Backed by the `__kit_sequences` table.** Each named sequence stores its `next_value`; see
-  [Internal tables](./internal-tables.md).
-- **Allocated transactionally.** Allocation runs in its own committed transaction before the row is
-  written, so concurrent inserts never hand out the same id. See [Transactions](./transactions.md)
-  for the concurrency model.
+- **Engine-backed in TypeScript.** `sequenceDefault(...)` maps to MongrelDB's native
+  `AUTO_INCREMENT` counter for the table. Current TypeScript databases do not allocate through a
+  `__kit_sequences` hot row; older TypeScript databases are seeded from that legacy table during
+  migration so upgraded counters do not move backward. The string name is retained in schema
+  metadata and for legacy upgrade mapping, but the live TypeScript counter is per table.
+- **Named sequence table in Rust/Python.** The Rust storage crate and Python facade still expose
+  explicit named sequences through `allocate_sequence(...)`, backed by `__kit_sequences`.
+- **Never reused.** Concurrent inserts never receive the same id. Failed inserts can leave gaps;
+  see [Transactions](./transactions.md) for the concurrency model.
 
 ```ts
 const a = db.insertInto(customers).values({ email: 'a@x.com', name: 'A' }).executeSync();
@@ -115,25 +119,27 @@ b.id; // 2n
 ### You may still supply an explicit id
 
 A sequence column stays optional, not omitted — you can pass an `id` yourself (e.g. when importing
-existing data). An **explicit id does not advance the sequence**, because allocation only happens for
-omitted/`null` values:
+existing data).
 
 ```ts
 db.insertInto(customers).values({ id: 1000n, email: 'imported@x.com', name: 'Imported' }).executeSync();
 const next = db.insertInto(customers).values({ email: 'c@x.com', name: 'C' }).executeSync();
-next.id; // 3n — the sequence kept counting from where it was, ignoring 1000n
+next.id; // 1001n in TypeScript — the native counter advances past explicit ids
 ```
 
-Because explicit ids and the sequence counter are independent, a manual id can collide with a value
-the sequence will later reach. If you mix the two, reserve a disjoint range (e.g. large ids for
-imports) or pre-advance the sequence.
+In TypeScript, the engine owns the counter and advances it past explicit integer primary keys, so a
+future auto-assigned id will not collide with the imported value. In Rust/Python, named
+`__kit_sequences` allocation is independent from manually supplied ids; if you mix manual ids with
+`DefaultKind::Sequence` / `{"sequence": ...}`, reserve a disjoint range or pre-advance the named
+sequence.
 
 ### Gaps are normal
 
-Sequence allocation commits **before** row validation/constraint checks run, so a failed insert
-(validation error, unique violation, missing foreign key) still consumes the id it reserved — exactly
-like SQL `AUTO_INCREMENT`. Ids are unique and monotonic but **not** guaranteed gap-free; never assume
-"id − 1" exists or that the count equals the max id.
+Sequence reservation happens before the row is known to be durable. In TypeScript the engine-native
+counter may advance for an attempted insert that later fails validation or constraints; in
+Rust/Python the named-sequence allocation commits separately from the row write. Either way, a
+failed insert can consume an id — exactly like SQL `AUTO_INCREMENT`. Ids are unique and monotonic
+but **not** guaranteed gap-free; never assume "id - 1" exists or that the count equals the max id.
 
 ## Notes
 
@@ -142,11 +148,11 @@ like SQL `AUTO_INCREMENT`. Ids are unique and monotonic but **not** guaranteed g
 - Defaults run **before** validation; `generated`/`default` values are validated like any other.
 - On update, only `now`/`generated: 'now'` columns are refreshed; other insert defaults are not
   reapplied.
-- Auto-increment is **1-based**, transactional, may be overridden per row, and can leave gaps.
+- Auto-increment is **1-based**, may be overridden per row, and can leave gaps.
 
 ## See also
 
 - [Schema DSL](./schema.md) — declaring `default` / `generated` on columns.
 - [Types](./types.md) — why defaulted columns are optional on insert.
-- [Internal tables](./internal-tables.md) — the `__kit_sequences` table that backs auto-increment.
+- [Internal tables](./internal-tables.md) — reserved tables, including legacy/named sequence storage.
 - [Transactions](./transactions.md) — the concurrency model behind sequence allocation.

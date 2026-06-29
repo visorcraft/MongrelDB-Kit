@@ -162,23 +162,22 @@ retryable error rather than overwriting the winner.
   other instead of both committing against stale snapshots. See
   [Internal tables](./internal-tables.md) and the [specification](./spec.md).
 
-## Sequence gaps on rollback
+## Auto-increment gaps on rollback
 
-Auto-increment ids come from sequences (`sequenceDefault(...)`), allocated by
-`db.allocateSequenceSync(name, count?)` / `await db.allocateSequence(name, count?)`. Two
-properties matter:
+Auto-increment ids come from `sequenceDefault(...)`. In TypeScript, that default maps to the
+engine's native `AUTO_INCREMENT` counter for the table. In Rust/Python, named sequences are backed
+by `__kit_sequences` and are also available through `allocate_sequence(...)`. Two properties matter:
 
-- **Sequences are 1-based** — the first id handed out is `1n`, never `0n`.
-- **Allocation commits in its own transaction**, separately from whatever mutation requested
-  it. So if an insert allocates an id and then fails — a validation error, a constraint
-  violation, or a rolled-back surrounding transaction — the id is **already spent**. The next
-  insert gets the following number, leaving a gap.
+- **Ids are 1-based** — the first id handed out is `1n`, never `0n`.
+- **Reserved ids are not reused.** If an insert reserves an id and then fails — a validation error,
+  a constraint violation, or a rolled-back surrounding transaction — the next insert may get the
+  following number, leaving a gap.
 
 ```ts
 const a = db.insertInto(customers).values({ email: 'a@example.com', name: 'Ada' }).executeSync();
 // a.id === 1n
 
-// Fails validation (missing name) — but only AFTER id 2 was allocated.
+// Fails validation (missing name) — but only AFTER id 2 was reserved.
 try {
   db.insertInto(customers).values({ email: 'b@example.com', name: null as never }).executeSync();
 } catch { /* KitValidationError */ }
@@ -187,7 +186,7 @@ const c = db.insertInto(customers).values({ email: 'c@example.com', name: 'Cy' }
 // c.id === 3n — id 2 was consumed by the failed insert.
 ```
 
-This is the same behavior as SQL `AUTO_INCREMENT` / `SERIAL`: sequence values are a source
+This is the same behavior as SQL `AUTO_INCREMENT` / `SERIAL`: auto-increment values are a source
 of unique ids, **not** a gap-free counter. Do not treat ids as contiguous.
 
 > The Kit's internal mutation path uses a synchronous transaction wrapper (default 5 retry
@@ -203,5 +202,5 @@ binding's conflict error type. See [rust.md](./rust.md) / [python.md](./python.m
 - [Constraints](./constraints.md) — what each constrained mutation validates and enforces before it commits.
 - [Defaults & sequences](./defaults.md) — sequence, now, uuid, and static defaults.
 - [Errors](./errors.md) — `KitConflictError`, `isRetryableConflict`, and the `CONFLICT` code.
-- [Internal tables](./internal-tables.md) — `__kit_sequences`, `__kit_row_guards`, and the guard mechanism.
+- [Internal tables](./internal-tables.md) — `__kit_row_guards`, migration tables, and the Rust/Python named sequence table.
 - [Specification](./spec.md) — the concurrency model and snapshot-isolation safety in depth.

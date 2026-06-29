@@ -102,8 +102,8 @@ impl Database {
     }
 
     /// Allocate `count` values from the named sequence, returning the first
-    /// allocated value. Mirrors the TypeScript `allocateSequenceSync`: a fresh
-    /// sequence starts at `1` (SQL AUTO_INCREMENT semantics). The allocation
+    /// allocated value. A fresh sequence starts at `1` (SQL AUTO_INCREMENT
+    /// semantics). The allocation
     /// runs in its own committed transaction and retries on write-write
     /// conflicts.
     pub fn allocate_sequence(&self, name: &str, count: i64) -> Result<i64> {

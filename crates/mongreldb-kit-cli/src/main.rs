@@ -260,7 +260,7 @@ fn cmd_doctor(path: &Path) -> Result<()> {
         Ok(migs) => println!("[ok] {} applied migration(s)", migs.len()),
         Err(e) => {
             ok = false;
-            println!("[fail] cannot read _migrations: {e}");
+            println!("[fail] cannot read __kit_schema_migrations: {e}");
         }
     }
 

@@ -1,10 +1,10 @@
 # Internal tables
 
 MongrelDB Kit reserves a set of `__kit_*` tables that back migrations, the schema
-catalog, sequences, unique-key guards, row guards, and the migration lock. They
-are ordinary MongrelDB tables, created automatically when a database is opened or
-created, and they share identical on-disk shapes across the TypeScript, Rust, and
-Python kits.
+catalog, unique-key guards, row guards, and the migration lock. They are ordinary
+MongrelDB tables, created automatically when a database is opened or created. Where
+an internal table exists in more than one language implementation, its on-disk shape
+is stable across TypeScript, Rust, and Python.
 
 This page is reference material. You never write these tables directly; the kit
 maintains them as a side effect of migrations and CRUD.
@@ -55,7 +55,12 @@ stored schema.
 
 ## `__kit_sequences`
 
-Backs auto-increment sequences (the `sequenceDefault(...)` column default).
+Backs named sequence allocation in the Rust storage crate and Python facade. Current
+TypeScript databases use MongrelDB's native table `AUTO_INCREMENT` counters for
+`sequenceDefault(...)` and do **not** create this table for new databases. Older
+TypeScript databases may still contain it; the TypeScript migration runner reads it
+once to seed native engine counters so upgraded databases do not hand out ids below a
+legacy high-water mark.
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -63,10 +68,10 @@ Backs auto-increment sequences (the `sequenceDefault(...)` column default).
 | `next_value` | int64 | The next id to hand out. |
 | `updated_at` | text | ISO-8601 UTC timestamp of the last allocation. |
 
-There is also a secondary index on `sequence_name`. Allocation is **1-based**
-(the first id is `1`, never `0`, matching SQL `AUTO_INCREMENT`): the kit reads
-`next_value`, reserves a block of `count` ids inside a transaction, and bumps
-`next_value` by `count`. See [Defaults & sequences](./defaults.md).
+Allocation is **1-based** (the first id is `1`, never `0`, matching SQL
+`AUTO_INCREMENT`): the Rust/Python kit reads `next_value`, reserves a block of
+`count` ids inside a transaction, and bumps `next_value` by `count`. See
+[Defaults & sequences](./defaults.md).
 
 ## `__kit_unique_keys`
 
@@ -130,6 +135,6 @@ than the TTL.
 
 - [Migrations](./migrations.md) — how the runner reads and writes these tables.
 - [Constraints](./constraints.md) — the unique and foreign-key rules the guard tables enforce.
-- [Defaults & sequences](./defaults.md) — how `__kit_sequences` assigns ids.
+- [Defaults & sequences](./defaults.md) — auto-increment semantics and the TypeScript/Rust/Python implementation split.
 - [CLI](./cli.md) — `check` and `doctor` verify these tables exist.
 - [Specification](./spec.md) — key encoding and the concurrency model in depth.

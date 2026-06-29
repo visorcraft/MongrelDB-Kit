@@ -88,7 +88,7 @@ it never drives the work.
 | `ctx.kit` | The `KitDatabase`. |
 | `ctx.db` | The native MongrelDB database. |
 | `ctx.ensureTable(table)` | Create a table from its `TableSpec` if it does not exist. |
-| `ctx.addColumn(tableName, column)` | Add a column, backfilling non-nullable columns with their default. |
+| `ctx.addColumn(tableName, column)` | Add a column, backfilling non-nullable columns with their default; no-ops if the physical column already exists. |
 | `ctx.sql(sql)` | Run raw SQL. Available in async migrations only; throws in `migrateSync`. |
 
 For changes beyond adding a table or column, import the standalone helpers and
@@ -115,7 +115,7 @@ await migrate(db, schema, [
 | Helper | Effect |
 | --- | --- |
 | `createTable(kit, table)` / `ctx.ensureTable` | Create the table from its spec if missing. |
-| `addColumn(kit, t, column)` / `ctx.addColumn` | Add a column; non-nullable columns are backfilled with their default. |
+| `addColumn(kit, t, column)` / `ctx.addColumn` | Add a column; non-nullable columns are backfilled with their default; existing physical columns are skipped. |
 | `addIndex(kit, t, indexSpec)` | Add an index by rebuilding the table (MongrelDB has no add-index-in-place). |
 | `addUnique(kit, t, uniqueSpec)` | Add a unique constraint and backfill its guards; rejects data that already violates it. |
 | `addForeignKey(kit, t, fkSpec)` | Add a foreign key and touch parent row guards; rejects a child with a missing parent. |
@@ -228,9 +228,13 @@ Several operations scan existing rows and reconcile the kit's
 exists stay consistent. All backfills are idempotent — re-running leaves existing
 guards untouched.
 
+- **Add column (nullable or already present).** A nullable column needs no row backfill. In
+  TypeScript, `addColumn` first asks the engine for the current column names and returns without
+  mutation when the column already exists; this keeps reruns and partially repaired migrations from
+  adding the same column twice.
 - **Add column (non-nullable).** The column must have a default. The runner
   scans the table and writes the default into every row before committing.
-  A `sequence` default cannot be backfilled and raises `KitMigrationError`.
+  A `sequence` / `AUTO_INCREMENT` default cannot be backfilled and raises `KitMigrationError`.
 - **Add unique.** For each existing row whose unique columns are all non-null,
   the runner reserves a `__kit_unique_keys` guard. If two rows produce the same
   key, the existing data already violates the constraint and the migration
@@ -242,6 +246,32 @@ guards untouched.
   missing parent **fails** the migration.
 - **Drop table / drop unique.** The runner removes the unique-key and row guards
   owned by the dropped table or constraint.
+
+## Renaming tables
+
+TypeScript exposes `KitDatabase.renameTable(oldName, newName)`, a direct wrapper over the engine's
+durable table rename. It preserves the table id, rows, indexes, and handles, and rejects names that
+start with the reserved `__kit_` prefix.
+
+Use it in the transition migration with an open handle that can still see the old table, then pass
+the new schema to `migrateSync` so the schema catalog is rewritten to the renamed table. Future
+opens should use the new schema. There is no declarative `renameTable` migration op, so record the
+intent in the migration name and, if you use `ops` for checksums, an equivalent `rawSql`
+description:
+
+```ts
+const db = KitDatabase.openSync('./data', oldSchema);
+db.migrateSync(newSchema, [
+  {
+    version: 3,
+    name: 'rename_widgets_to_things',
+    ops: [{ kind: 'rawSql', sql: 'ALTER TABLE widgets RENAME TO things' }],
+    up({ kit }) {
+      kit.renameTable('widgets', 'things');
+    },
+  },
+]);
+```
 
 ## Walkthrough: evolving the store schema
 

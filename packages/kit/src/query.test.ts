@@ -168,6 +168,26 @@ describe('query builder', () => {
 		});
 	});
 
+	it('pushes single-column integer primary-key equality through the native PK path', () => {
+		withDbSync((db) => {
+			db.insertInto(users).values({ id: 1n, email: 'one@example.com' }).executeSync();
+			db.insertInto(users).values({ id: 2n, email: 'two@example.com' }).executeSync();
+			const trace = traceNativeTable(db, users.name);
+			try {
+				const rows = db.selectFrom(users).where(eq(users.id, 1n)).executeSync();
+				expect(rows).toHaveLength(1);
+				expect(rows[0].email).toBe('one@example.com');
+				expect(trace.queryCalls()).toBe(1);
+				expect(trace.conditions()[0]).toHaveLength(1);
+				expect((trace.conditions()[0]![0] as { kind: ConditionKind }).kind).toBe(
+					ConditionKind.PkInt64
+				);
+			} finally {
+				trace.restore();
+			}
+		});
+	});
+
 	it('collapses pushable AND predicates into one native query', () => {
 		withDbSync((db) => {
 			db.insertInto(users).values({ id: 1n, email: 'one@example.com' }).executeSync();

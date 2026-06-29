@@ -258,9 +258,9 @@ is `idx_<col1>_<col2>_…` unless you pass `name`.
 indexes: [index(['customer_id']), index(['email'], { unique: true, name: 'idx_email' })]
 ```
 
-The query builder pushes equality/range predicates down to the native engine only for indexed
-columns and `int64` columns; everything else is filtered in memory. Index the columns you filter on
-hot paths.
+The query builder pushes equality/range predicates down for numeric columns and equality / `IN`
+predicates for indexed bitmap columns (`text`, `timestamp`, `date`, and `json`). Everything else is
+filtered in memory. Index the columns you filter on hot paths.
 
 ### `unique(columns, { name? })`
 

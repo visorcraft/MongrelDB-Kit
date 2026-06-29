@@ -33,9 +33,9 @@ The kit is organized into four layers:
 
 ## Internal tables
 
-The kit reserves tables whose names start with `__kit_` (TypeScript) or `_` (Rust CLI). These tables are created automatically and are excluded from normal application table enumeration.
+The kit reserves tables whose names start with `__kit_`. These tables are created automatically when needed and are excluded from normal application table enumeration.
 
-### `__kit_schema_migrations` / `_migrations`
+### `__kit_schema_migrations`
 
 Records every migration that has been applied.
 
@@ -43,10 +43,10 @@ Records every migration that has been applied.
 |---|---|---|
 | `version` | int64 | Primary key; migration number |
 | `name` | text | Human-readable migration name |
-| `checksum` | text | SHA-256 of `version:name` |
-| `applied_at` | text | ISO-8601 timestamp (TypeScript) or Unix seconds (Rust) |
-| `kit_version` | text | Kit release version (TypeScript) |
-| `status` | text | `applied`, `failed`, or `in_progress` (TypeScript) |
+| `checksum` | text | Content-aware SHA-256 of the migration's canonical `version` / `name` / `ops` string |
+| `applied_at` | text | ISO-8601 timestamp |
+| `kit_version` | text | Kit release version |
+| `status` | text | `applied`, `failed`, or `in_progress` |
 
 ### `__kit_schema_catalog`
 
@@ -61,7 +61,10 @@ Stores a single row describing the current application schema.
 
 ### `__kit_sequences`
 
-Tracks sequence high-water marks for synthetic primary keys.
+Tracks named sequence high-water marks in the Rust storage crate and Python facade. Current
+TypeScript databases use native engine `AUTO_INCREMENT` counters for `sequenceDefault(...)`; the
+TypeScript runner only reads `__kit_sequences` as a legacy upgrade source when the table already
+exists.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -141,12 +144,15 @@ rg:users:s:alice@example.com
 
 ### Migration checksums
 
-SHA-256 of `version:name`, lowercase hex.
+SHA-256 of the canonical migration content string, lowercase hex. The canonical shape is:
 
-Example:
 ```text
-checksum("initial", 1) = "6e9cbbbc7811d726062224b1faf7f8678e36dae90857bda4097ab3c119f8f0b6"
+{"version":<n>,"name":<json>,"ops":[<op>,...]}
 ```
+
+The `ops` list is ordered and each operation uses a fixed key order, so TypeScript, Rust, and
+Python produce the same checksum for the same logical migration. See
+[Migrations](./migrations.md#checksums-and-drift-detection) for examples.
 
 ### Schema checksums
 

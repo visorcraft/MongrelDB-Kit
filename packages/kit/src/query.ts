@@ -285,6 +285,17 @@ function makeEqCondition(table: TableSpec, column: ColumnSpec, value: unknown): 
 
 	if (column.storageType === 'int64') {
 		if (typeof value !== 'bigint') return null;
+		// Integer primary keys are stored in the engine's PK index, not the
+		// generic range index. Route equality lookups through the PK path so
+		// explicit-id tables resolve correctly.
+		if (table.primaryKey.length === 1 && table.primaryKey[0] === column.name) {
+			return {
+				kind: ConditionKind.PkInt64,
+				columnId: column.id,
+				int64Lo: value,
+				int64Hi: value
+			};
+		}
 		return {
 			kind: ConditionKind.RangeInt,
 			columnId: column.id,

@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 /// Run pending migrations against `db`.
 ///
 /// Creates internal tables if missing, applies each pending migration in
-/// version order, and records it in `_migrations`.
+/// version order, and records it in `__kit_schema_migrations`.
 pub fn migrate(db: &mut crate::db::Database, migrations: &[Migration]) -> Result<()> {
     let core = db.core_db();
 
@@ -115,7 +115,11 @@ fn apply_migration_ops(
                         let handle = core.table(table).map_err(KitError::from)?;
                         let mut guard = handle.lock();
                         guard
-                            .add_column(column, crate::schema::to_core_type(col.storage_type))
+                            .add_column(
+                                column,
+                                crate::schema::to_core_type(col.storage_type),
+                                crate::schema::to_core_flags(t, col),
+                            )
                             .map_err(KitError::from)?;
                     }
                 }

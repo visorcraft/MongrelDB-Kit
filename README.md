@@ -1,6 +1,6 @@
 # MongrelDB Kit
 
-Multi-language application persistence layer for [MongrelDB](https://github.com/visorcraft/mongreldb). MongrelDB Kit gives TypeScript, Rust, and Python applications a schema-aware, query-builder-style API with migrations, relational constraints, and stable semantics across languages.
+Multi-language application persistence layer for [MongrelDB](https://github.com/visorcraft/mongreldb). MongrelDB Kit gives TypeScript, Rust, and Python applications a schema-aware query-builder API with migrations, relational constraints, batch writes, auto-increment ids, and stable semantics across languages.
 
 [![crates.io](https://img.shields.io/crates/v/mongreldb-kit)](https://crates.io/crates/mongreldb-kit)
 [![npm](https://img.shields.io/npm/v/@mongreldb/kit)](https://www.npmjs.com/package/@mongreldb/kit)
@@ -26,26 +26,30 @@ Multi-language application persistence layer for [MongrelDB](https://github.com/
 - [Testing](docs/testing.md)
 - [Production checklist](docs/production-checklist.md)
 
-## Quick example
+## Quick Example
 
 The same schema and CRUD flow in TypeScript, Rust, and Python:
 
 **TypeScript**
 ```ts
-import { KitDatabase, Schema, table, int, text } from '@mongreldb/kit';
+import { KitDatabase, Schema, table, int, text, sequenceDefault, unique } from '@mongreldb/kit';
 
 const users = table('users', {
   columns: [
-    int('id', { primaryKey: true }),
+    int('id', { primaryKey: true, default: sequenceDefault('users_id_seq') }),
     text('email'),
     text('name', { nullable: true })
   ],
   primaryKey: 'id',
-  indexes: [{ name: 'idx_email', columns: ['email'], unique: true }]
+  unique: [unique(['email'], { name: 'users_email_uq' })]
 });
 
-const db = KitDatabase.openSync('./app.kitdb', new Schema([users]));
-const inserted = db.insertInto(users).values({ id: 1n, email: 'alice@example.com' }).executeSync();
+const db = KitDatabase.openSync('./data', new Schema([users]));
+const inserted = db.insertInto(users).values({ email: 'alice@example.com' }).executeSync();
+const many = db.insertInto(users).valuesMany([
+  { email: 'bob@example.com' },
+  { email: 'cleo@example.com' }
+]).executeSync();
 ```
 
 See the language docs for complete runnable examples.
@@ -59,7 +63,9 @@ rtk cargo test --workspace
 
 # TypeScript
 cd packages/kit
-rtk npm install
+rtk npm ci
+rtk npm run build
+rtk npm run check
 rtk npm test
 
 # Python
@@ -67,7 +73,7 @@ cd python/mongreldb_kit
 rtk python -m venv .venv
 rtk .venv/bin/pip install maturin
 rtk maturin develop
-rtk .venv/bin/pytest ../../python/tests
+rtk .venv/bin/pytest ../../python/tests ../../tests/conformance/python
 ```
 
 ## License

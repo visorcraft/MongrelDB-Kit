@@ -415,11 +415,16 @@ const total = db.nativeDb.table('orders').count(); // bigint, straight from the 
 The builder pushes the predicates it can into the storage engine and computes the rest in
 JavaScript. Know where the line is:
 
-- **Predicate pushdown is narrow.** `eq` and the range operators (`gt`/`gte`/`lt`/`lte`) push down
-  for `int64` (and `float`) columns, and `eq`/`inList` push down for **indexed** `text` columns
-  (via a bitmap index). Everything else — `ne`, `isNull`/`isNotNull`, `like`, `contains`,
-  `notInList`, and `eq` on a non-indexed text column — runs as a full table scan with the match
-  evaluated in JS. `inList` only pushes down when *every* value is individually pushable.
+- **Predicate pushdown is selective.** `eq` and the range operators (`gt`/`gte`/`lt`/`lte`) push
+  down for `int64` and `float64` columns. `eq` and `inList` push down for indexed bitmap columns
+  (`text`, `timestamp`, `date`, and `json`). Pushable `and(...)` children are collapsed into one
+  native query, and `or(eq(...), eq(...))` / mixed `or` + `inList` on the same indexed bitmap column
+  can become one native `IN` query. Everything else — `ne`, `isNull`/`isNotNull`, `like`,
+  `contains`, `notInList`, cross-column `or`, and `eq` on a non-indexed text column — runs as a
+  full table scan with the match evaluated in JS.
+- **Counts use native cardinality when fully pushed down.** `selectCount()` with no residual
+  predicate uses the engine's row count / `countWhere` path, including bitmap `IN` counts. If any
+  residual predicate remains, the Kit materializes matching rows and counts them in JS.
 - **Joins are in-memory nested loops.** Each joined table is fully scanned once and re-evaluated for
   every combination; there is no predicate pushdown into a joined table. Intended for modest working
   sets.

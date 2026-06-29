@@ -3,7 +3,7 @@ import type { Database as NativeDatabase, Cell, RowJs } from 'mongreldb/native.j
 import { ColumnType, IndexKindSpec, ConditionKind } from 'mongreldb/native.js';
 import { tableFromIPC } from 'apache-arrow';
 import { KitDatabase } from './db.js';
-import type { Schema } from './schema.js';
+import { table, int, text, type Schema } from './schema.js';
 import type { TableSpec, ColumnSpec, IndexSpec, UniqueSpec, ForeignKeySpec, ColumnStorageType, PkValue } from './types.js';
 import { toCells, pkValueFromRow, parentExists, type ConstraintKit } from './constraints.js';
 import { validateRow } from './validation.js';
@@ -18,6 +18,47 @@ import {
 	kitRowGuards
 } from './internalTables.js';
 
+/**
+ * Schema of the legacy Kit sequence table that existed before engine-native
+ * auto-increment. When present, its rows are used as a one-time fallback to
+ * seed per-table engine counters so upgraded databases do not hand out ids
+ * below a sequence that was already advanced.
+ */
+const legacyKitSequences = table('__kit_sequences', {
+	columns: [
+		text('sequence_name', { primaryKey: true }),
+		int('next_value', { nullable: false })
+	],
+	primaryKey: ['sequence_name']
+});
+
+function seedFromLegacyKitSequences(kit: KitDatabase): void {
+	const db = kit.nativeDb;
+	if (!db.tableNames().includes('__kit_sequences')) {
+		return;
+	}
+	for (const { row } of fullScanRows(db, legacyKitSequences)) {
+		const sequenceName = row.sequence_name as string | null;
+		const nextValue = row.next_value as bigint | null;
+		if (!sequenceName || nextValue === null || nextValue <= 1n) {
+			continue;
+		}
+		const tableName = sequenceName.endsWith('_id_seq')
+			? sequenceName.slice(0, -'_id_seq'.length)
+			: sequenceName;
+		if (!db.tableNames().includes(tableName)) {
+			continue;
+		}
+		// Advance the engine counter until it is at least the legacy next value.
+		// reserveAutoIncSync seeds from max(existing id) on its first call, so this
+		// also covers the case where rows already exist with higher ids.
+		while (true) {
+			const reserved = kit.reserveAutoIncSync(tableName);
+			if (reserved === null) break;
+			if (reserved >= nextValue) break;
+		}
+	}
+}
 
 const I64_MIN = -9_223_372_036_854_775_808n;
 const I64_MAX = 9_223_372_036_854_775_807n;
@@ -561,6 +602,7 @@ export function migrateSync(kit: KitDatabase, schema: Schema, migrations: Migrat
 		}
 
 		writeSchemaCatalogSync(kit, schema);
+		seedFromLegacyKitSequences(kit);
 	} finally {
 		releaseLockSync(kit);
 	}
@@ -594,6 +636,7 @@ export async function migrate(kit: KitDatabase, schema: Schema, migrations: Migr
 		}
 
 		await writeSchemaCatalog(kit, schema);
+		seedFromLegacyKitSequences(kit);
 	} finally {
 		await releaseLock(kit);
 	}
@@ -748,7 +791,8 @@ function addColumnSync(kit: KitDatabase, tableName: string, column: ColumnSpec):
 		name: column.name,
 		ty: toMongrelColumnType(column.storageType),
 		primaryKey: column.primaryKey,
-		nullable: column.nullable
+		nullable: column.nullable,
+		autoIncrement: column.default?.kind === 'sequence'
 	});
 
 	if (!column.nullable) {

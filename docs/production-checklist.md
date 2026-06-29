@@ -26,7 +26,7 @@ Monitor these signals:
 
 - Disk space on the database volume
 - Migration lock age in `__kit_migration_locks`
-- Query latency for full-table scans (the kit currently materializes all visible rows for unindexed filters)
+- Query latency for full-table scans (the kit materializes visible rows for unpushable filters)
 - Error rates by category: `DUPLICATE`, `FOREIGN_KEY`, `RESTRICT`, `VALIDATION`, `MIGRATION`
 - Health endpoint: `GET /health` for adapter-node deployments
 
@@ -34,6 +34,8 @@ Monitor these signals:
 
 - Index columns used in equality filters and joins.
 - Avoid large unfiltered full-table scans in hot paths.
+- For TypeScript deployments, build the `mongreldb` native addon in release mode; a debug `.node`
+  will dominate bulk insert/delete and pushed-down query timings.
 - Keep transactions short to reduce conflict retries.
 - Use batch inserts (`valuesMany` / `insert_many`) for bulk loads — one transaction is far
   cheaper than a row-at-a-time loop.
@@ -43,7 +45,8 @@ Monitor these signals:
 - Always run migrations before starting application servers.
 - Run migrations from one process at a time; the advisory lock prevents collisions.
 - Test migrations against a copy of production data in staging.
-- Keep migration names stable; the checksum is derived from `version:name`.
+- Keep migration names and `ops` metadata stable; the checksum covers `version`, `name`, and the
+  ordered operation list.
 
 ## Security
 

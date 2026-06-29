@@ -8,7 +8,9 @@ This guide shows how to define a schema, run migrations, and perform CRUD with `
 npm install @mongreldb/kit mongreldb
 ```
 
-`mongreldb` is a peer dependency providing the native database bindings.
+`mongreldb` is a peer dependency providing the native database bindings. In a local checkout, build
+the sibling `crates/mongreldb-node` addon with `npm run build` (release mode) before benchmarking;
+debug builds make bulk writes and pushed-down queries look much slower than they are.
 
 ## Complete example
 
@@ -65,7 +67,7 @@ const schema = new Schema([users, posts]);
 // Open or create the database and run migrations
 // ---------------------------------------------------------------------------
 
-const db = KitDatabase.openSync('./app.kitdb', schema);
+const db = KitDatabase.openSync('./app-data', schema);
 
 db.migrateSync(schema, [
   {
@@ -170,6 +172,7 @@ db.selectFrom(table)
 Insert:
 ```ts
 db.insertInto(table).values({ ... }).executeSync();
+db.insertInto(table).valuesMany([{ ... }, { ... }]).executeSync();
 ```
 
 Update:
@@ -194,6 +197,14 @@ db.deleteFrom(table).where(predicate).executeSync();
 
 Joins, aggregates, `groupBy`/`having`, `distinct`, subqueries, `exists`, and CTEs are part of the
 same builder — see the [Query builder](./query-builder.md) guide for the full surface.
+
+## Database helpers
+
+- `db.tableNames()` returns application tables and hides the reserved `__kit_*` namespace.
+- `db.renameTable(oldName, newName)` durably renames a live table. Pair it with a matching schema
+  update in a migration; it rejects `__kit_` names.
+- `db.nativeDb` exposes the underlying `mongreldb` database for raw operations that intentionally
+  bypass Kit validation, defaults, and relational guards.
 
 ## Migrations
 
@@ -223,7 +234,7 @@ Save the file as `kit-demo.ts` and run it with Node 22+:
 npx tsx kit-demo.ts
 ```
 
-The first run creates `./app.kitdb`. Subsequent runs open the existing database.
+The first run creates `./app-data`. Subsequent runs open the existing database directory.
 
 ## See also
 

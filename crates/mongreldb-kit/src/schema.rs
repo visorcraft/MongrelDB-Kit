@@ -5,7 +5,7 @@ use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::{
     ColumnDef, ColumnFlags, IndexDef, IndexKind, Schema as CoreSchema, TypeId,
 };
-use mongreldb_kit_core::schema::{ColumnType, Table as KitTable};
+use mongreldb_kit_core::schema::{Column, ColumnType, Table as KitTable};
 use serde_json::{Map, Value};
 
 /// Convert a kit table to a core schema.
@@ -13,20 +13,11 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
     let columns: Vec<ColumnDef> = table
         .columns
         .iter()
-        .map(|c| {
-            let mut flags = ColumnFlags::empty();
-            if c.nullable {
-                flags = flags.with(ColumnFlags::NULLABLE);
-            }
-            if table.primary_key.contains(&c.name) || c.primary_key {
-                flags = flags.with(ColumnFlags::PRIMARY_KEY);
-            }
-            ColumnDef {
-                id: c.id as u16,
-                name: c.name.clone(),
-                ty: to_core_type(c.storage_type),
-                flags,
-            }
+        .map(|c| ColumnDef {
+            id: c.id as u16,
+            name: c.name.clone(),
+            ty: to_core_type(c.storage_type),
+            flags: to_core_flags(table, c),
         })
         .collect();
 
@@ -60,6 +51,17 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
         indexes,
         colocation: Vec::new(),
     }
+}
+
+pub(crate) fn to_core_flags(table: &KitTable, column: &Column) -> ColumnFlags {
+    let mut flags = ColumnFlags::empty();
+    if column.nullable {
+        flags = flags.with(ColumnFlags::NULLABLE);
+    }
+    if table.primary_key.contains(&column.name) || column.primary_key {
+        flags = flags.with(ColumnFlags::PRIMARY_KEY);
+    }
+    flags
 }
 
 pub(crate) fn to_core_type(ty: ColumnType) -> TypeId {
