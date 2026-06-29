@@ -168,7 +168,7 @@ describe('query builder', () => {
 		});
 	});
 
-	it('pushes single-column integer primary-key equality through the native PK path', () => {
+	it('pushes single-column integer primary-key equality through the native range path', () => {
 		withDbSync((db) => {
 			db.insertInto(users).values({ id: 1n, email: 'one@example.com' }).executeSync();
 			db.insertInto(users).values({ id: 2n, email: 'two@example.com' }).executeSync();
@@ -180,7 +180,7 @@ describe('query builder', () => {
 				expect(trace.queryCalls()).toBe(1);
 				expect(trace.conditions()[0]).toHaveLength(1);
 				expect((trace.conditions()[0]![0] as { kind: ConditionKind }).kind).toBe(
-					ConditionKind.PkInt64
+					ConditionKind.RangeInt
 				);
 			} finally {
 				trace.restore();
