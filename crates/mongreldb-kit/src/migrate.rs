@@ -8,7 +8,7 @@ use crate::internal::{
 use crate::schema::{core_row_to_json, to_core_schema, Row as KitRow};
 use crate::txn::{encoded_pk_for, fk_values_null, parent_pk_components, unique_key};
 use mongreldb_core::memtable::{Row as CoreRow, Value as CoreValue};
-use mongreldb_core::Database as CoreDatabase;
+use mongreldb_core::{AlterColumn, Database as CoreDatabase};
 use mongreldb_kit_core::keys::{encode_pk, encode_row_guard_key, KeyComponent};
 use mongreldb_kit_core::migrations::{plan_migrations, Migration, MigrationOp};
 use mongreldb_kit_core::schema::{Schema as KitSchema, Table as KitTable};
@@ -133,16 +133,16 @@ fn apply_migration_ops(
             MigrationOp::AddForeignKey { table, constraint } => {
                 backfill_foreign_key(core, schema, table, constraint)?;
             }
+            MigrationOp::AlterColumn { table, column } => {
+                alter_column(core, schema, table, column)?;
+            }
             MigrationOp::AddCheck { .. }
             | MigrationOp::DropCheck { .. }
-            | MigrationOp::DropForeignKey { .. }
-            | MigrationOp::AlterColumn { .. } => {
+            | MigrationOp::DropForeignKey { .. } => {
                 // Metadata-only: check evaluation, foreign-key enforcement, and
-                // column application-type/constraints are driven by the
-                // re-persisted schema, so there is no catalog or guard mutation
-                // to perform here. `alter_column` is restricted by the checksum
-                // contract to same-storage-type, same-nullability changes
-                // (e.g. text <-> json), so no row rewrite is needed.
+                // dropped foreign-key definitions are driven by the re-persisted
+                // schema, so there is no catalog or guard mutation to perform
+                // here.
             }
             MigrationOp::DropColumn { table, column } => {
                 return Err(KitError::Migration(format!(
@@ -169,6 +169,65 @@ fn apply_migration_ops(
             }
         }
     }
+    Ok(())
+}
+
+fn alter_column(
+    core: &CoreDatabase,
+    schema: &KitSchema,
+    table_name: &str,
+    column_name: &str,
+) -> Result<()> {
+    let table = schema
+        .table(table_name)
+        .ok_or_else(|| KitError::Migration(format!("table {table_name:?} not found")))?;
+
+    let handle = core.table(table_name).map_err(KitError::from)?;
+    let guard = handle.lock();
+    let current_columns = guard.schema().columns.clone();
+    drop(guard);
+
+    let target = match table.column(column_name) {
+        Some(col) => col,
+        None => {
+            let current = current_columns
+                .iter()
+                .find(|col| col.name == column_name)
+                .ok_or_else(|| {
+                    KitError::Migration(format!(
+                        "column {table_name}.{column_name} not found in current or target schema"
+                    ))
+                })?;
+            table
+                .columns
+                .iter()
+                .find(|col| col.id as u16 == current.id)
+                .ok_or_else(|| {
+                    KitError::Migration(format!(
+                        "target column for {table_name}.{column_name} with id {} not found",
+                        current.id
+                    ))
+                })?
+        }
+    };
+
+    let source_name = current_columns
+        .iter()
+        .find(|col| col.id == target.id as u16)
+        .map(|col| col.name.as_str())
+        .unwrap_or(column_name);
+
+    core.alter_column(
+        table_name,
+        source_name,
+        AlterColumn {
+            name: Some(target.name.clone()),
+            ty: Some(crate::schema::to_core_type(target.storage_type)),
+            flags: Some(crate::schema::to_core_flags(table, target)),
+        },
+    )
+    .map_err(KitError::from)?;
+
     Ok(())
 }
 

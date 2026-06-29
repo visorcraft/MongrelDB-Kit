@@ -854,12 +854,13 @@ describe('migration ops', () => {
 		const dir = makeTempDir();
 		const db = await KitDatabase.open(dir, new Schema([widgetsV1]));
 		try {
+			const labelId = widgetsV1.column('label').id;
 			await db.insertInto(widgetsV1).values({ id: 1n, label: 'one' }).execute();
 
 			await alterColumn(db, 'widgets', 'label', widgetsV2.column('name'));
 
 			expect(db.nativeDb.tableColumns('widgets')).toEqual(['id', 'name']);
-			expect(db.schema.table('widgets').column('name').id).toBe(widgetsV1.column('label').id);
+			expect(db.schema.table('widgets').column('name').id).toBe(labelId);
 			const rows = await db.selectFrom(widgetsV2).execute();
 			expect(rows).toEqual([{ id: 1n, name: 'one' }]);
 		} finally {

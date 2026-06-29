@@ -116,6 +116,7 @@ await migrate(db, schema, [
 | --- | --- |
 | `createTable(kit, table)` / `ctx.ensureTable` | Create the table from its spec if missing. |
 | `addColumn(kit, t, column)` / `ctx.addColumn` | Add a column; non-nullable columns are backfilled with their default; existing physical columns are skipped. |
+| `alterColumn(kit, t, oldName, column)` / `ctx.alterColumn` | Alter an existing column through native MongrelDB validation. Supports renames, native type changes that do not require stored-row conversion, and nullability changes that existing data satisfies. |
 | `addIndex(kit, t, indexSpec)` | Add an index by rebuilding the table (MongrelDB has no add-index-in-place). |
 | `addUnique(kit, t, uniqueSpec)` | Add a unique constraint and backfill its guards; rejects data that already violates it. |
 | `addForeignKey(kit, t, fkSpec)` | Add a foreign key and touch parent row guards; rejects a child with a missing parent. |
@@ -167,6 +168,7 @@ Verify against this matrix rather than assuming symmetry.
 | `createTable` | `createTable` / `ctx.ensureTable` | implemented |
 | `dropTable` | `dropTable` (clears guards) | implemented (clears guards) |
 | `addColumn` | `addColumn` / `ctx.addColumn` (backfills non-nullable defaults) | implemented (adds the column) |
+| `alterColumn` | `alterColumn` / `ctx.alterColumn` (native ALTER COLUMN validation) | implemented (native ALTER COLUMN validation) |
 | `addUnique` | `addUnique` (backfill + reject violations) | implemented (backfill + reject violations) |
 | `dropUnique` | — | implemented (deletes the constraint's guards) |
 | `addForeignKey` | `addForeignKey` (backfill + reject missing parent) | implemented (backfill + reject missing parent) |

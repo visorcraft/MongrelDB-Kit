@@ -222,6 +222,50 @@ def test_migrate_records_versions():
         assert txn.get_by_pk("users", 1) is None
 
 
+def test_migrate_alter_column_renames_and_relaxes_nullability():
+    path = tmp_db()
+    widgets_v1 = table(
+        name="widgets",
+        id=10,
+        columns=[
+            int("id", 1, primary_key=True),
+            text("label", 2),
+        ],
+        primary_key="id",
+    )
+    widgets_v2 = table(
+        name="widgets",
+        id=10,
+        columns=[
+            int("id", 1, primary_key=True),
+            text("name", 2, nullable=True),
+        ],
+        primary_key="id",
+    )
+    db = Database.create(path, {"tables": [widgets_v1]})
+
+    with db.begin() as txn:
+        txn.insert("widgets", {"id": 1, "label": "one"})
+        txn.commit()
+
+    db.set_schema({"tables": [widgets_v2]})
+    db.migrate(
+        [
+            {
+                "version": 1,
+                "name": "alter_widget_name",
+                "ops": [{"alter_column": {"table": "widgets", "column": "label"}}],
+            }
+        ]
+    )
+
+    with db.begin() as txn:
+        row = txn.get_by_pk("widgets", 1)
+        assert row["name"] == "one"
+        txn.insert("widgets", {"id": 2, "name": None})
+        txn.commit()
+
+
 def test_allocate_sequence_and_table_names():
     path = tmp_db()
     db = Database.create(path, users_orders_schema())

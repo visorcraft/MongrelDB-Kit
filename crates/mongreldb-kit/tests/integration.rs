@@ -1,3 +1,4 @@
+use mongreldb_core::schema::{ColumnFlags, TypeId};
 use mongreldb_kit::{
     AggFunc, Aggregate, AggregateQuery, Column, ColumnType, Cte, Database, Direction, Expr,
     ForeignKey, ForeignKeyAction, Index, Join, JoinKind, JoinQuery, KitError, Literal, Migration,
@@ -653,6 +654,42 @@ fn insert_person(txn: &mut Transaction, id: i64, email: &str) -> Result<Row, Kit
     txn.insert("people", row)
 }
 
+fn widgets_table(value_name: &str, value_type: ColumnType, nullable: bool) -> Table {
+    Table {
+        id: 30,
+        name: "widgets".into(),
+        columns: vec![
+            Column::new(1, "id", ColumnType::Int64),
+            Column {
+                nullable,
+                ..Column::new(2, value_name, value_type)
+            },
+        ],
+        primary_key: vec!["id".into()],
+        indexes: vec![],
+        foreign_keys: vec![],
+        unique_constraints: vec![],
+        check_constraints: vec![],
+    }
+}
+
+fn alter_widget_value_migration(column: &str) -> Vec<Migration> {
+    vec![Migration {
+        version: 1,
+        name: "alter_widget_value".into(),
+        ops: vec![MigrationOp::AlterColumn {
+            table: "widgets".into(),
+            column: column.into(),
+        }],
+    }]
+}
+
+fn core_widget_column(db: &Database, name: &str) -> mongreldb_core::schema::ColumnDef {
+    let handle = db.raw().table("widgets").unwrap();
+    let guard = handle.lock();
+    guard.schema().column(name).unwrap().clone()
+}
+
 #[test]
 fn migrate_add_unique_backfills_and_enforces() {
     let dir = temp_dir();
@@ -708,6 +745,99 @@ fn migrate_add_unique_rejects_existing_duplicates() {
     }];
     let err = mongreldb_kit::migrate(&mut db, &migrations).unwrap_err();
     assert!(matches!(err, KitError::Migration(_)));
+}
+
+#[test]
+fn migrate_alter_column_renames_native_column() {
+    let dir = temp_dir();
+    let v1 = widgets_table("label", ColumnType::Text, false);
+    let v2 = widgets_table("name", ColumnType::Text, false);
+    let mut db = Database::create(&dir, Schema::new(vec![v1]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let mut row = Map::new();
+    row.insert("id".into(), json!(1));
+    row.insert("label".into(), json!("one"));
+    txn.insert("widgets", row).unwrap();
+    txn.commit().unwrap();
+
+    db.set_schema(Schema::new(vec![v2]).unwrap());
+    mongreldb_kit::migrate(&mut db, &alter_widget_value_migration("label")).unwrap();
+
+    assert!(db
+        .raw()
+        .table("widgets")
+        .unwrap()
+        .lock()
+        .schema()
+        .column("label")
+        .is_none());
+    assert_eq!(core_widget_column(&db, "name").id, 2);
+
+    let txn = db.begin().unwrap();
+    let row = txn.get_by_pk("widgets", &json!(1)).unwrap().unwrap();
+    assert_eq!(row.values.get("name"), Some(&json!("one")));
+}
+
+#[test]
+fn migrate_alter_column_changes_native_type_on_empty_table() {
+    let dir = temp_dir();
+    let v1 = widgets_table("qty", ColumnType::Int64, false);
+    let v2 = widgets_table("qty", ColumnType::Float64, false);
+    let mut db = Database::create(&dir, Schema::new(vec![v1]).unwrap()).unwrap();
+
+    db.set_schema(Schema::new(vec![v2]).unwrap());
+    mongreldb_kit::migrate(&mut db, &alter_widget_value_migration("qty")).unwrap();
+
+    assert_eq!(core_widget_column(&db, "qty").ty, TypeId::Float64);
+
+    let mut txn = db.begin().unwrap();
+    let mut row = Map::new();
+    row.insert("id".into(), json!(1));
+    row.insert("qty".into(), json!(1.5));
+    txn.insert("widgets", row).unwrap();
+    txn.commit().unwrap();
+}
+
+#[test]
+fn migrate_alter_column_drops_not_null() {
+    let dir = temp_dir();
+    let v1 = widgets_table("name", ColumnType::Text, false);
+    let v2 = widgets_table("name", ColumnType::Text, true);
+    let mut db = Database::create(&dir, Schema::new(vec![v1]).unwrap()).unwrap();
+
+    db.set_schema(Schema::new(vec![v2]).unwrap());
+    mongreldb_kit::migrate(&mut db, &alter_widget_value_migration("name")).unwrap();
+
+    assert!(core_widget_column(&db, "name")
+        .flags
+        .contains(ColumnFlags::NULLABLE));
+
+    let mut txn = db.begin().unwrap();
+    let mut row = Map::new();
+    row.insert("id".into(), json!(1));
+    row.insert("name".into(), Value::Null);
+    txn.insert("widgets", row).unwrap();
+    txn.commit().unwrap();
+}
+
+#[test]
+fn migrate_alter_column_rejects_set_not_null_with_existing_nulls() {
+    let dir = temp_dir();
+    let v1 = widgets_table("name", ColumnType::Text, true);
+    let v2 = widgets_table("name", ColumnType::Text, false);
+    let mut db = Database::create(&dir, Schema::new(vec![v1]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let mut row = Map::new();
+    row.insert("id".into(), json!(1));
+    row.insert("name".into(), Value::Null);
+    txn.insert("widgets", row).unwrap();
+    txn.commit().unwrap();
+
+    db.set_schema(Schema::new(vec![v2]).unwrap());
+    let err = mongreldb_kit::migrate(&mut db, &alter_widget_value_migration("name")).unwrap_err();
+    assert!(matches!(err, KitError::Validation(_)));
 }
 
 fn owners_table() -> Table {
