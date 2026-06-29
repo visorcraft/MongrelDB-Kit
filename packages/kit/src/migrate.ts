@@ -733,8 +733,9 @@ function addColumnSync(kit: KitDatabase, tableName: string, column: ColumnSpec):
 
 	const db = kit.nativeDb;
 	const table = kit.schema.table(tableName);
-	if (table.columns.some((c) => c.name === column.name)) {
-		throw new KitMigrationError(`Column "${column.name}" already exists on "${tableName}"`);
+	if (db.tableNames().includes(tableName)) {
+		const dbColumns = db.tableColumns(tableName);
+		if (dbColumns.includes(column.name)) return;
 	}
 
 	const updatedTable: TableSpec = {
