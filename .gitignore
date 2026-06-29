@@ -13,6 +13,8 @@ Thumbs.db
 !.env.example
 !.env.test
 *.local
+CLAUDE.md
+AGENTS.md
 
 # Local planning notes
 PLAN.md
