@@ -10,7 +10,9 @@
 //!   `__kit_row_guards` row. A concurrent parent delete also writes that guard
 //!   key, forcing a write-write conflict so the unsafe snapshot interleaving is
 //!   impossible.
-//! * Composite primary keys reserve a `__pk_<table>` guard in `__kit_unique_keys`.
+//! * Every primary key (single-column and composite) reserves a `__pk_<table>`
+//!   guard in `__kit_unique_keys`, so a duplicate-PK insert is rejected instead
+//!   of silently upserting (last-writer-wins).
 //!
 //! Reads inside a transaction use the transaction's read snapshot; writes staged
 //! earlier in the same transaction are tracked in memory so read-your-writes
@@ -82,6 +84,11 @@ impl<'a> Transaction<'a> {
     pub fn insert(&mut self, table: &str, mut row: Map<String, Value>) -> Result<Row> {
         let t = self.require_table(table)?.clone();
         self.apply_defaults(&mut row, &t)?;
+        // Normalize any column still unset to explicit null, so the stored row and
+        // the returned row agree (an omitted nullable column reads back as null).
+        for col in &t.columns {
+            row.entry(col.name.clone()).or_insert(Value::Null);
+        }
         mongreldb_kit_core::validation::validate_row(&t, &row)?;
 
         // Validate all constraints before staging any writes.
@@ -114,12 +121,14 @@ impl<'a> Transaction<'a> {
             .get_by_pk_internal(table, &pk_map)?
             .ok_or_else(|| KitError::Integrity(format!("row not found in {table}")))?;
 
+        let patch_keys: HashSet<String> = patch.keys().cloned().collect();
         let mut values = old_row.values.clone();
         for (k, v) in patch {
             if t.column(&k).is_some() {
                 values.insert(k, v);
             }
         }
+        self.apply_update_defaults(&mut values, &patch_keys, &t);
         mongreldb_kit_core::validation::validate_row(&t, &values)?;
         self.check_unique_constraints(&t, &values, Some(&old_row.values))?;
         self.check_foreign_keys(&t, &values)?;
@@ -468,7 +477,12 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    // ── primary-key guard (composite keys) ─────────────────────────────────
+    // ── primary-key guard ──────────────────────────────────────────────────
+    //
+    // Every primary key (single-column and composite) reserves a `__pk_<table>`
+    // guard in `__kit_unique_keys`. Without this the engine would upsert a
+    // duplicate single-column PK (last-writer-wins) instead of rejecting it; the
+    // guard makes a duplicate insert throw and be conflict-safe.
 
     fn check_pk_guard(
         &self,
@@ -476,7 +490,7 @@ impl<'a> Transaction<'a> {
         values: &Map<String, Value>,
         is_insert: bool,
     ) -> Result<()> {
-        if table.primary_key.len() <= 1 || !is_insert {
+        if table.primary_key.is_empty() || !is_insert {
             return Ok(());
         }
         let key = pk_guard_key(table, values);
@@ -502,7 +516,7 @@ impl<'a> Transaction<'a> {
     }
 
     fn reserve_pk_guard(&mut self, table: &KitTable, values: &Map<String, Value>) -> Result<()> {
-        if table.primary_key.len() <= 1 {
+        if table.primary_key.is_empty() {
             return Ok(());
         }
         let key = pk_guard_key(table, values);
@@ -681,7 +695,9 @@ impl<'a> Transaction<'a> {
         }
         // Re-run validation (including checks) on the patched child row.
         mongreldb_kit_core::validation::validate_row(&child_table, &values)?;
-        // Recompute unique guards for the patched row.
+        // Recompute unique guards for the patched row. The row itself survives a
+        // set-null (only its FK columns change), so its primary-key guard is
+        // re-reserved after `delete_guards_for` clears it.
         self.delete_guards_for(&child_table, &child_row.values)?;
         let cells = row_to_core_cells(&values, &child_table)?;
         self.core
@@ -691,6 +707,7 @@ impl<'a> Transaction<'a> {
             .put(&set_null.table, cells)
             .map_err(KitError::from)?;
         self.reserve_unique_guards(&child_table, &values, None)?;
+        self.reserve_pk_guard(&child_table, &values)?;
         self.staged.push(StagedOp::Update {
             values: values.clone(),
         });
@@ -734,6 +751,36 @@ impl<'a> Transaction<'a> {
             row.insert(col.name.clone(), value);
         }
         Ok(())
+    }
+
+    /// Refresh write-managed `now` columns on update.
+    ///
+    /// Only a `generated` column whose default is `now` (e.g. `updatedAt`) is a
+    /// write-managed timestamp that refreshes on every update. A plain
+    /// `default: now` column (e.g. `createdAt`) is an insert-time value and must
+    /// NOT change on update. A column already present in the caller's patch is
+    /// left as supplied. Mirrors the TypeScript kit's `applyUpdateDefaults`.
+    fn apply_update_defaults(
+        &self,
+        merged: &mut Map<String, Value>,
+        patch_keys: &HashSet<String>,
+        table: &KitTable,
+    ) {
+        let mut now: Option<String> = None;
+        for col in &table.columns {
+            if patch_keys.contains(&col.name) {
+                continue;
+            }
+            if col.generated && matches!(col.default, Some(DefaultKind::Now)) {
+                let stamp = now.get_or_insert_with(iso_now);
+                let value = if col.storage_type == ColumnType::Date {
+                    Value::String(stamp[..10].to_string())
+                } else {
+                    Value::String(stamp.clone())
+                };
+                merged.insert(col.name.clone(), value);
+            }
+        }
     }
 }
 

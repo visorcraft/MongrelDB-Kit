@@ -200,8 +200,19 @@ export function table<const TColumns extends readonly ColumnSpec[]>(
 		: [options.primaryKey];
 	const indexes = options.indexes ?? [];
 	const foreignKeys = options.foreignKeys ?? [];
-	const unique = options.unique ?? [];
+	const unique = [...(options.unique ?? [])];
 	const checks = options.checks ?? [];
+
+	// A unique index also enforces uniqueness (guard-backed), matching SQL where
+	// a UNIQUE index is a UNIQUE constraint. Synthesize a constraint for each
+	// unique index unless one already covers the same columns.
+	const sameCols = (a: string[], b: string[]) =>
+		a.length === b.length && a.every((c, i) => c === b[i]);
+	for (const idx of indexes) {
+		if (idx.unique && !unique.some((u) => sameCols(u.columns, idx.columns))) {
+			unique.push({ name: idx.name, columns: idx.columns });
+		}
+	}
 
 	const columnNames = new Set<string>();
 	const columnIds = new Set<number>();
@@ -254,7 +265,17 @@ export function table<const TColumns extends readonly ColumnSpec[]>(
 		indexes,
 		foreignKeys,
 		unique,
-		checks
+		checks,
+		// Reliable accessor for any column, including one whose name shadows a
+		// table property (e.g. a column named `name`) and therefore has no direct
+		// `table.<column>` accessor.
+		column(columnName: string): ColumnSpec {
+			const col = columns.find((c) => c.name === columnName);
+			if (!col) {
+				throw new Error(`Column "${columnName}" not found in table "${name}"`);
+			}
+			return col;
+		}
 	};
 	for (const col of columns) {
 		if (!(col.name in spec)) {

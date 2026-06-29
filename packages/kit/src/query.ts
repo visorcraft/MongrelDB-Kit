@@ -106,40 +106,61 @@ export type GroupRow = Record<string, unknown>;
 const I64_MIN = -9_223_372_036_854_775_808n;
 const I64_MAX = 9_223_372_036_854_775_807n;
 
+/**
+ * Validate that `column` is a real column spec. Guards against the footgun
+ * where a column whose name shadows a table property (e.g. `name`) is accessed
+ * as `table.name` and yields the table name string instead of the column.
+ */
+function asColumn(column: ColumnSpec): ColumnSpec {
+	if (
+		!column ||
+		typeof column !== 'object' ||
+		typeof (column as ColumnSpec).storageType !== 'string' ||
+		typeof (column as ColumnSpec).id !== 'number'
+	) {
+		const got = typeof column === 'string' ? `the string "${column}"` : String(column);
+		throw new KitError(
+			`Expected a column, received ${got}. If your column name shadows a table ` +
+				`property (e.g. "name"), access it with table.column('<name>').`
+		);
+	}
+	return column;
+}
+
 export function eq<T extends ColumnSpec>(column: T, value: ColumnValue<T>): Predicate {
-	return { kind: 'eq', column, value };
+	return { kind: 'eq', column: asColumn(column), value };
 }
 
 export function ne<T extends ColumnSpec>(column: T, value: ColumnValue<T>): Predicate {
-	return { kind: 'ne', column, value };
+	return { kind: 'ne', column: asColumn(column), value };
 }
 
 export function gt<T extends ColumnSpec>(column: T, value: ColumnValue<T>): Predicate {
-	return { kind: 'gt', column, value };
+	return { kind: 'gt', column: asColumn(column), value };
 }
 
 export function gte<T extends ColumnSpec>(column: T, value: ColumnValue<T>): Predicate {
-	return { kind: 'gte', column, value };
+	return { kind: 'gte', column: asColumn(column), value };
 }
 
 export function lt<T extends ColumnSpec>(column: T, value: ColumnValue<T>): Predicate {
-	return { kind: 'lt', column, value };
+	return { kind: 'lt', column: asColumn(column), value };
 }
 
 export function lte<T extends ColumnSpec>(column: T, value: ColumnValue<T>): Predicate {
-	return { kind: 'lte', column, value };
+	return { kind: 'lte', column: asColumn(column), value };
 }
 
 export function isNull(column: ColumnSpec): Predicate {
-	return { kind: 'null', column, not: false };
+	return { kind: 'null', column: asColumn(column), not: false };
 }
 
 export function isNotNull(column: ColumnSpec): Predicate {
-	return { kind: 'null', column, not: true };
+	return { kind: 'null', column: asColumn(column), not: true };
 }
 
 export function inList<T extends ColumnSpec>(column: T, values: ColumnValue<T>[]): Predicate {
-	return { kind: 'in', column, values };
+	return { kind: 'in', column: asColumn(column), values };
 }
 
 export function and(...predicates: Predicate[]): Predicate {
@@ -151,11 +172,11 @@ export function or(...predicates: Predicate[]): Predicate {
 }
 
 export function asc(column: ColumnSpec): OrderBy {
-	return { column, direction: 'asc' };
+	return { column: asColumn(column), direction: 'asc' };
 }
 
 export function desc(column: ColumnSpec): OrderBy {
-	return { column, direction: 'desc' };
+	return { column: asColumn(column), direction: 'desc' };
 }
 
 /** Negates a predicate (logical NOT). */
@@ -165,7 +186,7 @@ export function not(predicate: Predicate): Predicate {
 
 /** `column NOT IN (values)`. */
 export function notInList<T extends ColumnSpec>(column: T, values: ColumnValue<T>[]): Predicate {
-	return { kind: 'notIn', column, values };
+	return { kind: 'notIn', column: asColumn(column), values };
 }
 
 /**
@@ -173,12 +194,12 @@ export function notInList<T extends ColumnSpec>(column: T, values: ColumnValue<T
  * matches a single character; all other characters are literal. Case-sensitive.
  */
 export function like<T extends ColumnSpec>(column: T, pattern: string): Predicate {
-	return { kind: 'like', column, pattern };
+	return { kind: 'like', column: asColumn(column), pattern };
 }
 
 /** Case-sensitive substring match: `column LIKE '%substr%'` with no wildcards. */
 export function contains<T extends ColumnSpec>(column: T, substr: string): Predicate {
-	return { kind: 'contains', column, substr };
+	return { kind: 'contains', column: asColumn(column), substr };
 }
 
 /** `column IN (subquery)`. The subquery must select exactly one column. */
@@ -675,7 +696,12 @@ function syntheticTable(name: string, columns: ColumnSpec[]): TableSpec {
 		indexes: [],
 		foreignKeys: [],
 		unique: [],
-		checks: []
+		checks: [],
+		column(columnName: string): ColumnSpec {
+			const col = columns.find((c) => c.name === columnName);
+			if (!col) throw new KitError(`Column "${columnName}" not found in CTE "${name}"`);
+			return col;
+		}
 	};
 }
 
@@ -770,7 +796,13 @@ function prepareInsertRowSync(
 			withSequence[col.name] = kit.allocateSequenceSync(col.default.name, 1);
 		}
 	}
-	return applyDefaults(table, withSequence, makeDefaultContext(kit));
+	const withDefaults = applyDefaults(table, withSequence, makeDefaultContext(kit));
+	// Normalize any column still unset to explicit null, so the stored row and
+	// the returned row agree (an unset nullable column reads back as null).
+	for (const col of table.columns) {
+		if (withDefaults[col.name] === undefined) withDefaults[col.name] = null;
+	}
+	return withDefaults;
 }
 
 function runSyncTxn(
@@ -826,7 +858,10 @@ function applyUpdateDefaults(
 ): void {
 	for (const col of table.columns) {
 		if (patch[col.name] !== undefined) continue;
-		if (col.generated === 'now' || col.default?.kind === 'now') {
+		// Only `generated: 'now'` columns are write-managed timestamps that refresh
+		// on every update (e.g. updatedAt). A plain `default: nowDefault()` is an
+		// insert-time value (e.g. createdAt) and must NOT change on update.
+		if (col.generated === 'now') {
 			merged[col.name] = ctx.now;
 		}
 	}
@@ -1252,6 +1287,11 @@ export class InsertBuilder<T extends TableSpec> {
 			throw new KitError('values() must be called before execute()');
 		}
 		const row = this._row as Record<string, unknown>;
+		// A PK is "explicit" when the caller supplied all of its columns (vs being
+		// auto-assigned by a sequence default); only explicit PKs can collide.
+		const pkExplicit = this.table.primaryKey.every(
+			(name) => row[name] !== undefined && row[name] !== null
+		);
 		const defaulted = prepareInsertRowSync(this.kit, this.table, row);
 		validateRow(this.table, defaulted);
 		const pkValue = pkValueFromRow(this.table, defaulted);
@@ -1260,7 +1300,7 @@ export class InsertBuilder<T extends TableSpec> {
 		runSyncTxn(this.kit, (txn) => {
 			enforceForeignKeys(kit, txn, this.table, defaulted);
 			stageUniqueGuards(kit, txn, this.table, defaulted, pkValue);
-			stagePkGuard(kit, txn, this.table, pkValue);
+			stagePkGuard(kit, txn, this.table, pkValue, pkExplicit);
 			txn.put(this.table.name, toCells(this.table, defaulted));
 		});
 
@@ -1323,7 +1363,7 @@ export class UpdateBuilder<T extends TableSpec> {
 				txn.put(this.table.name, toCells(this.table, merged));
 				stageUniqueGuards(kit, txn, this.table, merged, newPkValue);
 				if (pkChanged) {
-					stagePkGuard(kit, txn, this.table, newPkValue);
+					stagePkGuard(kit, txn, this.table, newPkValue, true);
 				}
 				updated.push(merged);
 			}

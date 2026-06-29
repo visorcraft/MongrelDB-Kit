@@ -209,7 +209,7 @@ async function insertRow(
 		enforceForeignKeys(kit, txn, table, row);
 		const pkValue = pkValueFromRow(table, row);
 		stageUniqueGuards(kit, txn, table, row, pkValue);
-		stagePkGuard(kit, txn, table, pkValue);
+		stagePkGuard(kit, txn, table, pkValue, true);
 		txn.put(table.name, toCells(table, row));
 	});
 }

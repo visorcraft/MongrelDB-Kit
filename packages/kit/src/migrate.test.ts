@@ -538,6 +538,8 @@ describe('migration ops', () => {
 			await addUnique(db, 'accounts', unique(['email'], { name: 'uq_accounts_email' }));
 
 			expect(db.tableNames()).toContain('accounts');
+			// One guard: the email unique guard. A single-column PK uses a native
+			// existence check, not a guard row.
 			expect(guardCount(db, kitUniqueKeys, 'owner_table', 'accounts')).toBe(1);
 
 			await dropTable(db, 'accounts');
@@ -561,6 +563,7 @@ describe('migration ops', () => {
 
 			await addUnique(db, 'accounts', unique(['email'], { name: 'uq_accounts_email' }));
 
+			// Two email unique guards (single-column PKs use a native check, not a guard).
 			expect(guardCount(db, kitUniqueKeys, 'owner_table', 'accounts')).toBe(2);
 
 			// Constraint now enforced: a duplicate email is rejected.

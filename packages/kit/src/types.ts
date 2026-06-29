@@ -71,6 +71,12 @@ export interface TableSpec<TColumns extends readonly ColumnSpec[] = readonly Col
 	foreignKeys: ForeignKeySpec[];
 	unique: UniqueSpec[];
 	checks: CheckSpec[];
+	/**
+	 * Look up a column spec by name. Use this for columns whose name shadows a
+	 * table property (e.g. a column literally named `name`), which are not
+	 * reachable as a direct `table.<column>` accessor.
+	 */
+	column(name: string): ColumnSpec;
 }
 
 type ApplicationTypeMap = {

@@ -233,9 +233,38 @@ impl<'de> serde::Deserialize<'de> for Schema {
     }
 }
 
+/// A unique index also enforces uniqueness (guard-backed), matching SQL where a
+/// UNIQUE index is a UNIQUE constraint. Synthesize a constraint for each unique
+/// index unless an existing (or already-synthesized) unique constraint already
+/// covers exactly the same columns. Mirrors the TypeScript kit's `table()`.
+fn synthesize_unique_from_indexes(table: &mut Table) {
+    let mut synthesized: Vec<UniqueConstraint> = Vec::new();
+    for idx in &table.indexes {
+        if !idx.unique {
+            continue;
+        }
+        let covered = table
+            .unique_constraints
+            .iter()
+            .chain(synthesized.iter())
+            .any(|u| u.columns == idx.columns);
+        if !covered {
+            synthesized.push(UniqueConstraint {
+                name: idx.name.clone(),
+                columns: idx.columns.clone(),
+            });
+        }
+    }
+    table.unique_constraints.extend(synthesized);
+}
+
 impl Schema {
     /// Build and validate a schema from a list of tables.
-    pub fn new(tables: Vec<Table>) -> Result<Self, SchemaError> {
+    pub fn new(mut tables: Vec<Table>) -> Result<Self, SchemaError> {
+        for table in &mut tables {
+            synthesize_unique_from_indexes(table);
+        }
+
         let mut by_name = HashMap::with_capacity(tables.len());
         let mut by_id = HashMap::with_capacity(tables.len());
 
@@ -401,6 +430,69 @@ mod tests {
         };
         let err = Schema::new(vec![t]).unwrap_err();
         assert!(matches!(err, SchemaError::MissingPrimaryKeyColumn(_, _)));
+    }
+
+    #[test]
+    fn unique_index_synthesizes_unique_constraint() {
+        let schema = Schema::new(vec![Table {
+            id: 1,
+            name: "users".into(),
+            columns: vec![
+                Column::new(1, "id", ColumnType::Int64),
+                Column::new(2, "email", ColumnType::Text),
+                Column::new(3, "handle", ColumnType::Text),
+            ],
+            primary_key: vec!["id".into()],
+            indexes: vec![
+                Index {
+                    name: "idx_email".into(),
+                    columns: vec!["email".into()],
+                    unique: true,
+                },
+                // A non-unique index must NOT synthesize a constraint.
+                Index {
+                    name: "idx_handle".into(),
+                    columns: vec!["handle".into()],
+                    unique: false,
+                },
+            ],
+            foreign_keys: vec![],
+            unique_constraints: vec![],
+            check_constraints: vec![],
+        }])
+        .unwrap();
+        let table = schema.table("users").unwrap();
+        assert_eq!(table.unique_constraints.len(), 1);
+        assert_eq!(table.unique_constraints[0].columns, vec!["email".to_string()]);
+    }
+
+    #[test]
+    fn unique_index_does_not_duplicate_existing_constraint() {
+        let schema = Schema::new(vec![Table {
+            id: 1,
+            name: "users".into(),
+            columns: vec![
+                Column::new(1, "id", ColumnType::Int64),
+                Column::new(2, "email", ColumnType::Text),
+            ],
+            primary_key: vec!["id".into()],
+            indexes: vec![Index {
+                name: "idx_email".into(),
+                columns: vec!["email".into()],
+                unique: true,
+            }],
+            foreign_keys: vec![],
+            unique_constraints: vec![UniqueConstraint {
+                name: "uq_email".into(),
+                columns: vec!["email".into()],
+            }],
+            check_constraints: vec![],
+        }])
+        .unwrap();
+        // The pre-existing constraint already covers `email`; no synthesis.
+        let table = schema.table("users").unwrap();
+        assert_eq!(table.unique_constraints.len(), 1);
+        assert_eq!(table.unique_constraints[0].name, "uq_email");
     }
 
     #[test]

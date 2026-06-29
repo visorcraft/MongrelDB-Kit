@@ -51,25 +51,9 @@ export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] 
 	return table.columns.map((col) => {
 		const value = row[col.name];
 		if (value === null || value === undefined) {
-			switch (col.storageType) {
-				case 'bool':
-					return { columnId: col.id, boolean: false };
-				case 'int64':
-					return { columnId: col.id, int64: 0n };
-				case 'float64':
-					return { columnId: col.id, float64: 0 };
-				case 'text':
-				case 'timestamp':
-				case 'date':
-				case 'json':
-					return { columnId: col.id, text: '' };
-				case 'bytes':
-					return { columnId: col.id, bytes: Buffer.alloc(0) };
-				default: {
-					const _exhaustive: never = col.storageType;
-					throw new Error(`Unsupported storage type for cell conversion: ${_exhaustive}`);
-				}
-			}
+			// A cell with only `columnId` (no typed value) stores SQL NULL, so a
+			// nullable column reads back as null rather than a zero/empty sentinel.
+			return { columnId: col.id };
 		}
 		switch (col.storageType) {
 			case 'bool':
@@ -275,9 +259,25 @@ export function stagePkGuard(
 	kit: ConstraintKit,
 	txn: Transaction,
 	table: TableSpec,
-	pkValue: PkValue
+	pkValue: PkValue,
+	pkExplicit: boolean
 ): void {
-	if (table.primaryKey.length === 1) return;
+	// An auto-assigned (sequence) primary key is guaranteed unique, so it needs
+	// no duplicate check — this keeps inserts (and bulk loads) cheap.
+	if (!pkExplicit) return;
+
+	// A single-column explicit PK is checked cheaply against the engine's native
+	// primary-key index (no extra guard row), so an explicit duplicate throws a
+	// KitDuplicateError instead of silently upserting, without slowing bulk loads.
+	if (table.primaryKey.length === 1) {
+		if (findByPk(kit.db, table, pkValue)) {
+			throw new KitDuplicateError(table.name, pkGuardConstraintName(table));
+		}
+		return;
+	}
+
+	// A composite explicit PK has no single native key to check, so it uses a
+	// guard row (conflict-safe) like the unique-constraint machinery.
 	const pkValues = pkValue as (string | bigint | null)[];
 	if (pkValues.some((value) => value === null || value === undefined)) {
 		throw new Error(`Primary key components cannot be null in table "${table.name}"`);
@@ -303,6 +303,7 @@ export function deletePkGuard(
 	table: TableSpec,
 	pkValue: PkValue
 ): void {
+	// Single-column PKs use a native existence check (no guard row to delete).
 	if (table.primaryKey.length === 1) return;
 	const pkValues = pkValue as (string | bigint | null)[];
 	if (pkValues.some((value) => value === null || value === undefined)) return;
