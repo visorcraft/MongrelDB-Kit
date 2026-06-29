@@ -15,11 +15,21 @@ import {
 import type { TableSpec, ColumnStorageType, CheckSpec } from './types.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
 
+type MongrelColumnSpec = {
+	id: number;
+	name: string;
+	ty: number;
+	primaryKey: boolean;
+	nullable: boolean;
+	autoIncrement?: boolean;
+};
+
 type MongrelDatabase = NativeDatabase & {
 	transaction(
 		fn: (txn: Transaction) => void | Promise<void>,
 		opts?: { maxRetries?: number; baseDelayMs?: number }
 	): Promise<bigint>;
+	alterColumn(table: string, columnName: string, column: MongrelColumnSpec): bigint;
 };
 
 type MongrelModule = {
@@ -35,15 +45,6 @@ type MongrelModule = {
 };
 
 const addon = mongreldb as unknown as MongrelModule;
-
-type MongrelColumnSpec = {
-	id: number;
-	name: string;
-	ty: number;
-	primaryKey: boolean;
-	nullable: boolean;
-	autoIncrement?: boolean;
-};
 
 type MongrelIndexSpec = {
 	name: string;

@@ -112,8 +112,21 @@ export interface MigrationContext {
 }
 
 type MongrelSchemaSpec = {
-	columns: { id: number; name: string; ty: number; primaryKey: boolean; nullable: boolean; autoIncrement?: boolean }[];
+	columns: MongrelColumnSpec[];
 	indexes: { name: string; columnId: number; kind: number }[];
+};
+
+type MongrelColumnSpec = {
+	id: number;
+	name: string;
+	ty: number;
+	primaryKey: boolean;
+	nullable: boolean;
+	autoIncrement?: boolean;
+};
+
+type NativeAlterColumnDatabase = NativeDatabase & {
+	alterColumn?: (table: string, columnName: string, column: MongrelColumnSpec) => bigint;
 };
 
 function columnId(table: TableSpec, name: string): number {
@@ -144,6 +157,17 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'json':
 			return ColumnType.Bytes;
 	}
+}
+
+function toMongrelColumnSpec(column: ColumnSpec): MongrelColumnSpec {
+	return {
+		id: column.id,
+		name: column.name,
+		ty: toMongrelColumnType(column.storageType),
+		primaryKey: column.primaryKey,
+		nullable: column.nullable,
+		autoIncrement: column.default?.kind === 'sequence'
+	};
 }
 
 function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
@@ -193,14 +217,7 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 	}
 
 	return {
-		columns: table.columns.map((col) => ({
-			id: col.id,
-			name: col.name,
-			ty: toMongrelColumnType(col.storageType),
-			primaryKey: col.primaryKey,
-			nullable: col.nullable,
-			autoIncrement: col.default?.kind === 'sequence'
-		})),
+		columns: table.columns.map(toMongrelColumnSpec),
 		indexes
 	};
 }
@@ -794,14 +811,7 @@ function addColumnSync(kit: KitDatabase, tableName: string, column: ColumnSpec):
 		columns: [...table.columns, column]
 	};
 
-	db.addColumn(tableName, {
-		id: column.id,
-		name: column.name,
-		ty: toMongrelColumnType(column.storageType),
-		primaryKey: column.primaryKey,
-		nullable: column.nullable,
-		autoIncrement: column.default?.kind === 'sequence'
-	});
+	db.addColumn(tableName, toMongrelColumnSpec(column));
 
 	if (!column.nullable) {
 		const defaultValue = computeDefaultValue(column, kit);
@@ -822,17 +832,10 @@ export async function addColumn(kit: KitDatabase, tableName: string, column: Col
 /**
  * Change the declared type or constraints of an existing column in place.
  *
- * MongrelDB has no native in-place column-type change, so this only supports
- * alterations whose old and new storage types map to the same engine
- * {@link ColumnType} (for example `text` ↔ `json` ↔ `bytes`, all stored as
- * UTF-8 bytes) and that leave the column's nullability unchanged. Such a
- * change is purely Kit-level metadata: the on-disk bytes are identical, so no
- * row rewrite is needed and the updated application type is captured when the
- * migration runner rewrites `__kit_schema_catalog` after all ops complete.
- *
- * Storage-type or nullability changes would require a table rebuild (the
- * engine cannot re-encode or relax existing columns); they are rejected here
- * with a message pointing at the add-column / backfill / drop-column pattern.
+ * Kit keeps application-only changes metadata-local when the old and new
+ * storage types map to the same engine {@link ColumnType}. Native schema
+ * changes (rename, storage type, nullability, primary-key/sequence flags) are
+ * delegated to MongrelDB's native ALTER COLUMN validation.
  */
 export async function alterColumn(
 	kit: KitDatabase,
@@ -855,34 +858,64 @@ function alterColumnSync(
 		throw new KitMigrationError(`Column "${columnName}" not found in table "${tableName}"`);
 	}
 	const existing = table.columns[existingIndex];
+	const resolved: ColumnSpec = { ...newColumn, id: existing.id };
 
-	// Preserve the stable id and name; only type/constraint metadata may
-	// change. Renaming a column is not supported by this op.
-	const resolved: ColumnSpec = { ...newColumn, id: existing.id, name: existing.name };
+	if (
+		resolved.name !== existing.name &&
+		table.columns.some((c, idx) => idx !== existingIndex && c.name === resolved.name)
+	) {
+		throw new KitMigrationError(`Column "${resolved.name}" already exists in table "${tableName}"`);
+	}
 
 	const oldNativeTy = toMongrelColumnType(existing.storageType);
 	const newNativeTy = toMongrelColumnType(resolved.storageType);
-	if (newNativeTy !== oldNativeTy) {
-		throw new KitMigrationError(
-			`alterColumn cannot change the storage type of "${tableName}"."${columnName}" ` +
-				`(${existing.storageType} -> ${resolved.storageType}); cross-type conversion requires re-encoding. ` +
-				`Add a new column, backfill, and drop the old one instead.`
-		);
+	const nativeChange =
+		resolved.name !== existing.name ||
+		newNativeTy !== oldNativeTy ||
+		resolved.nullable !== existing.nullable ||
+		resolved.primaryKey !== existing.primaryKey ||
+		(resolved.default?.kind === 'sequence') !== (existing.default?.kind === 'sequence');
+
+	if (nativeChange) {
+		const db = kit.nativeDb as NativeAlterColumnDatabase;
+		if (typeof db.alterColumn !== 'function') {
+			throw new KitMigrationError(
+				`alterColumn for "${tableName}"."${columnName}" requires a MongrelDB native addon with alterColumn support`
+			);
+		}
+		try {
+			db.alterColumn(tableName, columnName, toMongrelColumnSpec(resolved));
+		} catch (cause) {
+			const message = cause instanceof Error ? cause.message : String(cause);
+			throw new KitMigrationError(`alterColumn failed for "${tableName}"."${columnName}": ${message}`);
+		}
 	}
 
-	if (resolved.nullable !== existing.nullable) {
-		throw new KitMigrationError(
-			`alterColumn cannot change the nullability of "${tableName}"."${columnName}" ` +
-				`(${existing.nullable} -> ${resolved.nullable}); MongrelDB has no in-place native alter. ` +
-				`Use an add-column / backfill / drop-column migration instead.`
-		);
-	}
-
-	// No native change is required: the on-disk bytes are identical for
-	// same-ColumnType columns (text/json/bytes are all UTF-8 bytes). Update the
-	// Kit-level column spec so validation and the re-persisted schema catalog
-	// reflect the new application type and constraints.
 	(table.columns as ColumnSpec[])[existingIndex] = resolved;
+	if (resolved.name !== existing.name) {
+		renameColumnReferences(table, existing.name, resolved.name);
+		for (const candidate of kit.schema.tablesList()) {
+			for (const fk of candidate.foreignKeys) {
+				if (fk.referencesTable !== tableName) continue;
+				fk.referencesColumns = fk.referencesColumns.map((name) =>
+					name === existing.name ? resolved.name : name
+				);
+			}
+		}
+	}
+}
+
+function renameColumnReferences(table: TableSpec, oldName: string, newName: string): void {
+	table.primaryKey = table.primaryKey.map((name) => (name === oldName ? newName : name));
+	for (const idx of table.indexes) {
+		idx.columns = idx.columns.map((name) => (name === oldName ? newName : name));
+	}
+	for (const constraint of table.unique) {
+		constraint.columns = constraint.columns.map((name) => (name === oldName ? newName : name));
+	}
+	for (const fk of table.foreignKeys) {
+		fk.columns = fk.columns.map((name) => (name === oldName ? newName : name));
+	}
 }
 
 export async function addIndex(kit: KitDatabase, tableName: string, index: IndexSpec): Promise<void> {

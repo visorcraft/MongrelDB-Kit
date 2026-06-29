@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ColumnType, ConditionKind } from 'mongreldb/native.js';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, json, index, unique, foreignKey } from './schema.js';
+import { Schema, table, int, text, real, json, index, unique, foreignKey } from './schema.js';
 import { sequenceDefault } from './defaults.js';
 import {
 	migrate,
@@ -842,6 +842,56 @@ describe('migration ops', () => {
 		}
 	});
 
+	it('alterColumn renames a native column and preserves existing rows', async () => {
+		const widgetsV1 = table('widgets', {
+			columns: [int('id', { primaryKey: true }), text('label', { nullable: false })],
+			primaryKey: ['id']
+		});
+		const widgetsV2 = table('widgets', {
+			columns: [int('id', { primaryKey: true }), text('name', { nullable: false })],
+			primaryKey: ['id']
+		});
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([widgetsV1]));
+		try {
+			await db.insertInto(widgetsV1).values({ id: 1n, label: 'one' }).execute();
+
+			await alterColumn(db, 'widgets', 'label', widgetsV2.column('name'));
+
+			expect(db.nativeDb.tableColumns('widgets')).toEqual(['id', 'name']);
+			expect(db.schema.table('widgets').column('name').id).toBe(widgetsV1.column('label').id);
+			const rows = await db.selectFrom(widgetsV2).execute();
+			expect(rows).toEqual([{ id: 1n, name: 'one' }]);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('alterColumn changes native storage type when no rows need conversion', async () => {
+		const widgetsV1 = table('widgets', {
+			columns: [int('id', { primaryKey: true }), int('qty', { nullable: false })],
+			primaryKey: ['id']
+		});
+		const widgetsV2 = table('widgets', {
+			columns: [int('id', { primaryKey: true }), real('qty', { nullable: false })],
+			primaryKey: ['id']
+		});
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([widgetsV1]));
+		try {
+			await alterColumn(db, 'widgets', 'qty', widgetsV2.column('qty'));
+			expect(db.schema.table('widgets').column('qty').storageType).toBe('float64');
+
+			await db.insertInto(widgetsV2).values({ id: 1n, qty: 1.5 }).execute();
+			const rows = await db.selectFrom(widgetsV2).execute();
+			expect(rows).toEqual([{ id: 1n, qty: 1.5 }]);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('alterColumn rejects a storage-type change that would require re-encoding', async () => {
 		const widgets = table('widgets', {
 			columns: [int('id', { primaryKey: true }), int('qty', { nullable: false })],
@@ -850,6 +900,7 @@ describe('migration ops', () => {
 		const dir = makeTempDir();
 		const db = await KitDatabase.open(dir, new Schema([widgets]));
 		try {
+			await db.insertInto(widgets).values({ id: 1n, qty: 10n }).execute();
 			// int64 -> float64 maps to a different engine ColumnType.
 			const realQty = { ...widgets.column('qty'), storageType: 'float64' as const, applicationType: 'float64' as const };
 			await expect(alterColumn(db, 'widgets', 'qty', realQty as any)).rejects.toBeInstanceOf(
@@ -861,16 +912,45 @@ describe('migration ops', () => {
 		}
 	});
 
-	it('alterColumn rejects a nullability change', async () => {
-		const widgets = table('widgets', {
+	it('alterColumn drops NOT NULL natively', async () => {
+		const widgetsV1 = table('widgets', {
+			columns: [int('id', { primaryKey: true }), text('name', { nullable: false })],
+			primaryKey: ['id']
+		});
+		const widgetsV2 = table('widgets', {
+			columns: [int('id', { primaryKey: true }), text('name', { nullable: true })],
+			primaryKey: ['id']
+		});
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([widgetsV1]));
+		try {
+			await db.insertInto(widgetsV1).values({ id: 1n, name: 'one' }).execute();
+			await alterColumn(db, 'widgets', 'name', widgetsV2.column('name'));
+			expect(db.schema.table('widgets').column('name').nullable).toBe(true);
+
+			await db.insertInto(widgetsV2).values({ id: 2n, name: null }).execute();
+			const rows = await db.selectFrom(widgetsV2).execute();
+			expect(rows).toEqual([{ id: 1n, name: 'one' }, { id: 2n, name: null }]);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('alterColumn rejects SET NOT NULL when existing rows contain nulls', async () => {
+		const widgetsV1 = table('widgets', {
+			columns: [int('id', { primaryKey: true }), text('name', { nullable: true })],
+			primaryKey: ['id']
+		});
+		const widgetsV2 = table('widgets', {
 			columns: [int('id', { primaryKey: true }), text('name', { nullable: false })],
 			primaryKey: ['id']
 		});
 		const dir = makeTempDir();
-		const db = await KitDatabase.open(dir, new Schema([widgets]));
+		const db = await KitDatabase.open(dir, new Schema([widgetsV1]));
 		try {
-			const nullableName = { ...widgets.column('name'), nullable: true as const };
-			await expect(alterColumn(db, 'widgets', 'name', nullableName as any)).rejects.toBeInstanceOf(
+			await db.insertInto(widgetsV1).values({ id: 1n, name: null }).execute();
+			await expect(alterColumn(db, 'widgets', 'name', widgetsV2.column('name'))).rejects.toBeInstanceOf(
 				KitMigrationError
 			);
 		} finally {
