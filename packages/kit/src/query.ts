@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ConditionKind } from 'mongreldb/native.js';
 import type { Database as NativeDatabase, Cell, RowJs, Transaction } from 'mongreldb/native.js';
 import { KitDatabase } from './db.js';
-import type { TableSpec, ColumnSpec } from './types.js';
+import type { TableSpec, ColumnSpec, PkValue } from './types.js';
 import type { Row, Insert, Update } from './types.js';
 import type { DefaultContext } from './defaults.js';
 import { applyDefaults } from './defaults.js';
@@ -20,6 +20,7 @@ import {
 	type ConstraintKit
 } from './constraints.js';
 import { KitError, isRetryableConflict } from './errors.js';
+import { encodedPk } from './keys.js';
 
 declare module './db.js' {
 	interface KitDatabase {
@@ -1269,6 +1270,21 @@ export class CteScope {
 	}
 }
 
+/** Compute the row passed through defaults + the PK-explicit flag for an insert. */
+function prepareInsertSync<T extends TableSpec>(
+	kit: KitDatabase,
+	table: T,
+	row: Record<string, unknown>
+): { defaulted: Record<string, unknown>; pkValue: PkValue; pkExplicit: boolean } {
+	const pkExplicit = table.primaryKey.every(
+		(name) => row[name] !== undefined && row[name] !== null
+	);
+	const defaulted = prepareInsertRowSync(kit, table, row);
+	validateRow(table, defaulted);
+	const pkValue = pkValueFromRow(table, defaulted);
+	return { defaulted, pkValue, pkExplicit };
+}
+
 export class InsertBuilder<T extends TableSpec> {
 	private _row?: Insert<T>;
 
@@ -1282,19 +1298,24 @@ export class InsertBuilder<T extends TableSpec> {
 		return this;
 	}
 
+	/**
+	 * Insert many rows in a single transaction. Each row still passes through
+	 * defaults, validation, and constraint checks, but the whole batch commits
+	 * once — far faster than a row-at-a-time loop for bulk loads.
+	 */
+	valuesMany(rows: Insert<T>[]): InsertManyBuilder<T> {
+		return new InsertManyBuilder<T>(this.kit, this.table, rows);
+	}
+
 	executeSync(): Row<T> {
 		if (this._row === undefined) {
 			throw new KitError('values() must be called before execute()');
 		}
-		const row = this._row as Record<string, unknown>;
-		// A PK is "explicit" when the caller supplied all of its columns (vs being
-		// auto-assigned by a sequence default); only explicit PKs can collide.
-		const pkExplicit = this.table.primaryKey.every(
-			(name) => row[name] !== undefined && row[name] !== null
+		const { defaulted, pkValue, pkExplicit } = prepareInsertSync(
+			this.kit,
+			this.table,
+			this._row as Record<string, unknown>
 		);
-		const defaulted = prepareInsertRowSync(this.kit, this.table, row);
-		validateRow(this.table, defaulted);
-		const pkValue = pkValueFromRow(this.table, defaulted);
 		const kit = makeConstraintKit(this.kit);
 
 		runSyncTxn(this.kit, (txn) => {
@@ -1308,6 +1329,51 @@ export class InsertBuilder<T extends TableSpec> {
 	}
 
 	async execute(): Promise<Row<T>> {
+		return this.executeSync();
+	}
+}
+
+export class InsertManyBuilder<T extends TableSpec> {
+	constructor(
+		private readonly kit: KitDatabase,
+		private readonly table: T,
+		private readonly rows: Insert<T>[]
+	) {}
+
+	executeSync(): Row<T>[] {
+		const kit = makeConstraintKit(this.kit);
+		const results: Record<string, unknown>[] = [];
+
+		runSyncTxn(this.kit, (txn) => {
+			results.length = 0;
+			// For a single-column PK, load the existing PKs once so the per-row
+			// duplicate check is O(1) instead of a per-row table scan.
+			const pkSeen =
+				this.table.primaryKey.length === 1
+					? new Set(
+							fullScanRows(this.kit.nativeDb, this.table).map((m) =>
+								encodedPk(pkValueFromRow(this.table, m.row))
+							)
+						)
+					: undefined;
+			for (const input of this.rows) {
+				const { defaulted, pkValue, pkExplicit } = prepareInsertSync(
+					this.kit,
+					this.table,
+					input as Record<string, unknown>
+				);
+				enforceForeignKeys(kit, txn, this.table, defaulted);
+				stageUniqueGuards(kit, txn, this.table, defaulted, pkValue);
+				stagePkGuard(kit, txn, this.table, pkValue, pkExplicit, pkSeen);
+				txn.put(this.table.name, toCells(this.table, defaulted));
+				results.push(defaulted);
+			}
+		});
+
+		return results as Row<T>[];
+	}
+
+	async execute(): Promise<Row<T>[]> {
 		return this.executeSync();
 	}
 }
@@ -1399,9 +1465,14 @@ export class DeleteBuilder<T extends TableSpec> {
 		let deleted = 0;
 
 		runSyncTxn(this.kit, (txn) => {
+			deleted = 0;
 			for (const matched of matches) {
 				const pkValue = pkValueFromRow(this.table, matched.row);
-				planDelete(kit, txn, this.table, pkValue);
+				// Reuse the row already fetched by the scan to avoid an O(n^2) re-read.
+				planDelete(kit, txn, this.table, pkValue, {
+					row: matched.row,
+					rowId: matched.rowId
+				});
 				deleted++;
 			}
 		});

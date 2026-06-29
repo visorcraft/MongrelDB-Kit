@@ -139,6 +139,17 @@ class Transaction:
     def insert(self, table: str, row: Any) -> dict[str, Any]:
         return json.loads(self._handle.insert(table, _to_json(row)))
 
+    def insert_many(self, table: str, rows: Iterable[Any]) -> list[dict[str, Any]]:
+        """Insert many rows in this single transaction.
+
+        Each row still passes through defaults, validation, and constraint
+        checks, but the whole batch is staged in one transaction (commit once) —
+        far faster than a row-at-a-time loop for bulk loads. Returns the inserted
+        rows with defaults applied.
+        """
+        results = self._handle.insert_many(table, _to_json(list(rows)))
+        return [json.loads(r) for r in results]
+
     def update(self, table: str, pk: Any, patch: Any) -> dict[str, Any]:
         return json.loads(
             self._handle.update(table, _to_json(pk), _to_json(patch))

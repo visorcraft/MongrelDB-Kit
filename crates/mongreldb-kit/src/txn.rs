@@ -10,9 +10,12 @@
 //!   `__kit_row_guards` row. A concurrent parent delete also writes that guard
 //!   key, forcing a write-write conflict so the unsafe snapshot interleaving is
 //!   impossible.
-//! * Every primary key (single-column and composite) reserves a `__pk_<table>`
-//!   guard in `__kit_unique_keys`, so a duplicate-PK insert is rejected instead
-//!   of silently upserting (last-writer-wins).
+//! * Primary keys are handled like the TypeScript kit. An auto-assigned
+//!   (sequence-default) primary key is guaranteed unique and needs no check. An
+//!   explicit single-column primary key is checked directly against the visible
+//!   rows (no guard row). Only an explicit composite primary key reserves a
+//!   `__pk_<table>` guard in `__kit_unique_keys` (it has no single native key to
+//!   probe), so a duplicate-PK insert is rejected instead of silently upserting.
 //!
 //! Reads inside a transaction use the transaction's read snapshot; writes staged
 //! earlier in the same transaction are tracked in memory so read-your-writes
@@ -35,7 +38,8 @@ use mongreldb_kit_core::schema::{
     Column, ColumnType, DefaultKind, ForeignKey, Table as KitTable, UniqueConstraint,
 };
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 /// A kit transaction.
 pub struct Transaction<'a> {
@@ -51,11 +55,20 @@ pub struct Transaction<'a> {
 
 #[derive(Debug, Clone)]
 enum StagedOp {
-    Insert { values: Map<String, Value> },
-    Update { values: Map<String, Value> },
-    /// A delete staged in this transaction. Tracked so `staged_parent_exists`
+    Insert {
+        table: String,
+        values: Map<String, Value>,
+    },
+    Update {
+        table: String,
+        values: Map<String, Value>,
+    },
+    /// A delete staged in this transaction. Tracked so `staged_row_exists`
     /// can ignore rows removed earlier in the same transaction.
-    Delete { pk: String },
+    Delete {
+        table: String,
+        pk: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -81,30 +94,78 @@ impl<'a> Transaction<'a> {
     }
 
     /// Insert a row into `table`.
-    pub fn insert(&mut self, table: &str, mut row: Map<String, Value>) -> Result<Row> {
+    pub fn insert(&mut self, table: &str, row: Map<String, Value>) -> Result<Row> {
         let t = self.require_table(table)?.clone();
-        self.apply_defaults(&mut row, &t)?;
+        self.do_insert(table, &t, row, None)
+    }
+
+    /// Insert many rows into `table` within this single transaction.
+    ///
+    /// Each row still passes through defaults, validation, and constraint checks,
+    /// but the whole batch is staged in one transaction (the caller commits once)
+    /// — far faster than a row-at-a-time begin/commit loop for bulk loads. For a
+    /// single-column primary key the existing primary keys are loaded once into a
+    /// set so the per-row duplicate check stays O(1) instead of re-scanning the
+    /// table for every row. Mirrors the TypeScript kit's `insertInto().valuesMany`.
+    pub fn insert_many(&mut self, table: &str, rows: Vec<Map<String, Value>>) -> Result<Vec<Row>> {
+        let t = self.require_table(table)?.clone();
+        // Preload the visible single-column primary keys once; explicit-PK rows in
+        // the batch are then checked (and staged) against this in-memory set.
+        let mut pk_seen: Option<HashSet<String>> = if t.primary_key.len() == 1 {
+            let mut set = HashSet::new();
+            for r in self.snapshot_rows(table)? {
+                set.insert(encoded_pk_for(&t, &r.values));
+            }
+            Some(set)
+        } else {
+            None
+        };
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(self.do_insert(table, &t, row, pk_seen.as_mut())?);
+        }
+        Ok(out)
+    }
+
+    /// Core insert path shared by [`insert`](Self::insert) and
+    /// [`insert_many`](Self::insert_many). `pk_seen`, when present, is the batch's
+    /// in-memory set of single-column primary keys used for an O(1) duplicate
+    /// check (and is updated as explicit-PK rows are staged).
+    fn do_insert(
+        &mut self,
+        table: &str,
+        t: &KitTable,
+        mut row: Map<String, Value>,
+        pk_seen: Option<&mut HashSet<String>>,
+    ) -> Result<Row> {
+        // A primary key is "explicit" when the caller supplied all of its columns
+        // in the original input (before defaults are applied); only an explicit PK
+        // can collide. An auto-assigned (sequence) PK is guaranteed unique.
+        let pk_explicit = pk_is_explicit(t, &row);
+
+        self.apply_defaults(&mut row, t)?;
         // Normalize any column still unset to explicit null, so the stored row and
         // the returned row agree (an omitted nullable column reads back as null).
         for col in &t.columns {
             row.entry(col.name.clone()).or_insert(Value::Null);
         }
-        mongreldb_kit_core::validation::validate_row(&t, &row)?;
+        mongreldb_kit_core::validation::validate_row(t, &row)?;
 
         // Validate all constraints before staging any writes.
-        self.check_unique_constraints(&t, &row, None)?;
-        self.check_pk_guard(&t, &row, true)?;
-        self.check_foreign_keys(&t, &row)?;
+        self.check_unique_constraints(t, &row, None)?;
+        self.check_pk(t, &row, pk_explicit, pk_seen)?;
+        self.check_foreign_keys(t, &row)?;
 
         // Stage guard rows + the application row atomically.
-        self.reserve_unique_guards(&t, &row, None)?;
-        self.reserve_pk_guard(&t, &row)?;
-        self.touch_foreign_key_guards(&t, &row)?;
+        self.reserve_unique_guards(t, &row, None)?;
+        self.reserve_pk_guard(t, &row, pk_explicit)?;
+        self.touch_foreign_key_guards(t, &row)?;
 
-        let cells = row_to_core_cells(&row, &t)?;
+        let cells = row_to_core_cells(&row, t)?;
         self.core.put(table, cells).map_err(KitError::from)?;
         let temp_id = self.alloc_temp_id();
         self.staged.push(StagedOp::Insert {
+            table: table.to_string(),
             values: row.clone(),
         });
         Ok(Row {
@@ -144,6 +205,7 @@ impl<'a> Transaction<'a> {
         self.core.put(table, cells).map_err(KitError::from)?;
         let temp_id = self.alloc_temp_id();
         self.staged.push(StagedOp::Update {
+            table: table.to_string(),
             values: values.clone(),
         });
         Ok(Row {
@@ -160,7 +222,7 @@ impl<'a> Transaction<'a> {
             .get_by_pk_internal(table, &pk_map)?
             .ok_or_else(|| KitError::Integrity(format!("row not found in {table}")))?;
 
-        let plan = self.plan_delete(table, &row)?;
+        let (plan, row_cache) = self.plan_delete(table, &row)?;
         if !plan.restricted.is_empty() {
             let msg = format!(
                 "delete restricted by {}",
@@ -174,22 +236,31 @@ impl<'a> Transaction<'a> {
         }
 
         // Apply set-null updates first, then cascade deletes, finally the target.
+        // Each affected child row was already fetched during planning, so reuse it
+        // from the cache rather than re-reading it by PK.
         for set_null in &plan.set_null {
-            self.apply_set_null(set_null)?;
+            let key = format!("{}:{}", set_null.table, set_null.pk);
+            if let Some(child_row) = row_cache.get(&key).cloned() {
+                self.apply_set_null(set_null, &child_row)?;
+            }
         }
         for del in &plan.delete {
             if del.table == table {
                 continue; // deleted at the end
             }
             let child_table = self.require_table(&del.table)?.clone();
-            let child_pk = pk_string_to_value(&del.pk, &child_table)?;
-            let child_pk_map = pk_to_map(&child_pk, &child_table)?;
-            if let Some(child_row) = self.get_by_pk_internal(&del.table, &child_pk_map)? {
-                self.delete_guards_for(&child_table, &child_row.values)?;
+            let key = format!("{}:{}", del.table, del.pk);
+            if let Some(child_row) = row_cache.get(&key) {
+                let row_id = child_row.row_id;
+                let values = child_row.values.clone();
+                self.delete_guards_for(&child_table, &values)?;
                 self.core
-                    .delete(&del.table, RowId(child_row.row_id))
+                    .delete(&del.table, RowId(row_id))
                     .map_err(KitError::from)?;
-                self.staged.push(StagedOp::Delete { pk: del.pk.clone() });
+                self.staged.push(StagedOp::Delete {
+                    table: del.table.clone(),
+                    pk: del.pk.clone(),
+                });
             }
         }
 
@@ -201,6 +272,7 @@ impl<'a> Transaction<'a> {
             .delete(table, RowId(row.row_id))
             .map_err(KitError::from)?;
         self.staged.push(StagedOp::Delete {
+            table: table.to_string(),
             pk: encoded_pk_for(&t, &row.values),
         });
         Ok(())
@@ -477,22 +549,59 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    // ── primary-key guard ──────────────────────────────────────────────────
+    // ── primary-key handling ───────────────────────────────────────────────
     //
-    // Every primary key (single-column and composite) reserves a `__pk_<table>`
-    // guard in `__kit_unique_keys`. Without this the engine would upsert a
-    // duplicate single-column PK (last-writer-wins) instead of rejecting it; the
-    // guard makes a duplicate insert throw and be conflict-safe.
+    // Matches the TypeScript kit: an auto-assigned (sequence) primary key is
+    // guaranteed unique and skipped; an explicit single-column primary key is
+    // checked directly against the visible rows (no guard row); only an explicit
+    // composite primary key reserves a `__pk_<table>` guard in `__kit_unique_keys`
+    // (it has no single native key to probe), making the duplicate insert throw
+    // and stay conflict-safe.
 
-    fn check_pk_guard(
+    fn check_pk(
         &self,
         table: &KitTable,
         values: &Map<String, Value>,
-        is_insert: bool,
+        pk_explicit: bool,
+        pk_seen: Option<&mut HashSet<String>>,
     ) -> Result<()> {
-        if table.primary_key.is_empty() || !is_insert {
+        // An auto-assigned primary key is unique by construction; nothing to do.
+        if table.primary_key.is_empty() || !pk_explicit {
             return Ok(());
         }
+
+        if table.primary_key.len() == 1 {
+            // A single-column explicit PK has a native key, so check whether a row
+            // with that PK already exists. A batch passes a pre-loaded set so the
+            // check stays O(1) per row; a single insert checks the visible rows
+            // (committed plus this transaction's in-flight staging) directly.
+            let duplicate = match pk_seen {
+                Some(seen) => {
+                    let key = encoded_pk_for(table, values);
+                    if seen.contains(&key) {
+                        true
+                    } else {
+                        seen.insert(key);
+                        false
+                    }
+                }
+                None => {
+                    self.parent_exists(&table.name, values)?
+                        || self.staged_row_exists(table, values)
+                }
+            };
+            if duplicate {
+                return Err(KitError::Duplicate(format!(
+                    "primary key {} on {}",
+                    encoded_pk_for(table, values),
+                    table.name
+                )));
+            }
+            return Ok(());
+        }
+
+        // A composite explicit PK uses a guard row (conflict-safe), like the
+        // unique-constraint machinery.
         let key = pk_guard_key(table, values);
         let owner_pk = encoded_pk_for(table, values);
         let committed = self.internal_rows(UNIQUE_KEYS)?;
@@ -515,8 +624,15 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    fn reserve_pk_guard(&mut self, table: &KitTable, values: &Map<String, Value>) -> Result<()> {
-        if table.primary_key.is_empty() {
+    fn reserve_pk_guard(
+        &mut self,
+        table: &KitTable,
+        values: &Map<String, Value>,
+        pk_explicit: bool,
+    ) -> Result<()> {
+        // Only an explicit composite primary key needs a guard row. A single-column
+        // PK is checked directly, and an auto-assigned PK is guaranteed unique.
+        if table.primary_key.len() < 2 || !pk_explicit {
             return Ok(());
         }
         let key = pk_guard_key(table, values);
@@ -536,7 +652,7 @@ impl<'a> Transaction<'a> {
             let parent_pk = parent_pk_value(values, fk, parent)?;
             let parent_pk_map = pk_to_map(&parent_pk, parent)?;
             if self.parent_exists(&fk.references_table, &parent_pk_map)?
-                || self.staged_parent_exists(parent, &parent_pk_map)
+                || self.staged_row_exists(parent, &parent_pk_map)
             {
                 continue;
             }
@@ -572,20 +688,24 @@ impl<'a> Transaction<'a> {
         Ok(rows.iter().any(|r| pk_matches(&r.values, pk_map, t)))
     }
 
-    fn staged_parent_exists(&self, table: &KitTable, pk_map: &Map<String, Value>) -> bool {
-        // Replay this transaction's staging in order so a parent inserted and
-        // then deleted within the same transaction is not treated as present.
+    /// Whether a row identified by `pk_map` exists in `table`'s in-flight staging
+    /// for this transaction. Replays the staging in order (table-scoped) so a row
+    /// inserted and then deleted within the same transaction is not treated as
+    /// present. Used both for foreign-key parent checks and for the single-column
+    /// primary-key duplicate check.
+    fn staged_row_exists(&self, table: &KitTable, pk_map: &Map<String, Value>) -> bool {
         let target = encode_pk(&pk_components(table, pk_map));
         let mut exists = false;
         for staged in &self.staged {
             match staged {
-                StagedOp::Insert { values } | StagedOp::Update { values } => {
-                    if pk_matches(values, pk_map, table) {
+                StagedOp::Insert { table: t, values }
+                | StagedOp::Update { table: t, values } => {
+                    if t == &table.name && pk_matches(values, pk_map, table) {
                         exists = true;
                     }
                 }
-                StagedOp::Delete { pk } => {
-                    if *pk == target {
+                StagedOp::Delete { table: t, pk } => {
+                    if t == &table.name && *pk == target {
                         exists = false;
                     }
                 }
@@ -639,10 +759,15 @@ impl<'a> Transaction<'a> {
 
     // ── delete planning ────────────────────────────────────────────────────
 
-    fn plan_delete(&self, table: &str, row: &Row) -> Result<DeletePlan> {
+    fn plan_delete(&self, table: &str, row: &Row) -> Result<(DeletePlan, HashMap<String, Row>)> {
         let schema = &self.db.schema;
         let t = self.require_table(table)?;
         let pk_str = encoded_pk_for(t, &row.values);
+        // Cache every child row discovered while planning, keyed by
+        // "<table>:<encoded_pk>", so the apply phase can reuse it instead of
+        // re-reading each row by PK — which would make a bulk cascade / set-null
+        // delete O(n^2) (one full table scan per affected child row).
+        let row_cache: RefCell<HashMap<String, Row>> = RefCell::new(HashMap::new());
         let find_children =
             |child_table: &KitTable, fk: &ForeignKey, parent_pk: &str| -> Vec<(String, String)> {
                 let parent_pk_value = match pk_string_to_value(parent_pk, t) {
@@ -660,27 +785,25 @@ impl<'a> Transaction<'a> {
                 let mut out = Vec::new();
                 for child_row in child_rows {
                     if fk_matches(&child_row.values, fk, &parent_pk_map, t) {
-                        out.push((
-                            encoded_pk_for(child_table, &child_row.values),
-                            parent_pk.to_string(),
-                        ));
+                        let child_pk = encoded_pk_for(child_table, &child_row.values);
+                        row_cache
+                            .borrow_mut()
+                            .insert(format!("{}:{}", child_table.name, child_pk), child_row);
+                        out.push((child_pk, parent_pk.to_string()));
                     }
                 }
                 out
             };
-        plan_delete(schema, table, &pk_str, find_children).map_err(KitError::from)
+        let plan = plan_delete(schema, table, &pk_str, find_children).map_err(KitError::from)?;
+        Ok((plan, row_cache.into_inner()))
     }
 
     fn apply_set_null(
         &mut self,
         set_null: &mongreldb_kit_core::planner::SetNullUpdate,
+        child_row: &Row,
     ) -> Result<()> {
         let child_table = self.require_table(&set_null.table)?.clone();
-        let child_pk = pk_string_to_value(&set_null.pk, &child_table)?;
-        let child_pk_map = pk_to_map(&child_pk, &child_table)?;
-        let Some(child_row) = self.get_by_pk_internal(&set_null.table, &child_pk_map)? else {
-            return Ok(());
-        };
         let mut values = child_row.values.clone();
         for col in &set_null.columns {
             let col_def = child_table
@@ -707,8 +830,12 @@ impl<'a> Transaction<'a> {
             .put(&set_null.table, cells)
             .map_err(KitError::from)?;
         self.reserve_unique_guards(&child_table, &values, None)?;
-        self.reserve_pk_guard(&child_table, &values)?;
+        // The row keeps its full primary key (only FK columns changed), so it is
+        // "explicit"; this re-reserves a composite PK guard and is a no-op for a
+        // single-column PK.
+        self.reserve_pk_guard(&child_table, &values, true)?;
         self.staged.push(StagedOp::Update {
+            table: set_null.table.clone(),
             values: values.clone(),
         });
         Ok(())
@@ -793,6 +920,19 @@ fn pk_matches(values: &Map<String, Value>, pk_map: &Map<String, Value>, table: &
         }
     }
     true
+}
+
+/// Whether the caller supplied every primary-key column (non-null) in `row`.
+///
+/// Mirrors the TypeScript kit's `pkExplicit` flag: a primary key whose columns
+/// all came from a sequence default (i.e. were not supplied) is auto-assigned and
+/// guaranteed unique, so it is neither checked nor guarded.
+fn pk_is_explicit(table: &KitTable, row: &Map<String, Value>) -> bool {
+    !table.primary_key.is_empty()
+        && table
+            .primary_key
+            .iter()
+            .all(|name| matches!(row.get(name), Some(v) if !v.is_null()))
 }
 
 fn pk_guard_constraint(table: &KitTable) -> String {

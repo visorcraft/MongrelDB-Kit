@@ -260,17 +260,25 @@ export function stagePkGuard(
 	txn: Transaction,
 	table: TableSpec,
 	pkValue: PkValue,
-	pkExplicit: boolean
+	pkExplicit: boolean,
+	pkSeen?: Set<string>
 ): void {
 	// An auto-assigned (sequence) primary key is guaranteed unique, so it needs
 	// no duplicate check — this keeps inserts (and bulk loads) cheap.
 	if (!pkExplicit) return;
 
-	// A single-column explicit PK is checked cheaply against the engine's native
-	// primary-key index (no extra guard row), so an explicit duplicate throws a
-	// KitDuplicateError instead of silently upserting, without slowing bulk loads.
+	// A single-column explicit PK is checked for duplicates. A batch passes a
+	// pre-loaded set of existing + already-staged PKs so the check stays O(1) per
+	// row (one scan up front) instead of a per-row lookup; a single insert checks
+	// the table directly.
 	if (table.primaryKey.length === 1) {
-		if (findByPk(kit.db, table, pkValue)) {
+		if (pkSeen) {
+			const k = encodedPk(pkValue);
+			if (pkSeen.has(k)) {
+				throw new KitDuplicateError(table.name, pkGuardConstraintName(table));
+			}
+			pkSeen.add(k);
+		} else if (findByPk(kit.db, table, pkValue)) {
 			throw new KitDuplicateError(table.name, pkGuardConstraintName(table));
 		}
 		return;
@@ -407,9 +415,10 @@ export function planDelete(
 	kit: ConstraintKit,
 	txn: Transaction,
 	table: TableSpec,
-	pkValue: PkValue
+	pkValue: PkValue,
+	known?: { row: Record<string, unknown>; rowId: bigint }
 ): void {
-	planDeleteRecursive(kit, txn, table, pkValue, new Set(), new Set());
+	planDeleteRecursive(kit, txn, table, pkValue, new Set(), new Set(), known);
 }
 
 function planDeleteRecursive(
@@ -418,7 +427,8 @@ function planDeleteRecursive(
 	table: TableSpec,
 	pkValue: PkValue,
 	currentPath: Set<string>,
-	deleted: Set<string>
+	deleted: Set<string>,
+	known?: { row: Record<string, unknown>; rowId: bigint }
 ): void {
 	const visitKey = `${table.name}:${encodedPk(pkValue)}`;
 	if (deleted.has(visitKey)) return;
@@ -427,11 +437,21 @@ function planDeleteRecursive(
 	}
 	currentPath.add(visitKey);
 
-	const rowJs = findByPk(kit.db, table, pkValue);
-	if (!rowJs) {
-		throw new KitNotFoundError(table.name, pkValue);
+	// The caller (e.g. a bulk delete) often already has the row from its scan;
+	// reuse it instead of re-reading per row, which would be O(n^2) on a delete.
+	let row: Record<string, unknown>;
+	let rowId: bigint;
+	if (known) {
+		row = known.row;
+		rowId = known.rowId;
+	} else {
+		const rowJs = findByPk(kit.db, table, pkValue);
+		if (!rowJs) {
+			throw new KitNotFoundError(table.name, pkValue);
+		}
+		row = rowFromRowJs(table, rowJs);
+		rowId = rowJs.rowId;
 	}
-	const row = rowFromRowJs(table, rowJs);
 
 	for (const childTable of kit.schema.tablesList()) {
 		for (const fk of childTable.foreignKeys) {
@@ -469,7 +489,7 @@ function planDeleteRecursive(
 		}
 	}
 
-	txn.delete(table.name, rowJs.rowId);
+	txn.delete(table.name, rowId);
 	deleteUniqueGuards(kit, txn, table, pkValue);
 	deletePkGuard(kit, txn, table, pkValue);
 	deleteRowGuard(kit, txn, table.name, pkValue);

@@ -157,6 +157,17 @@ impl PyTransaction {
         row_to_json(&result)
     }
 
+    /// Insert many rows in this single transaction. `rows_json` is a JSON array of
+    /// row objects; returns a list of the inserted rows (with defaults applied).
+    fn insert_many(&mut self, table: &str, rows_json: &str) -> PyResult<Vec<String>> {
+        let rows: Vec<Map<String, Value>> =
+            serde_json::from_str(rows_json).map_err(py_json_err)?;
+        let results = require_txn(&mut self.txn)?
+            .insert_many(table, rows)
+            .map_err(map_err)?;
+        results.iter().map(row_to_json).collect()
+    }
+
     fn update(&mut self, table: &str, pk_json: &str, patch_json: &str) -> PyResult<String> {
         let pk: Value = serde_json::from_str(pk_json).map_err(py_json_err)?;
         let patch: Map<String, Value> = serde_json::from_str(patch_json).map_err(py_json_err)?;

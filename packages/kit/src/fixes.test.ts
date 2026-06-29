@@ -110,3 +110,33 @@ describe('#5 unique index enforces uniqueness', () => {
 		}
 	});
 });
+
+describe('batch insert (valuesMany)', () => {
+	const t = table('batch_t', {
+		columns: [
+			int('id', { primaryKey: true, default: sequenceDefault('batch_t_id_seq') }),
+			text('code', { nullable: false })
+		],
+		primaryKey: 'id',
+		indexes: [index(['code'], { unique: true })]
+	});
+	it('inserts many rows in one transaction, returns them, and enforces constraints', () => {
+		const { db, dir } = open(new Schema([t]));
+		try {
+			const rows = db
+				.insertInto(t)
+				.valuesMany([{ code: 'a' }, { code: 'b' }, { code: 'c' }])
+				.executeSync();
+			expect(rows.map((r) => r.id)).toEqual([1n, 2n, 3n]);
+			expect(db.selectFrom(t).executeSync()).toHaveLength(3);
+			// A duplicate unique value in a batch is rejected and the batch rolls back.
+			expect(() =>
+				db.insertInto(t).valuesMany([{ code: 'd' }, { code: 'a' }]).executeSync()
+			).toThrow();
+			expect(db.selectFrom(t).executeSync()).toHaveLength(3);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

@@ -8,7 +8,8 @@
 //! 4. A unique index enforces uniqueness like a `unique()` constraint.
 
 use mongreldb_kit::{
-    Column, ColumnType, Database, DefaultKind, Expr, Index, KitError, Query, Schema, Select, Table,
+    Column, ColumnType, Database, DefaultKind, Expr, ForeignKey, ForeignKeyAction, Index, KitError,
+    Query, Schema, Select, Table, UniqueConstraint,
 };
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
@@ -282,4 +283,229 @@ fn non_unique_index_does_not_enforce_uniqueness() {
     txn.insert("u", row(&[("id", json!(2)), ("email", json!("a@x.com"))]))
         .unwrap();
     txn.commit().unwrap();
+}
+
+// ── auto-assigned primary keys never collide and skip the duplicate check ──────
+
+#[test]
+fn auto_increment_pks_do_not_collide() {
+    let dir = temp_dir();
+    let id = Column {
+        default: Some(DefaultKind::Sequence("k_seq".into())),
+        ..col(1, "id", ColumnType::Int64)
+    };
+    let schema = Schema::new(vec![Table {
+        id: 1,
+        name: "k".into(),
+        columns: vec![id, col(2, "v", ColumnType::Text)],
+        primary_key: vec!["id".into()],
+        indexes: vec![],
+        foreign_keys: vec![],
+        unique_constraints: vec![],
+        check_constraints: vec![],
+    }])
+    .unwrap();
+    let db = Database::create(&dir, schema).unwrap();
+
+    // Inserts that omit the PK get distinct, auto-assigned ids with no
+    // duplicate-PK error — an auto PK is guaranteed unique, so it is never
+    // checked or guarded.
+    let mut txn = db.begin().unwrap();
+    let a = txn.insert("k", row(&[("v", json!("a"))])).unwrap();
+    let b = txn.insert("k", row(&[("v", json!("b"))])).unwrap();
+    let c = txn.insert("k", row(&[("v", json!("c"))])).unwrap();
+    txn.commit().unwrap();
+
+    assert_eq!(a.values.get("id"), Some(&json!(1)));
+    assert_eq!(b.values.get("id"), Some(&json!(2)));
+    assert_eq!(c.values.get("id"), Some(&json!(3)));
+
+    let txn = db.begin().unwrap();
+    let rows = txn
+        .select(&select_filter("k", Expr::IsNotNull(Box::new(Expr::Column("id".into())))))
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+}
+
+// ── batch insert (insert_many) inserts a batch in one transaction ─────────────
+
+#[test]
+fn insert_many_inserts_a_batch_in_one_transaction() {
+    let dir = temp_dir();
+    let schema = Schema::new(vec![Table {
+        id: 1,
+        name: "k".into(),
+        columns: vec![col(1, "id", ColumnType::Int64), col(2, "code", ColumnType::Text)],
+        primary_key: vec!["id".into()],
+        indexes: vec![],
+        foreign_keys: vec![],
+        unique_constraints: vec![UniqueConstraint {
+            name: "uq_code".into(),
+            columns: vec!["code".into()],
+        }],
+        check_constraints: vec![],
+    }])
+    .unwrap();
+    let db = Database::create(&dir, schema).unwrap();
+
+    // A batch of explicit-PK rows is staged and committed in a single transaction.
+    let mut txn = db.begin().unwrap();
+    let inserted = txn
+        .insert_many(
+            "k",
+            vec![
+                row(&[("id", json!(1)), ("code", json!("a"))]),
+                row(&[("id", json!(2)), ("code", json!("b"))]),
+                row(&[("id", json!(3)), ("code", json!("c"))]),
+            ],
+        )
+        .unwrap();
+    assert_eq!(inserted.len(), 3);
+    assert_eq!(inserted[2].values.get("code"), Some(&json!("c")));
+    txn.commit().unwrap();
+
+    let count = |db: &Database| {
+        let txn = db.begin().unwrap();
+        txn.select(&select_filter("k", Expr::IsNotNull(Box::new(Expr::Column("id".into())))))
+            .unwrap()
+            .len()
+    };
+    assert_eq!(count(&db), 3);
+
+    // A duplicate PK colliding with a committed row rolls the whole batch back.
+    let mut txn = db.begin().unwrap();
+    let err = txn
+        .insert_many(
+            "k",
+            vec![
+                row(&[("id", json!(4)), ("code", json!("d"))]),
+                row(&[("id", json!(1)), ("code", json!("e"))]),
+            ],
+        )
+        .unwrap_err();
+    assert!(matches!(err, KitError::Duplicate(_)), "got {err:?}");
+    txn.rollback();
+    assert_eq!(count(&db), 3);
+
+    // A duplicate PK appearing only within the batch is rejected via the
+    // in-memory pk-seen set.
+    let mut txn = db.begin().unwrap();
+    let err = txn
+        .insert_many(
+            "k",
+            vec![
+                row(&[("id", json!(5)), ("code", json!("f"))]),
+                row(&[("id", json!(5)), ("code", json!("g"))]),
+            ],
+        )
+        .unwrap_err();
+    assert!(matches!(err, KitError::Duplicate(_)), "got {err:?}");
+    txn.rollback();
+    assert_eq!(count(&db), 3);
+
+    // A duplicate unique value inside the batch is rejected too.
+    let mut txn = db.begin().unwrap();
+    let err = txn
+        .insert_many(
+            "k",
+            vec![
+                row(&[("id", json!(6)), ("code", json!("h"))]),
+                row(&[("id", json!(7)), ("code", json!("a"))]),
+            ],
+        )
+        .unwrap_err();
+    assert!(matches!(err, KitError::Duplicate(_)), "got {err:?}");
+    txn.rollback();
+    assert_eq!(count(&db), 3);
+}
+
+#[test]
+fn insert_many_assigns_sequence_pks() {
+    let dir = temp_dir();
+    let id = Column {
+        default: Some(DefaultKind::Sequence("k_seq".into())),
+        ..col(1, "id", ColumnType::Int64)
+    };
+    let schema = Schema::new(vec![Table {
+        id: 1,
+        name: "k".into(),
+        columns: vec![id, col(2, "v", ColumnType::Text)],
+        primary_key: vec!["id".into()],
+        indexes: vec![],
+        foreign_keys: vec![],
+        unique_constraints: vec![],
+        check_constraints: vec![],
+    }])
+    .unwrap();
+    let db = Database::create(&dir, schema).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let inserted = txn
+        .insert_many(
+            "k",
+            vec![
+                row(&[("v", json!("a"))]),
+                row(&[("v", json!("b"))]),
+                row(&[("v", json!("c"))]),
+            ],
+        )
+        .unwrap();
+    txn.commit().unwrap();
+    let ids: Vec<_> = inserted.iter().map(|r| r.values.get("id").cloned()).collect();
+    assert_eq!(ids, vec![Some(json!(1)), Some(json!(2)), Some(json!(3))]);
+}
+
+// ── cascade delete reuses rows scanned during planning (no per-row re-read) ────
+
+#[test]
+fn cascade_delete_removes_all_children() {
+    let dir = temp_dir();
+    let parent = Table {
+        id: 1,
+        name: "parent".into(),
+        columns: vec![col(1, "id", ColumnType::Int64)],
+        primary_key: vec!["id".into()],
+        indexes: vec![],
+        foreign_keys: vec![],
+        unique_constraints: vec![],
+        check_constraints: vec![],
+    };
+    let child = Table {
+        id: 2,
+        name: "child".into(),
+        columns: vec![col(1, "id", ColumnType::Int64), col(2, "parent_id", ColumnType::Int64)],
+        primary_key: vec!["id".into()],
+        indexes: vec![],
+        foreign_keys: vec![ForeignKey {
+            name: "fk_child_parent".into(),
+            columns: vec!["parent_id".into()],
+            references_table: "parent".into(),
+            references_columns: vec!["id".into()],
+            on_delete: ForeignKeyAction::Cascade,
+        }],
+        unique_constraints: vec![],
+        check_constraints: vec![],
+    };
+    let db = Database::create(&dir, Schema::new(vec![parent, child]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    txn.insert("parent", row(&[("id", json!(1))])).unwrap();
+    for i in 1..=5 {
+        txn.insert("child", row(&[("id", json!(i)), ("parent_id", json!(1))]))
+            .unwrap();
+    }
+    txn.commit().unwrap();
+
+    // Deleting the parent cascades to every child, reusing the child rows scanned
+    // while planning rather than re-reading each child by PK.
+    let mut txn = db.begin().unwrap();
+    txn.delete("parent", &json!(1)).unwrap();
+    txn.commit().unwrap();
+
+    let txn = db.begin().unwrap();
+    let children = txn
+        .select(&select_filter("child", Expr::IsNotNull(Box::new(Expr::Column("id".into())))))
+        .unwrap();
+    assert!(children.is_empty(), "expected all children cascaded, got {children:?}");
+    assert!(txn.get_by_pk("parent", &json!(1)).unwrap().is_none());
 }

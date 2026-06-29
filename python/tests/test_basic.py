@@ -136,6 +136,41 @@ def test_foreign_key_violation():
         txn.rollback()
 
 
+def test_insert_many_batch():
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+
+    with db.begin() as txn:
+        rows = txn.insert_many(
+            "users",
+            [
+                {"id": 1, "email": "a@example.com"},
+                {"id": 2, "email": "b@example.com"},
+                {"id": 3, "email": "c@example.com"},
+            ],
+        )
+        txn.commit()
+    assert [r["id"] for r in rows] == [1, 2, 3]
+
+    with db.begin() as txn:
+        assert len(txn.select("users")) == 3
+
+    # A duplicate PK inside a batch rejects the whole batch.
+    with db.begin() as txn:
+        with pytest.raises(DuplicateError):
+            txn.insert_many(
+                "users",
+                [
+                    {"id": 4, "email": "d@example.com"},
+                    {"id": 1, "email": "e@example.com"},
+                ],
+            )
+        txn.rollback()
+
+    with db.begin() as txn:
+        assert len(txn.select("users")) == 3
+
+
 def test_restrict_delete_blocks():
     path = tmp_db()
     db = Database.create(path, users_orders_schema())
