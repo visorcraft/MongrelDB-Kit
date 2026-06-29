@@ -10,6 +10,9 @@ import {
 	migrate,
 	migrationChecksum,
 	dropTable,
+	addIndex,
+	dropIndex,
+	dropColumn,
 	addUnique,
 	addForeignKey,
 	alterColumn,
@@ -587,21 +590,75 @@ describe('migration ops', () => {
 		});
 	});
 
-	it('addUnique rejects existing data that already violates uniqueness', async () => {
-		const accounts = accountsTable();
-		await withSchemaDb([accounts], async (db) => {
-			await db.insertInto(accounts).values({ id: 1n, email: 'dup@example.com' }).execute();
-			await db.insertInto(accounts).values({ id: 2n, email: 'dup@example.com' }).execute();
+		it('addUnique rejects existing data that already violates uniqueness', async () => {
+			const accounts = accountsTable();
+			await withSchemaDb([accounts], async (db) => {
+				await db.insertInto(accounts).values({ id: 1n, email: 'dup@example.com' }).execute();
+				await db.insertInto(accounts).values({ id: 2n, email: 'dup@example.com' }).execute();
 
 			await expect(
 				addUnique(db, 'accounts', unique(['email'], { name: 'uq_accounts_email' }))
-			).rejects.toBeInstanceOf(KitMigrationError);
+				).rejects.toBeInstanceOf(KitMigrationError);
+			});
 		});
-	});
 
-	it('addForeignKey backfills parent row guards and enforces the FK afterward', async () => {
-		const owners = ownersTable();
-		const pets = petsTable();
+		it('addIndex rebuilds the table and preserves rows', async () => {
+			const accounts = accountsTable();
+			await withSchemaDb([accounts], async (db) => {
+				await db.insertInto(accounts).values({ id: 1n, email: 'a@example.com' }).execute();
+				await db.insertInto(accounts).values({ id: 2n, email: 'b@example.com' }).execute();
+
+				await addIndex(db, 'accounts', index(['email'], { name: 'idx_accounts_email' }));
+
+				expect(db.schema.table('accounts').indexes.map((idx) => idx.name)).toEqual([
+					'idx_accounts_email'
+				]);
+				const rows = await db.selectFrom(accounts).execute();
+				expect(rows.map((row) => row.email).sort()).toEqual(['a@example.com', 'b@example.com']);
+			});
+		});
+
+		it('dropIndex rebuilds the table and preserves rows', async () => {
+			const accounts = table('accounts', {
+				columns: [int('id', { primaryKey: true }), text('email', { nullable: false })],
+				primaryKey: ['id'],
+				indexes: [index(['email'], { name: 'idx_accounts_email' })]
+			});
+			await withSchemaDb([accounts], async (db) => {
+				await db.insertInto(accounts).values({ id: 1n, email: 'a@example.com' }).execute();
+
+				await dropIndex(db, 'accounts', 'idx_accounts_email');
+
+				expect(db.schema.table('accounts').indexes).toEqual([]);
+				const rows = await db.selectFrom(accounts).execute();
+				expect(rows).toEqual([{ id: 1n, email: 'a@example.com' }]);
+			});
+		});
+
+		it('dropColumn rebuilds the table, preserves rows, and cleans unique guards', async () => {
+			const accounts = accountsTable();
+			const accountsWithoutEmail = table('accounts', {
+				columns: [int('id', { primaryKey: true })],
+				primaryKey: ['id']
+			});
+			await withSchemaDb([accounts], async (db) => {
+				await db.insertInto(accounts).values({ id: 1n, email: 'a@example.com' }).execute();
+				await addUnique(db, 'accounts', unique(['email'], { name: 'uq_accounts_email' }));
+				expect(guardCount(db, kitUniqueKeys, 'owner_table', 'accounts')).toBe(1);
+
+				await dropColumn(db, 'accounts', 'email');
+
+				expect(db.nativeDb.tableColumns('accounts')).toEqual(['id']);
+				expect(db.schema.table('accounts').columns.map((column) => column.name)).toEqual(['id']);
+				expect(guardCount(db, kitUniqueKeys, 'owner_table', 'accounts')).toBe(0);
+				const rows = await db.selectFrom(accountsWithoutEmail).execute();
+				expect(rows).toEqual([{ id: 1n }]);
+			});
+		});
+
+		it('addForeignKey backfills parent row guards and enforces the FK afterward', async () => {
+			const owners = ownersTable();
+			const pets = petsTable();
 		await withSchemaDb([owners, pets], async (db) => {
 			await db.insertInto(owners).values({ id: 1n, name: 'Ada' }).execute();
 			await db.insertInto(pets).values({ id: 1n, owner_id: 1n, name: 'Rex' }).execute();

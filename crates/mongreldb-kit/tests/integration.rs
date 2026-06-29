@@ -647,6 +647,21 @@ fn people_table(with_unique: bool) -> Table {
     }
 }
 
+fn people_table_with_index(index: Option<Index>) -> Table {
+    Table {
+        indexes: index.into_iter().collect(),
+        ..people_table(false)
+    }
+}
+
+fn people_table_without_email() -> Table {
+    Table {
+        columns: vec![Column::new(1, "id", ColumnType::Int64)],
+        primary_key: vec!["id".into()],
+        ..people_table(false)
+    }
+}
+
 fn insert_person(txn: &mut Transaction, id: i64, email: &str) -> Result<Row, KitError> {
     let mut row = Map::new();
     row.insert("id".into(), json!(id));
@@ -989,21 +1004,117 @@ fn migrate_drop_table_removes_table() {
 }
 
 #[test]
-fn migrate_unsupported_op_errors_clearly() {
+fn migrate_add_index_rebuilds_table_and_preserves_rows() {
+    let dir = temp_dir();
+    let mut db = Database::create(&dir, Schema::new(vec![people_table(false)]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_person(&mut txn, 1, "a@example.com").unwrap();
+    insert_person(&mut txn, 2, "b@example.com").unwrap();
+    txn.commit().unwrap();
+
+    db.set_schema(
+        Schema::new(vec![people_table_with_index(Some(Index {
+            name: "idx_people_email".into(),
+            columns: vec!["email".into()],
+            unique: false,
+        }))])
+        .unwrap(),
+    );
+    let migrations = vec![Migration {
+        version: 1,
+        name: "add_email_index".into(),
+        ops: vec![MigrationOp::AddIndex {
+            table: "people".into(),
+            index: "idx_people_email".into(),
+        }],
+    }];
+    mongreldb_kit::migrate(&mut db, &migrations).unwrap();
+
+    let schema = db.raw().table("people").unwrap().lock().schema().clone();
+    assert_eq!(schema.indexes.len(), 1);
+    assert_eq!(schema.indexes[0].name, "idx_people_email_email");
+
+    let txn = db.begin().unwrap();
+    let row = txn.get_by_pk("people", &json!(1)).unwrap().unwrap();
+    assert_eq!(row.values.get("email"), Some(&json!("a@example.com")));
+}
+
+#[test]
+fn migrate_drop_index_rebuilds_table_and_preserves_rows() {
+    let dir = temp_dir();
+    let indexed = people_table_with_index(Some(Index {
+        name: "idx_people_email".into(),
+        columns: vec!["email".into()],
+        unique: false,
+    }));
+    let mut db = Database::create(&dir, Schema::new(vec![indexed]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_person(&mut txn, 1, "a@example.com").unwrap();
+    txn.commit().unwrap();
+
+    db.set_schema(Schema::new(vec![people_table(false)]).unwrap());
+    let migrations = vec![Migration {
+        version: 1,
+        name: "drop_email_index".into(),
+        ops: vec![MigrationOp::DropIndex {
+            table: "people".into(),
+            index: "idx_people_email".into(),
+        }],
+    }];
+    mongreldb_kit::migrate(&mut db, &migrations).unwrap();
+
+    let schema = db.raw().table("people").unwrap().lock().schema().clone();
+    assert!(schema.indexes.is_empty());
+
+    let txn = db.begin().unwrap();
+    let row = txn.get_by_pk("people", &json!(1)).unwrap().unwrap();
+    assert_eq!(row.values.get("email"), Some(&json!("a@example.com")));
+}
+
+#[test]
+fn migrate_drop_column_rebuilds_table_and_removes_stale_values() {
+    let dir = temp_dir();
+    let mut db = Database::create(&dir, Schema::new(vec![people_table(false)]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_person(&mut txn, 1, "a@example.com").unwrap();
+    txn.commit().unwrap();
+
+    db.set_schema(Schema::new(vec![people_table_without_email()]).unwrap());
+    let migrations = vec![Migration {
+        version: 1,
+        name: "drop_email".into(),
+        ops: vec![MigrationOp::DropColumn {
+            table: "people".into(),
+            column: "email".into(),
+        }],
+    }];
+    mongreldb_kit::migrate(&mut db, &migrations).unwrap();
+
+    let schema = db.raw().table("people").unwrap().lock().schema().clone();
+    assert!(schema.column("email").is_none());
+
+    let txn = db.begin().unwrap();
+    let row = txn.get_by_pk("people", &json!(1)).unwrap().unwrap();
+    assert_eq!(row.values.get("id"), Some(&json!(1)));
+    assert!(row.values.get("email").is_none());
+}
+
+#[test]
+fn migrate_raw_sql_errors_clearly() {
     let dir = temp_dir();
     let mut db = Database::create(&dir, Schema::new(vec![people_table(false)]).unwrap()).unwrap();
 
     let migrations = vec![Migration {
         version: 1,
         name: "raw".into(),
-        ops: vec![MigrationOp::AddIndex {
-            table: "people".into(),
-            index: "idx_email".into(),
-        }],
+        ops: vec![MigrationOp::RawSql("VACUUM".into())],
     }];
     let err = mongreldb_kit::migrate(&mut db, &migrations).unwrap_err();
     match err {
-        KitError::Migration(msg) => assert!(msg.contains("add_index")),
+        KitError::Migration(msg) => assert!(msg.contains("RawSql")),
         other => panic!("expected migration error, got {other:?}"),
     }
 }

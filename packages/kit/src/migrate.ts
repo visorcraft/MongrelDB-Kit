@@ -107,7 +107,10 @@ export interface MigrationContext {
 	db: NativeDatabase;
 	ensureTable: (table: TableSpec) => Promise<void> | void;
 	addColumn: (tableName: string, column: ColumnSpec) => Promise<void> | void;
+	dropColumn: (tableName: string, columnName: string) => Promise<void> | void;
 	alterColumn: (tableName: string, columnName: string, newColumn: ColumnSpec) => Promise<void> | void;
+	addIndex: (tableName: string, index: IndexSpec) => Promise<void> | void;
+	dropIndex: (tableName: string, indexName: string) => Promise<void> | void;
 	sql: (sql: string) => Promise<unknown[]> | unknown[];
 }
 
@@ -467,7 +470,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.1.0';
+	return '0.3.0';
 }
 
 function makeContext(kit: KitDatabase): MigrationContext {
@@ -476,8 +479,11 @@ function makeContext(kit: KitDatabase): MigrationContext {
 		db: kit.nativeDb,
 		ensureTable: (table: TableSpec) => createTable(kit, table),
 		addColumn: (tableName: string, column: ColumnSpec) => addColumn(kit, tableName, column),
+		dropColumn: (tableName: string, columnName: string) => dropColumn(kit, tableName, columnName),
 		alterColumn: (tableName: string, columnName: string, newColumn: ColumnSpec) =>
 			alterColumn(kit, tableName, columnName, newColumn),
+		addIndex: (tableName: string, index: IndexSpec) => addIndex(kit, tableName, index),
+		dropIndex: (tableName: string, indexName: string) => dropIndex(kit, tableName, indexName),
 		sql: (sql: string) => runSql(kit.nativeDb, sql)
 	};
 }
@@ -587,8 +593,11 @@ function makeContextSync(kit: KitDatabase): MigrationContext {
 		db: kit.nativeDb,
 		ensureTable: (table: TableSpec) => createTableSync(kit, table),
 		addColumn: (tableName: string, column: ColumnSpec) => addColumnSync(kit, tableName, column),
+		dropColumn: (tableName: string, columnName: string) => dropColumnSync(kit, tableName, columnName),
 		alterColumn: (tableName: string, columnName: string, newColumn: ColumnSpec) =>
 			alterColumnSync(kit, tableName, columnName, newColumn),
+		addIndex: (tableName: string, index: IndexSpec) => addIndexSync(kit, tableName, index),
+		dropIndex: (tableName: string, indexName: string) => dropIndexSync(kit, tableName, indexName),
 		sql: () => {
 			throw new KitMigrationError('sql() is not available in synchronous migrations');
 		}
@@ -918,7 +927,57 @@ function renameColumnReferences(table: TableSpec, oldName: string, newName: stri
 	}
 }
 
-export async function addIndex(kit: KitDatabase, tableName: string, index: IndexSpec): Promise<void> {
+function rebuildTableSync(kit: KitDatabase, table: TableSpec, updatedTable: TableSpec): void {
+	const db = kit.nativeDb;
+	const tempName = `__kit_tmp_rebuild_${table.name}_${Date.now()}`;
+
+	db.createTable(tempName, toMongrelSchema(updatedTable));
+	try {
+		const rows = fullScanRows(db, table);
+		for (const { row } of rows) {
+			db.table(tempName).put(toCells(updatedTable, row));
+		}
+		db.table(tempName).commit();
+
+		db.dropTable(table.name);
+		db.createTable(table.name, toMongrelSchema(updatedTable));
+
+		const tempRows = fullScanRows(db, { ...updatedTable, name: tempName });
+		for (const { row } of tempRows) {
+			db.table(table.name).put(toCells(updatedTable, row));
+		}
+		db.table(table.name).commit();
+	} finally {
+		if (db.tableNames().includes(tempName)) {
+			db.dropTable(tempName);
+		}
+	}
+}
+
+function dropUniqueGuards(kit: KitDatabase, tableName: string, constraintName: string): void {
+	const handle = kit.nativeDb.table('__kit_unique_keys');
+	const guards = handle.query([
+		{
+			kind: ConditionKind.BitmapEq,
+			columnId: columnId(kitUniqueKeys, 'owner_table'),
+			text: tableName
+		}
+	]);
+	let mutated = false;
+	for (const guard of guards) {
+		const constraint = guard.cells.find(
+			(c) => c.columnId === columnId(kitUniqueKeys, 'constraint_name')
+		)?.text;
+		if (constraint !== constraintName) continue;
+		const key = guard.cells.find((c) => c.columnId === columnId(kitUniqueKeys, 'encoded_key'))?.text;
+		if (!key) continue;
+		handle.deleteByPkText(key);
+		mutated = true;
+	}
+	if (mutated) handle.commit();
+}
+
+function addIndexSync(kit: KitDatabase, tableName: string, index: IndexSpec): void {
 	const table = kit.schema.table(tableName);
 	if (table.indexes.some((idx) => idx.name === index.name)) {
 		throw new KitMigrationError(`Index "${index.name}" already exists on "${tableName}"`);
@@ -929,33 +988,94 @@ export async function addIndex(kit: KitDatabase, tableName: string, index: Index
 		indexes: [...table.indexes, index]
 	};
 
-	const db = kit.nativeDb;
-	const tempName = `__kit_tmp_addindex_${tableName}_${Date.now()}`;
-
-	// Rebuild the table with the additional index. MongrelDB does not support
-	// CREATE INDEX on an existing table, so we copy to a temp table and swap.
-	db.createTable(tempName, toMongrelSchema(updatedTable));
-
+	const addsUnique =
+		index.unique &&
+		!table.unique.some((constraint) => constraint.columns.join('\0') === index.columns.join('\0'));
+	if (addsUnique) {
+		addUniqueSync(kit, tableName, { name: index.name, columns: [...index.columns] });
+	}
 	try {
-		const rows = fullScanRows(db, table);
-		for (const { row } of rows) {
-			db.table(tempName).put(toCells(updatedTable, row));
+		rebuildTableSync(kit, table, updatedTable);
+	} catch (cause) {
+		if (addsUnique) {
+			table.unique = table.unique.filter((constraint) => constraint.name !== index.name);
+			dropUniqueGuards(kit, tableName, index.name);
 		}
-		db.table(tempName).commit();
+		throw cause;
+	}
+	table.indexes.push(index);
+}
 
-		db.dropTable(tableName);
-		db.createTable(tableName, toMongrelSchema(updatedTable));
+export async function addIndex(kit: KitDatabase, tableName: string, index: IndexSpec): Promise<void> {
+	addIndexSync(kit, tableName, index);
+}
 
-		const tempRows = fullScanRows(db, { ...updatedTable, name: tempName });
-		for (const { row } of tempRows) {
-			db.table(tableName).put(toCells(updatedTable, row));
-		}
-		db.table(tableName).commit();
-	} finally {
-		if (db.tableNames().includes(tempName)) {
-			db.dropTable(tempName);
+function dropIndexSync(kit: KitDatabase, tableName: string, indexName: string): void {
+	const table = kit.schema.table(tableName);
+	const index = table.indexes.find((idx) => idx.name === indexName);
+	if (!index) {
+		throw new KitMigrationError(`Index "${indexName}" does not exist on "${tableName}"`);
+	}
+
+	const updatedTable: TableSpec = {
+		...table,
+		indexes: table.indexes.filter((idx) => idx.name !== indexName),
+		unique: index.unique ? table.unique.filter((constraint) => constraint.name !== indexName) : table.unique
+	};
+
+	rebuildTableSync(kit, table, updatedTable);
+	table.indexes = updatedTable.indexes;
+	if (index.unique) {
+		table.unique = updatedTable.unique;
+		dropUniqueGuards(kit, tableName, indexName);
+	}
+}
+
+export async function dropIndex(kit: KitDatabase, tableName: string, indexName: string): Promise<void> {
+	dropIndexSync(kit, tableName, indexName);
+}
+
+function dropColumnSync(kit: KitDatabase, tableName: string, columnName: string): void {
+	const table = kit.schema.table(tableName);
+	if (!table.columns.some((column) => column.name === columnName)) {
+		throw new KitMigrationError(`Column "${columnName}" does not exist on "${tableName}"`);
+	}
+	if (table.primaryKey.includes(columnName)) {
+		throw new KitMigrationError(`Cannot drop primary-key column "${columnName}" from "${tableName}"`);
+	}
+	for (const candidate of kit.schema.tablesList()) {
+		for (const fk of candidate.foreignKeys) {
+			if (fk.referencesTable === tableName && fk.referencesColumns.includes(columnName)) {
+				throw new KitMigrationError(
+					`Cannot drop "${tableName}"."${columnName}" while foreign key "${fk.name}" references it`
+				);
+			}
 		}
 	}
+
+	const removedUnique = table.unique
+		.filter((constraint) => constraint.columns.includes(columnName))
+		.map((constraint) => constraint.name);
+	const updatedTable: TableSpec = {
+		...table,
+		columns: table.columns.filter((column) => column.name !== columnName),
+		indexes: table.indexes.filter((idx) => !idx.columns.includes(columnName)),
+		unique: table.unique.filter((constraint) => !constraint.columns.includes(columnName)),
+		foreignKeys: table.foreignKeys.filter((fk) => !fk.columns.includes(columnName))
+	};
+
+	rebuildTableSync(kit, table, updatedTable);
+	table.columns = updatedTable.columns;
+	table.indexes = updatedTable.indexes;
+	table.unique = updatedTable.unique;
+	table.foreignKeys = updatedTable.foreignKeys;
+	for (const constraint of removedUnique) {
+		dropUniqueGuards(kit, tableName, constraint);
+	}
+}
+
+export async function dropColumn(kit: KitDatabase, tableName: string, columnName: string): Promise<void> {
+	dropColumnSync(kit, tableName, columnName);
 }
 
 /**
@@ -965,11 +1085,7 @@ export async function addIndex(kit: KitDatabase, tableName: string, index: Index
  * data already violates the constraint and the migration is rejected. The
  * constraint is added to the in-memory table so subsequent writes enforce it.
  */
-export async function addUnique(
-	kit: KitDatabase,
-	tableName: string,
-	unique: UniqueSpec
-): Promise<void> {
+function addUniqueSync(kit: KitDatabase, tableName: string, unique: UniqueSpec): void {
 	const db = kit.nativeDb;
 	const table = kit.schema.table(tableName);
 	if (table.unique.some((u) => u.name === unique.name)) {
@@ -1023,6 +1139,14 @@ export async function addUnique(
 	if (mutated) ukHandle.commit();
 
 	table.unique.push(unique);
+}
+
+export async function addUnique(
+	kit: KitDatabase,
+	tableName: string,
+	unique: UniqueSpec
+): Promise<void> {
+	addUniqueSync(kit, tableName, unique);
 }
 
 /** Build the parent primary-key value referenced by a foreign key. */

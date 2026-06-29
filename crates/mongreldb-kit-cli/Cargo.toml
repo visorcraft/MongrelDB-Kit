@@ -1,6 +1,6 @@
 [package]
 name = "mongreldb-kit-cli"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Command-line tools for MongrelDB Kit: schema validation, migration apply/plan/status, drift diffing, and typed code generation."

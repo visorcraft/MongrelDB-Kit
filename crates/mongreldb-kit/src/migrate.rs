@@ -145,22 +145,46 @@ fn apply_migration_ops(
                 // here.
             }
             MigrationOp::DropColumn { table, column } => {
-                return Err(KitError::Migration(format!(
-                    "migration op drop_column ({table}.{column}) requires a table rebuild \
-                     and is not supported by the Rust runner yet"
-                )));
+                let target = schema.table(table).ok_or_else(|| {
+                    KitError::Migration(format!("drop_column: table {table} not found in schema"))
+                })?;
+                if target.column(column).is_some() {
+                    return Err(KitError::Migration(format!(
+                        "drop_column: target schema still contains {table}.{column}"
+                    )));
+                }
+                rebuild_table(core, target)?;
+                drop_stale_unique_guards(core, target)?;
             }
             MigrationOp::AddIndex { table, index } => {
-                return Err(KitError::Migration(format!(
-                    "migration op add_index ({index} on {table}) requires a table rebuild \
-                     and is not supported by the Rust runner yet"
-                )));
+                let target = schema.table(table).ok_or_else(|| {
+                    KitError::Migration(format!("add_index: table {table} not found in schema"))
+                })?;
+                let idx = target
+                    .indexes
+                    .iter()
+                    .find(|idx| idx.name == *index)
+                    .ok_or_else(|| {
+                        KitError::Migration(format!(
+                            "add_index: index {index} not found on table {table} in schema"
+                        ))
+                    })?;
+                if idx.unique {
+                    backfill_unique(core, schema, table, index)?;
+                }
+                rebuild_table(core, target)?;
             }
             MigrationOp::DropIndex { table, index } => {
-                return Err(KitError::Migration(format!(
-                    "migration op drop_index ({index} on {table}) requires a table rebuild \
-                     and is not supported by the Rust runner yet"
-                )));
+                let target = schema.table(table).ok_or_else(|| {
+                    KitError::Migration(format!("drop_index: table {table} not found in schema"))
+                })?;
+                if target.indexes.iter().any(|idx| idx.name == *index) {
+                    return Err(KitError::Migration(format!(
+                        "drop_index: target schema still contains index {index} on {table}"
+                    )));
+                }
+                rebuild_table(core, target)?;
+                drop_stale_unique_guards(core, target)?;
             }
             MigrationOp::RawSql(sql) => {
                 return Err(KitError::Migration(format!(
@@ -245,6 +269,85 @@ fn visible_app_rows(core: &CoreDatabase, table: &KitTable) -> Result<Vec<KitRow>
         .iter()
         .map(|r| core_row_to_json(r, table))
         .collect()
+}
+
+fn copy_rows_to_table(
+    core: &CoreDatabase,
+    table_name: &str,
+    table: &KitTable,
+    rows: &[CoreRow],
+) -> Result<()> {
+    let mut txn = core.begin();
+    for row in rows {
+        let cells: Vec<(u16, CoreValue)> = table
+            .columns
+            .iter()
+            .map(|col| {
+                let id = col.id as u16;
+                (id, row.columns.get(&id).cloned().unwrap_or(CoreValue::Null))
+            })
+            .collect();
+        txn.put(table_name, cells).map_err(KitError::from)?;
+    }
+    txn.commit().map_err(KitError::from)?;
+    Ok(())
+}
+
+fn temp_rebuild_name(core: &CoreDatabase, table_name: &str) -> String {
+    for attempt in 0.. {
+        let name = format!("__kit_tmp_rebuild_{table_name}_{attempt}");
+        if core.table_id(&name).is_err() {
+            return name;
+        }
+    }
+    unreachable!("unbounded rebuild temp name search must return")
+}
+
+fn rebuild_table(core: &CoreDatabase, target: &KitTable) -> Result<()> {
+    let rows = visible_internal_rows(core, &target.name)?;
+    let target_schema = to_core_schema(target);
+    let temp_name = temp_rebuild_name(core, &target.name);
+
+    core.create_table(&temp_name, target_schema.clone())
+        .map_err(KitError::from)?;
+    let result = (|| -> Result<()> {
+        copy_rows_to_table(core, &temp_name, target, &rows)?;
+        core.drop_table(&target.name).map_err(KitError::from)?;
+        core.create_table(&target.name, target_schema)
+            .map_err(KitError::from)?;
+        copy_rows_to_table(core, &target.name, target, &rows)?;
+        Ok(())
+    })();
+
+    let cleanup = core.drop_table(&temp_name).map_err(KitError::from);
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(err), _) => Err(err),
+        (Ok(()), Err(err)) => Err(err),
+    }
+}
+
+fn drop_stale_unique_guards(core: &CoreDatabase, target: &KitTable) -> Result<()> {
+    let live_constraints: HashSet<&str> = target
+        .unique_constraints
+        .iter()
+        .map(|constraint| constraint.name.as_str())
+        .collect();
+    let existing = visible_internal_rows(core, UNIQUE_KEYS)?;
+    let mut txn = core.begin();
+    for guard in &existing {
+        let guard_table = internal_bytes(guard, cols::UQ_OWNER_TABLE).unwrap_or_default();
+        if guard_table != target.name {
+            continue;
+        }
+        let guard_constraint = internal_bytes(guard, cols::UQ_CONSTRAINT).unwrap_or_default();
+        if !live_constraints.contains(guard_constraint.as_str()) {
+            txn.delete(UNIQUE_KEYS, guard.row_id)
+                .map_err(KitError::from)?;
+        }
+    }
+    txn.commit().map_err(KitError::from)?;
+    Ok(())
 }
 
 /// Backfill `__kit_unique_keys` guards for an added unique constraint (PLAN

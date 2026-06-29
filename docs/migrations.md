@@ -89,6 +89,10 @@ it never drives the work.
 | `ctx.db` | The native MongrelDB database. |
 | `ctx.ensureTable(table)` | Create a table from its `TableSpec` if it does not exist. |
 | `ctx.addColumn(tableName, column)` | Add a column, backfilling non-nullable columns with their default; no-ops if the physical column already exists. |
+| `ctx.dropColumn(tableName, columnName)` | Drop a non-primary-key column by rebuilding the table; removes indexes/unique constraints/FKs owned by that column. |
+| `ctx.alterColumn(tableName, oldName, column)` | Alter an existing column through native MongrelDB validation. |
+| `ctx.addIndex(tableName, index)` | Add an index by rebuilding the table. |
+| `ctx.dropIndex(tableName, indexName)` | Drop an index by rebuilding the table. |
 | `ctx.sql(sql)` | Run raw SQL. Available in async migrations only; throws in `migrateSync`. |
 
 For changes beyond adding a table or column, import the standalone helpers and
@@ -116,13 +120,15 @@ await migrate(db, schema, [
 | --- | --- |
 | `createTable(kit, table)` / `ctx.ensureTable` | Create the table from its spec if missing. |
 | `addColumn(kit, t, column)` / `ctx.addColumn` | Add a column; non-nullable columns are backfilled with their default; existing physical columns are skipped. |
+| `dropColumn(kit, t, column)` / `ctx.dropColumn` | Drop a non-primary-key column by rebuilding the table; indexes, unique constraints, and outgoing foreign keys on that column are removed. |
 | `alterColumn(kit, t, oldName, column)` / `ctx.alterColumn` | Alter an existing column through native MongrelDB validation. Supports renames, native type changes that do not require stored-row conversion, and nullability changes that existing data satisfies. |
-| `addIndex(kit, t, indexSpec)` | Add an index by rebuilding the table (MongrelDB has no add-index-in-place). |
+| `addIndex(kit, t, indexSpec)` / `ctx.addIndex` | Add an index by rebuilding the table (MongrelDB has no add-index-in-place). Unique indexes also backfill unique guards. |
+| `dropIndex(kit, t, indexName)` / `ctx.dropIndex` | Drop an index by rebuilding the table; dropping a unique index also clears its guards. |
 | `addUnique(kit, t, uniqueSpec)` | Add a unique constraint and backfill its guards; rejects data that already violates it. |
 | `addForeignKey(kit, t, fkSpec)` | Add a foreign key and touch parent row guards; rejects a child with a missing parent. |
 | `dropTable(kit, tableName)` | Drop a table and clear its unique-key and row guards. |
 
-There is intentionally **no** TypeScript helper for `dropColumn`, `dropUnique`,
+There is intentionally **no** TypeScript helper for `dropUnique`,
 `dropForeignKey`, `addCheck`, or `dropCheck`: check and foreign-key *enforcement*
 is driven by the schema definition you pass when opening the database and
 re-persisting the catalog, so those need no row-level backfill step.
@@ -174,16 +180,16 @@ Verify against this matrix rather than assuming symmetry.
 | `addForeignKey` | `addForeignKey` (backfill + reject missing parent) | implemented (backfill + reject missing parent) |
 | `dropForeignKey` | — | metadata-only no-op (enforcement follows the re-persisted schema) |
 | `addCheck` / `dropCheck` | — | metadata-only no-op (enforcement follows the re-persisted schema) |
-| `addIndex` | `addIndex` (table rebuild) | **not supported** — raises a migration error |
-| `dropColumn` | — | **not supported** — raises a migration error |
-| `dropIndex` | — | **not supported** — raises a migration error |
+| `addIndex` | `addIndex` / `ctx.addIndex` (table rebuild) | implemented (table rebuild) |
+| `dropColumn` | `dropColumn` / `ctx.dropColumn` (table rebuild) | implemented (table rebuild) |
+| `dropIndex` | `dropIndex` / `ctx.dropIndex` (table rebuild) | implemented (table rebuild) |
 | `rawSql` | `ctx.sql` (async migrations only) | **not supported** — raises a migration error |
 
-Note the asymmetry: `addIndex` works in TypeScript (it rebuilds the table) but
-the Rust/CLI runner rejects it; conversely `dropUnique`, `dropForeignKey`, and
-check ops are handled (or safely no-op'd) by the Rust/CLI runner but have no
-TypeScript helper because the schema definition already carries their
-enforcement.
+Remaining asymmetry: `dropUnique`, `dropForeignKey`, and check ops are handled
+(or safely no-op'd) by the Rust/CLI runner but have no TypeScript helper because
+the schema definition already carries their enforcement. `rawSql` remains
+TypeScript-only because the Rust/CLI runner intentionally avoids embedding a SQL
+execution engine in migrations.
 
 ## Checksums and drift detection
 
@@ -248,6 +254,9 @@ guards untouched.
   missing parent **fails** the migration.
 - **Drop table / drop unique.** The runner removes the unique-key and row guards
   owned by the dropped table or constraint.
+- **Add/drop index and drop column.** The runner rebuilds the physical table with
+  the target schema and copies visible rows. Dropping a column also removes stale
+  unique guards for constraints that no longer exist in the target schema.
 
 ## Renaming tables
 
