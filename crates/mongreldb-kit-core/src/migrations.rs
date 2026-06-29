@@ -150,15 +150,10 @@ impl Migration {
 ///
 /// The function assumes `desired` is sorted by the caller; it returns a sorted
 /// subset. If `applied` is empty, all desired migrations are returned.
-pub fn plan_migrations<'a>(
-    applied: &[Migration],
-    desired: &'a [Migration],
-) -> Vec<&'a Migration> {
+pub fn plan_migrations<'a>(applied: &[Migration], desired: &'a [Migration]) -> Vec<&'a Migration> {
     let max_applied = applied.iter().map(|m| m.version).max().unwrap_or(i64::MIN);
-    let mut pending: Vec<&'a Migration> = desired
-        .iter()
-        .filter(|m| m.version > max_applied)
-        .collect();
+    let mut pending: Vec<&'a Migration> =
+        desired.iter().filter(|m| m.version > max_applied).collect();
     pending.sort_by_key(|m| m.version);
     pending
 }
@@ -181,7 +176,13 @@ mod tests {
         // (`packages/kit/src/migrate.test.ts`) for the same logical migration,
         // proving the canonical serialization is byte-identical cross-language.
         assert_eq!(
-            migration_checksum(1, "init", &[MigrationOp::CreateTable { name: "users".into() }]),
+            migration_checksum(
+                1,
+                "init",
+                &[MigrationOp::CreateTable {
+                    name: "users".into()
+                }]
+            ),
             "fe2f521793591207bd4d8645c2631e4b7ce43e30fe7ea5691a2846c74ea71cc3"
         );
         // A multi-op migration vector (also shared with the TypeScript test).
@@ -211,22 +212,45 @@ mod tests {
 
     #[test]
     fn checksum_changes_with_version_name_or_ops() {
-        let base =
-            migration_checksum(1, "init", &[MigrationOp::CreateTable { name: "users".into() }]);
+        let base = migration_checksum(
+            1,
+            "init",
+            &[MigrationOp::CreateTable {
+                name: "users".into(),
+            }],
+        );
         // version
         assert_ne!(
             base,
-            migration_checksum(2, "init", &[MigrationOp::CreateTable { name: "users".into() }])
+            migration_checksum(
+                2,
+                "init",
+                &[MigrationOp::CreateTable {
+                    name: "users".into()
+                }]
+            )
         );
         // name
         assert_ne!(
             base,
-            migration_checksum(1, "other", &[MigrationOp::CreateTable { name: "users".into() }])
+            migration_checksum(
+                1,
+                "other",
+                &[MigrationOp::CreateTable {
+                    name: "users".into()
+                }]
+            )
         );
         // op content (table name changed)
         assert_ne!(
             base,
-            migration_checksum(1, "init", &[MigrationOp::CreateTable { name: "accounts".into() }])
+            migration_checksum(
+                1,
+                "init",
+                &[MigrationOp::CreateTable {
+                    name: "accounts".into()
+                }]
+            )
         );
         // op kind changed
         assert_ne!(
@@ -234,7 +258,9 @@ mod tests {
             migration_checksum(
                 1,
                 "init",
-                &[MigrationOp::DropTable { name: "users".into() }]
+                &[MigrationOp::DropTable {
+                    name: "users".into()
+                }]
             )
         );
         // op count changed

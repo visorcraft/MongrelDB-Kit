@@ -24,7 +24,10 @@ fn nullable(mut c: Column) -> Column {
 }
 
 fn row(pairs: &[(&str, Value)]) -> Map<String, Value> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 // ── sequences ────────────────────────────────────────────────────────────────
@@ -83,7 +86,10 @@ fn sequence_allocation_retries_under_contention() {
             out
         }));
     }
-    let mut all: Vec<i64> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
+    let mut all: Vec<i64> = handles
+        .into_iter()
+        .flat_map(|h| h.join().unwrap())
+        .collect();
     all.sort_unstable();
     // Every allocation must be unique and the set must be a gap-free range
     // starting at 1 (sequences are 1-based).
@@ -180,14 +186,22 @@ fn table_check_constraint_is_enforced() {
     // Passing row.
     txn.insert(
         "orders",
-        row(&[("id", json!(1)), ("quantity", json!(2)), ("price", json!(5))]),
+        row(&[
+            ("id", json!(1)),
+            ("quantity", json!(2)),
+            ("price", json!(5)),
+        ]),
     )
     .unwrap();
     // Violating row (quantity = 0).
     let err = txn
         .insert(
             "orders",
-            row(&[("id", json!(2)), ("quantity", json!(0)), ("price", json!(5))]),
+            row(&[
+                ("id", json!(2)),
+                ("quantity", json!(0)),
+                ("price", json!(5)),
+            ]),
         )
         .unwrap_err();
     assert!(matches!(err, KitError::Validation(_)));
@@ -210,7 +224,10 @@ fn parent_child_schema() -> Schema {
     let child = Table {
         id: 2,
         name: "child".into(),
-        columns: vec![col(1, "id", ColumnType::Int64), nullable(col(2, "parent_id", ColumnType::Int64))],
+        columns: vec![
+            col(1, "id", ColumnType::Int64),
+            nullable(col(2, "parent_id", ColumnType::Int64)),
+        ],
         primary_key: vec!["id".into()],
         indexes: vec![],
         foreign_keys: vec![ForeignKey {
@@ -264,7 +281,10 @@ fn unique_guard_is_reclaimed_after_delete() {
     let schema = Schema::new(vec![Table {
         id: 1,
         name: "users".into(),
-        columns: vec![col(1, "id", ColumnType::Int64), col(2, "email", ColumnType::Text)],
+        columns: vec![
+            col(1, "id", ColumnType::Int64),
+            col(2, "email", ColumnType::Text),
+        ],
         primary_key: vec!["id".into()],
         indexes: vec![],
         foreign_keys: vec![],
@@ -278,8 +298,11 @@ fn unique_guard_is_reclaimed_after_delete() {
     let db = Database::create(&dir, schema).unwrap();
 
     let mut txn = db.begin().unwrap();
-    txn.insert("users", row(&[("id", json!(1)), ("email", json!("a@x.com"))]))
-        .unwrap();
+    txn.insert(
+        "users",
+        row(&[("id", json!(1)), ("email", json!("a@x.com"))]),
+    )
+    .unwrap();
     txn.commit().unwrap();
 
     let mut txn = db.begin().unwrap();
@@ -288,7 +311,10 @@ fn unique_guard_is_reclaimed_after_delete() {
 
     // Re-insert the same email with a new id: must succeed now the guard is gone.
     let mut txn = db.begin().unwrap();
-    txn.insert("users", row(&[("id", json!(2)), ("email", json!("a@x.com"))]))
-        .unwrap();
+    txn.insert(
+        "users",
+        row(&[("id", json!(2)), ("email", json!("a@x.com"))]),
+    )
+    .unwrap();
     txn.commit().unwrap();
 }

@@ -34,8 +34,7 @@ fn fixtures_dir() -> PathBuf {
 }
 
 fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
-    let s =
-        std::fs::read_to_string(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let s = std::fs::read_to_string(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
     serde_json::from_str(&s).map_err(|e| format!("parse {}: {}", path.display(), e))
 }
 
@@ -203,8 +202,7 @@ fn run_insert(
             if let Some(err) = exp.get("error") {
                 return Err(format!(
                     "{} expected error {} but succeeded",
-                    scenario.name,
-                    err
+                    scenario.name, err
                 ));
             }
             let actual = row_to_value(&result);
@@ -237,8 +235,7 @@ fn run_update(
             if let Some(err) = exp.get("error") {
                 return Err(format!(
                     "{} expected error {} but succeeded",
-                    scenario.name,
-                    err
+                    scenario.name, err
                 ));
             }
             let actual = row_to_value(&result);
@@ -270,17 +267,21 @@ fn run_delete(
             if let Some(err) = exp.get("error") {
                 return Err(format!(
                     "{} expected error {} but succeeded",
-                    scenario.name,
-                    err
+                    scenario.name, err
                 ));
             }
             for table_name in ["users", "posts", "comments"] {
                 let rows = query_all(db, table_name)?;
                 let actual = Value::Array(rows.into_iter().map(Value::Object).collect());
-                let exp_table = exp
-                    .get(table_name)
-                    .ok_or(format!("{} missing expected for {}", scenario.name, table_name))?;
-                assert_eq_json(&format!("{}.{}", scenario.name, table_name), &actual, exp_table)?;
+                let exp_table = exp.get(table_name).ok_or(format!(
+                    "{} missing expected for {}",
+                    scenario.name, table_name
+                ))?;
+                assert_eq_json(
+                    &format!("{}.{}", scenario.name, table_name),
+                    &actual,
+                    exp_table,
+                )?;
             }
         }
         Err(e) => {

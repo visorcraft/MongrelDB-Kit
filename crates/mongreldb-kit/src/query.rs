@@ -14,6 +14,7 @@
 use crate::error::{KitError, Result};
 use crate::schema::{core_row_to_json, Row};
 use mongreldb_core::memtable::Row as CoreRow;
+use mongreldb_core::query::Condition;
 use mongreldb_kit_core::query::{
     AggFunc, Aggregate, AggregateQuery, Direction, Expr, JoinKind, JoinQuery, Literal, OrderBy,
     Query, Select,
@@ -29,7 +30,9 @@ use std::collections::{HashMap, HashSet};
 pub type JoinRow = Map<String, Value>;
 
 /// Fetches the visible rows for a real (non-CTE) table at a read snapshot.
-type TableFetch<'a> = Box<dyn Fn(&str) -> Result<Vec<Row>> + 'a>;
+/// When `Some(conditions)` is provided, the fetcher resolves them via native
+/// indexes and returns only matching rows (Kit Priority 1 pushdown).
+type TableFetch<'a> = Box<dyn Fn(&str, Option<&[Condition]>) -> Result<Vec<Row>> + 'a>;
 
 /// Resolves the base rows for a table name and carries materialized CTEs.
 ///
@@ -45,7 +48,7 @@ pub(crate) struct ExecCtx<'a> {
 impl<'a> ExecCtx<'a> {
     pub(crate) fn new(
         schema: Option<&'a KitSchema>,
-        fetch: impl Fn(&str) -> Result<Vec<Row>> + 'a,
+        fetch: impl Fn(&str, Option<&[Condition]>) -> Result<Vec<Row>> + 'a,
     ) -> Self {
         Self {
             schema,
@@ -62,7 +65,17 @@ impl<'a> ExecCtx<'a> {
         if let Some(rows) = self.ctes.get(name) {
             return Ok(rows.clone());
         }
-        (self.fetch)(name)
+        (self.fetch)(name, None)
+    }
+
+    /// Fetch rows for `name` with native `conditions` pushed to the engine.
+    /// Falls back to an unfiltered fetch for CTEs (which are already
+    /// materialized) or empty conditions.
+    fn table_rows_filtered(&self, name: &str, conditions: &[Condition]) -> Result<Vec<Row>> {
+        if conditions.is_empty() || self.ctes.contains_key(name) {
+            return self.table_rows(name);
+        }
+        (self.fetch)(name, Some(conditions))
     }
 
     fn table_def(&self, name: &str) -> Option<&KitTable> {
@@ -126,7 +139,7 @@ pub fn execute_select(
         .into_iter()
         .map(|r| core_row_to_json(&r, table))
         .collect::<Result<Vec<_>>>()?;
-    let mut ctx = ExecCtx::new(None, |name: &str| {
+    let mut ctx = ExecCtx::new(None, |name: &str, _conds: Option<&[Condition]>| {
         Err(KitError::Validation(format!(
             "table {name} is not available outside a transaction context"
         )))
@@ -136,7 +149,11 @@ pub fn execute_select(
 }
 
 /// Execute any supported kit query statement against visible rows.
-pub fn execute_query(table: &KitTable, visible_rows: Vec<CoreRow>, query: &Query) -> Result<Vec<Row>> {
+pub fn execute_query(
+    table: &KitTable,
+    visible_rows: Vec<CoreRow>,
+    query: &Query,
+) -> Result<Vec<Row>> {
     match query {
         Query::Select(select) => execute_select(table, visible_rows, select),
         _ => Err(KitError::Validation(
@@ -148,16 +165,37 @@ pub fn execute_query(table: &KitTable, visible_rows: Vec<CoreRow>, query: &Query
 // ── select ──────────────────────────────────────────────────────────────────
 
 pub(crate) fn run_select(ctx: &ExecCtx, select: &Select) -> Result<Vec<Row>> {
-    let mut rows = ctx.table_rows(&select.table)?;
-
-    if let Some(filter) = &select.filter {
-        let mut kept = Vec::with_capacity(rows.len());
-        for r in rows {
-            if eval_pred(filter, &FlatScope(&r.values), ctx)? {
-                kept.push(r);
+    // Kit Priority 1 pushdown: translate the filter into native Conditions so
+    // the engine resolves them via indexes (HOT/bitmap/range) instead of a
+    // full scan. Core conditions return a superset, so the original filter is
+    // re-applied in Rust when the translation was partial.
+    let (mut rows, residual_needed) = match &select.filter {
+        Some(filter) => {
+            let pushed = ctx
+                .table_def(&select.table)
+                .and_then(|t| crate::pushdown::translate_predicate(t, filter));
+            match pushed {
+                Some(plan) if plan.can_push() => {
+                    let fetched = ctx.table_rows_filtered(&select.table, &plan.conditions)?;
+                    (fetched, !plan.fully_translated)
+                }
+                _ => (ctx.table_rows(&select.table)?, true),
             }
         }
-        rows = kept;
+        None => (ctx.table_rows(&select.table)?, false),
+    };
+
+    // Residual Rust evaluation for partially-translated predicates.
+    if residual_needed {
+        if let Some(filter) = &select.filter {
+            let mut kept = Vec::with_capacity(rows.len());
+            for r in rows {
+                if eval_pred(filter, &FlatScope(&r.values), ctx)? {
+                    kept.push(r);
+                }
+            }
+            rows = kept;
+        }
     }
 
     for order in &select.order_by {
@@ -202,16 +240,33 @@ pub(crate) fn project_distinct(select: &Select, rows: Vec<Row>) -> Vec<Row> {
 // ── aggregates / group by / having ──────────────────────────────────────────
 
 pub(crate) fn run_aggregate(ctx: &ExecCtx, query: &AggregateQuery) -> Result<Vec<Row>> {
-    let mut rows = ctx.table_rows(&query.table)?;
-
-    if let Some(filter) = &query.filter {
-        let mut kept = Vec::with_capacity(rows.len());
-        for r in rows {
-            if eval_pred(filter, &FlatScope(&r.values), ctx)? {
-                kept.push(r);
+    // Kit Priority 1 pushdown: same strategy as run_select.
+    let (mut rows, residual_needed) = match &query.filter {
+        Some(filter) => {
+            let pushed = ctx
+                .table_def(&query.table)
+                .and_then(|t| crate::pushdown::translate_predicate(t, filter));
+            match pushed {
+                Some(plan) if plan.can_push() => {
+                    let fetched = ctx.table_rows_filtered(&query.table, &plan.conditions)?;
+                    (fetched, !plan.fully_translated)
+                }
+                _ => (ctx.table_rows(&query.table)?, true),
             }
         }
-        rows = kept;
+        None => (ctx.table_rows(&query.table)?, false),
+    };
+
+    if residual_needed {
+        if let Some(filter) = &query.filter {
+            let mut kept = Vec::with_capacity(rows.len());
+            for r in rows {
+                if eval_pred(filter, &FlatScope(&r.values), ctx)? {
+                    kept.push(r);
+                }
+            }
+            rows = kept;
+        }
     }
 
     // Group rows by the key columns, preserving first-seen group order.
@@ -320,9 +375,9 @@ fn compute_aggregate(agg: &Aggregate, rows: &[Row]) -> Result<Value> {
 }
 
 fn require_agg_column(agg: &Aggregate) -> Result<&String> {
-    agg.column.as_ref().ok_or_else(|| {
-        KitError::Validation(format!("aggregate {:?} requires a column", agg.func))
-    })
+    agg.column
+        .as_ref()
+        .ok_or_else(|| KitError::Validation(format!("aggregate {:?} requires a column", agg.func)))
 }
 
 fn numeric_values(rows: &[Row], col: &str) -> Vec<f64> {
@@ -402,7 +457,11 @@ pub(crate) fn run_join(ctx: &ExecCtx, query: &JoinQuery) -> Result<Vec<JoinRow>>
     for order in &query.order_by {
         let key = match &order.expr {
             Expr::Column(n) => n.clone(),
-            other => return Err(KitError::Validation(format!("unsupported order by: {other:?}"))),
+            other => {
+                return Err(KitError::Validation(format!(
+                    "unsupported order by: {other:?}"
+                )))
+            }
         };
         acc.sort_by(|a, b| {
             let av = JoinScope(a).get(&key);
@@ -445,9 +504,7 @@ fn eval_pred<S: Scope>(expr: &Expr, scope: &S, ctx: &ExecCtx) -> Result<bool> {
         Expr::Eq(a, b) => cmp(a, b, scope, ctx)? == Some(Ordering::Equal),
         Expr::Ne(a, b) => cmp(a, b, scope, ctx)? != Some(Ordering::Equal),
         Expr::Gt(a, b) => cmp(a, b, scope, ctx)? == Some(Ordering::Greater),
-        Expr::Gte(a, b) => {
-            cmp(a, b, scope, ctx)?.is_some_and(|o| o != Ordering::Less)
-        }
+        Expr::Gte(a, b) => cmp(a, b, scope, ctx)?.is_some_and(|o| o != Ordering::Less),
         Expr::Lt(a, b) => cmp(a, b, scope, ctx)? == Some(Ordering::Less),
         Expr::Lte(a, b) => cmp(a, b, scope, ctx)?.is_some_and(|o| o != Ordering::Greater),
         Expr::In(col, list) => {
@@ -497,7 +554,10 @@ fn eval_val<S: Scope>(expr: &Expr, scope: &S, _ctx: &ExecCtx) -> Result<Value> {
 }
 
 fn cmp<S: Scope>(a: &Expr, b: &Expr, scope: &S, ctx: &ExecCtx) -> Result<Option<Ordering>> {
-    Ok(json_cmp(&eval_val(a, scope, ctx)?, &eval_val(b, scope, ctx)?))
+    Ok(json_cmp(
+        &eval_val(a, scope, ctx)?,
+        &eval_val(b, scope, ctx)?,
+    ))
 }
 
 /// The column name a subquery exposes for `IN`: the first projected `Column`, or
@@ -600,13 +660,19 @@ fn truthy(v: &Value) -> bool {
 fn sort_rows(ctx: &ExecCtx, rows: &mut [Row], table: &str, order: &OrderBy) -> Result<()> {
     let col_name = match &order.expr {
         Expr::Column(name) => name.clone(),
-        other => return Err(KitError::Validation(format!("unsupported order by: {other:?}"))),
+        other => {
+            return Err(KitError::Validation(format!(
+                "unsupported order by: {other:?}"
+            )))
+        }
     };
     // Validate against the schema when the table is known; CTE/virtual tables are
     // not in the schema and are sorted leniently (missing values sort as null).
     if let Some(t) = ctx.table_def(table) {
         if t.column(&col_name).is_none() {
-            return Err(KitError::Validation(format!("unknown order column {col_name}")));
+            return Err(KitError::Validation(format!(
+                "unknown order column {col_name}"
+            )));
         }
     }
 
@@ -626,7 +692,10 @@ fn apply_limit_offset<T>(rows: &mut Vec<T>, limit: Option<usize>, offset: Option
     let offset = offset.unwrap_or(0);
     if offset > 0 || limit.is_some() {
         let start = offset.min(rows.len());
-        let end = limit.map(|l| start + l).unwrap_or(rows.len()).min(rows.len());
+        let end = limit
+            .map(|l| start + l)
+            .unwrap_or(rows.len())
+            .min(rows.len());
         *rows = rows.drain(start..end).collect();
     }
 }

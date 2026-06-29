@@ -13,7 +13,11 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
-    pub fn new(table: impl Into<String>, column: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(
+        table: impl Into<String>,
+        column: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             table: table.into(),
             column: column.into(),
@@ -45,7 +49,10 @@ pub fn validate_row(table: &Table, row: &Map<String, Value>) -> Result<(), Valid
             return Err(ValidationError::new(
                 &table.name,
                 "",
-                format!("check constraint \"{}\" has an empty expression", check.name),
+                format!(
+                    "check constraint \"{}\" has an empty expression",
+                    check.name
+                ),
             ));
         }
         match crate::check::eval_check(&check.expr, row) {
@@ -347,7 +354,9 @@ mod tests {
     #[test]
     fn rejects_type_mismatch() {
         let table = users_table();
-        let r = row(json!({ "id": "not-a-number", "email": "a@b.com", "handle": "ab", "role": "user", "zip": "123-4567" }));
+        let r = row(
+            json!({ "id": "not-a-number", "email": "a@b.com", "handle": "ab", "role": "user", "zip": "123-4567" }),
+        );
         let err = validate_row(&table, &r).unwrap_err();
         assert_eq!(err.column, "id");
     }
@@ -355,7 +364,9 @@ mod tests {
     #[test]
     fn rejects_enum_violation() {
         let table = users_table();
-        let r = row(json!({ "id": 1, "email": "a@b.com", "handle": "ab", "role": "superuser", "zip": "123-4567" }));
+        let r = row(
+            json!({ "id": 1, "email": "a@b.com", "handle": "ab", "role": "superuser", "zip": "123-4567" }),
+        );
         let err = validate_row(&table, &r).unwrap_err();
         assert_eq!(err.column, "role");
     }
@@ -370,7 +381,9 @@ mod tests {
             columns: vec![col],
             ..table
         };
-        let r = row(json!({ "id": 1, "email": "a@b.com", "handle": "ab", "role": "user", "zip": "123-4567", "score": 101 }));
+        let r = row(
+            json!({ "id": 1, "email": "a@b.com", "handle": "ab", "role": "user", "zip": "123-4567", "score": 101 }),
+        );
         let err = validate_row(&table, &r).unwrap_err();
         assert_eq!(err.column, "score");
     }
@@ -378,7 +391,9 @@ mod tests {
     #[test]
     fn rejects_length() {
         let table = users_table();
-        let r = row(json!({ "id": 1, "email": "a@b.com", "handle": "x", "role": "user", "zip": "123-4567" }));
+        let r = row(
+            json!({ "id": 1, "email": "a@b.com", "handle": "x", "role": "user", "zip": "123-4567" }),
+        );
         let err = validate_row(&table, &r).unwrap_err();
         assert_eq!(err.column, "handle");
     }
@@ -386,7 +401,9 @@ mod tests {
     #[test]
     fn rejects_regex() {
         let table = users_table();
-        let r = row(json!({ "id": 1, "email": "a@b.com", "handle": "ab", "role": "user", "zip": "bad" }));
+        let r = row(
+            json!({ "id": 1, "email": "a@b.com", "handle": "ab", "role": "user", "zip": "bad" }),
+        );
         let err = validate_row(&table, &r).unwrap_err();
         assert_eq!(err.column, "zip");
     }
@@ -400,7 +417,9 @@ mod tests {
             }],
             ..users_table()
         };
-        let r = row(json!({ "id": 1, "email": "a@b.com", "handle": "ab", "role": "user", "zip": "123-4567" }));
+        let r = row(
+            json!({ "id": 1, "email": "a@b.com", "handle": "ab", "role": "user", "zip": "123-4567" }),
+        );
         let err = validate_row(&table, &r).unwrap_err();
         assert!(err.message.contains("empty"));
     }

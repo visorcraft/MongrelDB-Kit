@@ -189,7 +189,13 @@ mod tests {
         }
     }
 
-    fn fk(name: &str, cols: &[&str], parent: &str, parent_cols: &[&str], action: ForeignKeyAction) -> ForeignKey {
+    fn fk(
+        name: &str,
+        cols: &[&str],
+        parent: &str,
+        parent_cols: &[&str],
+        action: ForeignKeyAction,
+    ) -> ForeignKey {
         ForeignKey {
             name: name.into(),
             columns: cols.iter().map(|c| (*c).into()).collect(),
@@ -200,7 +206,9 @@ mod tests {
     }
 
     /// Child lookup that returns a single hard-coded child per FK.
-    fn single_child(child_pk: &str) -> impl Fn(&Table, &ForeignKey, &str) -> Vec<(String, String)> + use<'_> {
+    fn single_child(
+        child_pk: &str,
+    ) -> impl Fn(&Table, &ForeignKey, &str) -> Vec<(String, String)> + use<'_> {
         move |_table: &Table, _fk: &ForeignKey, _parent_pk: &str| {
             vec![(child_pk.into(), _parent_pk.into())]
         }
@@ -210,8 +218,16 @@ mod tests {
     fn restrict_blocks_delete() {
         let parent = table("parent", 1, "id");
         let mut child = table("child", 2, "id");
-        child.foreign_keys = vec![fk("fk_child_parent", &["parent_id"], "parent", &["id"], ForeignKeyAction::Restrict)];
-        child.columns.push(Column::new(2, "parent_id", ColumnType::Text));
+        child.foreign_keys = vec![fk(
+            "fk_child_parent",
+            &["parent_id"],
+            "parent",
+            &["id"],
+            ForeignKeyAction::Restrict,
+        )];
+        child
+            .columns
+            .push(Column::new(2, "parent_id", ColumnType::Text));
 
         let schema = Schema::new(vec![parent, child]).unwrap();
         let plan = plan_delete(&schema, "parent", "p1", single_child("c1")).unwrap();
@@ -231,8 +247,16 @@ mod tests {
     fn cascade_deletes_children() {
         let parent = table("parent", 1, "id");
         let mut child = table("child", 2, "id");
-        child.foreign_keys = vec![fk("fk_child_parent", &["parent_id"], "parent", &["id"], ForeignKeyAction::Cascade)];
-        child.columns.push(Column::new(2, "parent_id", ColumnType::Text));
+        child.foreign_keys = vec![fk(
+            "fk_child_parent",
+            &["parent_id"],
+            "parent",
+            &["id"],
+            ForeignKeyAction::Cascade,
+        )];
+        child
+            .columns
+            .push(Column::new(2, "parent_id", ColumnType::Text));
 
         let schema = Schema::new(vec![parent, child]).unwrap();
         let plan = plan_delete(&schema, "parent", "p1", single_child("c1")).unwrap();
@@ -248,8 +272,16 @@ mod tests {
     fn set_null_updates_children() {
         let parent = table("parent", 1, "id");
         let mut child = table("child", 2, "id");
-        child.foreign_keys = vec![fk("fk_child_parent", &["parent_id"], "parent", &["id"], ForeignKeyAction::SetNull)];
-        child.columns.push(Column::new(2, "parent_id", ColumnType::Text));
+        child.foreign_keys = vec![fk(
+            "fk_child_parent",
+            &["parent_id"],
+            "parent",
+            &["id"],
+            ForeignKeyAction::SetNull,
+        )];
+        child
+            .columns
+            .push(Column::new(2, "parent_id", ColumnType::Text));
 
         let schema = Schema::new(vec![parent, child]).unwrap();
         let plan = plan_delete(&schema, "parent", "p1", single_child("c1")).unwrap();
@@ -263,16 +295,31 @@ mod tests {
     #[test]
     fn detects_circular_delete() {
         let mut a = table("a", 1, "id");
-        a.foreign_keys = vec![fk("fk_a_b", &["b_id"], "b", &["id"], ForeignKeyAction::Cascade)];
+        a.foreign_keys = vec![fk(
+            "fk_a_b",
+            &["b_id"],
+            "b",
+            &["id"],
+            ForeignKeyAction::Cascade,
+        )];
         a.columns.push(Column::new(2, "b_id", ColumnType::Text));
 
         let mut b = table("b", 2, "id");
-        b.foreign_keys = vec![fk("fk_b_a", &["a_id"], "a", &["id"], ForeignKeyAction::Cascade)];
+        b.foreign_keys = vec![fk(
+            "fk_b_a",
+            &["a_id"],
+            "a",
+            &["id"],
+            ForeignKeyAction::Cascade,
+        )];
         b.columns.push(Column::new(2, "a_id", ColumnType::Text));
 
         let schema = Schema::new(vec![a, b]).unwrap();
         let lookup = |_table: &Table, _fk: &ForeignKey, parent_pk: &str| {
-            vec![(parent_pk.to_string().replace('p', "other"), parent_pk.into())]
+            vec![(
+                parent_pk.to_string().replace('p', "other"),
+                parent_pk.into(),
+            )]
         };
         let err = plan_delete(&schema, "a", "a1", lookup).unwrap_err();
         assert!(matches!(err, PlannerError::CircularDelete(_)));
@@ -296,7 +343,9 @@ mod tests {
             &["id"],
             ForeignKeyAction::Cascade,
         )];
-        cascade_child.columns.push(Column::new(2, "parent_id", ColumnType::Text));
+        cascade_child
+            .columns
+            .push(Column::new(2, "parent_id", ColumnType::Text));
 
         let mut restrict_child = table("restrict_child", 3, "id");
         restrict_child.foreign_keys = vec![fk(
@@ -306,7 +355,9 @@ mod tests {
             &["id"],
             ForeignKeyAction::Restrict,
         )];
-        restrict_child.columns.push(Column::new(2, "parent_id", ColumnType::Text));
+        restrict_child
+            .columns
+            .push(Column::new(2, "parent_id", ColumnType::Text));
 
         let schema = Schema::new(vec![parent, cascade_child, restrict_child]).unwrap();
 

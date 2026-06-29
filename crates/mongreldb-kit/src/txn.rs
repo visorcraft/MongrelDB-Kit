@@ -25,9 +25,10 @@
 use crate::db::internal_bytes;
 use crate::error::{KitError, Result};
 use crate::internal::{cols, iso_now, ROW_GUARDS, UNIQUE_KEYS};
-use crate::query::{run_aggregate, run_join, run_select, project_distinct, ExecCtx, JoinRow};
+use crate::query::{project_distinct, run_aggregate, run_join, run_select, ExecCtx, JoinRow};
 use crate::schema::{core_row_to_json, pk_to_map, row_to_core_cells, Row};
 use mongreldb_core::memtable::{Row as CoreRow, Value as CoreValue};
+use mongreldb_core::query::Condition;
 use mongreldb_core::RowId;
 use mongreldb_kit_core::keys::{
     decode_pk, encode_pk, encode_row_guard_key, encode_unique_key, KeyComponent, KIT_KEY_VERSION,
@@ -65,10 +66,7 @@ enum StagedOp {
     },
     /// A delete staged in this transaction. Tracked so `staged_row_exists`
     /// can ignore rows removed earlier in the same transaction.
-    Delete {
-        table: String,
-        pk: String,
-    },
+    Delete { table: String, pk: String },
 }
 
 #[derive(Debug, Clone)]
@@ -337,11 +335,16 @@ impl<'a> Transaction<'a> {
     }
 
     /// Build an execution context whose table fetcher reads visible rows at this
-    /// transaction's read snapshot.
+    /// transaction's read snapshot. When conditions are provided, the fetcher
+    /// resolves them via native indexes (Kit Priority 1 pushdown).
     fn exec_ctx(&self) -> ExecCtx<'_> {
-        ExecCtx::new(Some(&self.db.schema), move |name: &str| {
-            self.snapshot_rows(name)
-        })
+        ExecCtx::new(
+            Some(&self.db.schema),
+            |name: &str, conds: Option<&[Condition]>| match conds {
+                Some(c) if !c.is_empty() => self.snapshot_rows_pushed(name, c),
+                _ => self.snapshot_rows(name),
+            },
+        )
     }
 
     /// Commit the transaction.
@@ -379,8 +382,33 @@ impl<'a> Transaction<'a> {
             .collect()
     }
 
+    /// Fetch rows for `table` with native `conditions` resolved by the engine
+    /// (Kit Priority 1 pushdown). Avoids the full scan that `snapshot_rows`
+    /// does — the engine resolves conditions via HOT/bitmap/range indexes.
+    fn snapshot_rows_pushed(&self, table: &str, conditions: &[Condition]) -> Result<Vec<Row>> {
+        let t = self.require_table(table)?;
+        let core_rows = self
+            .db
+            .query_core_rows_at(table, conditions, self.core.read_snapshot())?;
+        core_rows
+            .into_iter()
+            .map(|r| core_row_to_json(&r, t))
+            .collect()
+    }
+
     fn get_by_pk_internal(&self, table: &str, pk_map: &Map<String, Value>) -> Result<Option<Row>> {
         let t = self.require_table(table)?;
+        // Kit Priority 1 pushdown: use native PK index (O(1) HOT probe) instead
+        // of O(N) full scan. Falls back to scan if conditions can't be built.
+        if let Some(conditions) = crate::pushdown::pk_conditions(t, pk_map) {
+            let core_rows =
+                self.db
+                    .query_core_rows_at(table, &conditions, self.core.read_snapshot())?;
+            return Ok(core_rows
+                .into_iter()
+                .filter_map(|r| core_row_to_json(&r, t).ok())
+                .find(|r| pk_matches(&r.values, pk_map, t)));
+        }
         let rows = self.snapshot_rows(table)?;
         Ok(rows.into_iter().find(|r| pk_matches(&r.values, pk_map, t)))
     }
@@ -517,11 +545,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Delete every unique guard owned by the given row (used on row delete).
-    fn delete_unique_guards_for_owner(
-        &mut self,
-        table: &KitTable,
-        owner_pk: &str,
-    ) -> Result<()> {
+    fn delete_unique_guards_for_owner(&mut self, table: &KitTable, owner_pk: &str) -> Result<()> {
         let constraint_names: HashSet<&str> = table
             .unique_constraints
             .iter()
@@ -684,6 +708,14 @@ impl<'a> Transaction<'a> {
 
     fn parent_exists(&self, table: &str, pk_map: &Map<String, Value>) -> Result<bool> {
         let t = self.require_table(table)?;
+        // Kit Priority 1 pushdown: O(1) HOT probe instead of O(N) full scan for
+        // FK parent existence checks.
+        if let Some(conditions) = crate::pushdown::pk_conditions(t, pk_map) {
+            let core_rows =
+                self.db
+                    .query_core_rows_at(table, &conditions, self.core.read_snapshot())?;
+            return Ok(!core_rows.is_empty());
+        }
         let rows = self.snapshot_rows(table)?;
         Ok(rows.iter().any(|r| pk_matches(&r.values, pk_map, t)))
     }
@@ -698,8 +730,7 @@ impl<'a> Transaction<'a> {
         let mut exists = false;
         for staged in &self.staged {
             match staged {
-                StagedOp::Insert { table: t, values }
-                | StagedOp::Update { table: t, values } => {
+                StagedOp::Insert { table: t, values } | StagedOp::Update { table: t, values } => {
                     if t == &table.name && pk_matches(values, pk_map, table) {
                         exists = true;
                     }
@@ -868,9 +899,7 @@ impl<'a> Transaction<'a> {
                 }
                 DefaultKind::CustomName(name) => {
                     let provider = self.db.default_providers.get(name).ok_or_else(|| {
-                        KitError::Validation(format!(
-                            "custom default \"{name}\" is not registered"
-                        ))
+                        KitError::Validation(format!("custom default \"{name}\" is not registered"))
                     })?;
                     provider()
                 }

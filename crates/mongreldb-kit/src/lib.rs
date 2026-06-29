@@ -7,6 +7,7 @@ pub mod db;
 pub mod error;
 pub(crate) mod internal;
 pub mod migrate;
+pub mod pushdown;
 pub mod query;
 pub mod schema;
 pub mod txn;

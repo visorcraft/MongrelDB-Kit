@@ -148,11 +148,31 @@ fn aggregates_group_by_and_having() {
         filter: None,
         group_by: vec![],
         aggregates: vec![
-            Aggregate { func: AggFunc::Count, column: None, alias: "n".into() },
-            Aggregate { func: AggFunc::Sum, column: Some("total".into()), alias: "s".into() },
-            Aggregate { func: AggFunc::Min, column: Some("total".into()), alias: "mn".into() },
-            Aggregate { func: AggFunc::Max, column: Some("total".into()), alias: "mx".into() },
-            Aggregate { func: AggFunc::Avg, column: Some("total".into()), alias: "av".into() },
+            Aggregate {
+                func: AggFunc::Count,
+                column: None,
+                alias: "n".into(),
+            },
+            Aggregate {
+                func: AggFunc::Sum,
+                column: Some("total".into()),
+                alias: "s".into(),
+            },
+            Aggregate {
+                func: AggFunc::Min,
+                column: Some("total".into()),
+                alias: "mn".into(),
+            },
+            Aggregate {
+                func: AggFunc::Max,
+                column: Some("total".into()),
+                alias: "mx".into(),
+            },
+            Aggregate {
+                func: AggFunc::Avg,
+                column: Some("total".into()),
+                alias: "av".into(),
+            },
         ],
         having: None,
     };
@@ -170,10 +190,21 @@ fn aggregates_group_by_and_having() {
         filter: None,
         group_by: vec!["user_id".into()],
         aggregates: vec![
-            Aggregate { func: AggFunc::Count, column: None, alias: "n".into() },
-            Aggregate { func: AggFunc::Sum, column: Some("total".into()), alias: "s".into() },
+            Aggregate {
+                func: AggFunc::Count,
+                column: None,
+                alias: "n".into(),
+            },
+            Aggregate {
+                func: AggFunc::Sum,
+                column: Some("total".into()),
+                alias: "s".into(),
+            },
         ],
-        having: Some(Expr::Gt(Box::new(col("n")), Box::new(Expr::Literal(Literal::Int(1))))),
+        having: Some(Expr::Gt(
+            Box::new(col("n")),
+            Box::new(Expr::Literal(Literal::Int(1))),
+        )),
     };
     let rows = txn.aggregate(&q).unwrap();
     assert_eq!(rows.len(), 1);
@@ -304,7 +335,10 @@ fn like_contains_and_not_in() {
     let not_in = txn
         .select(&Query::Select(select_all(
             "users",
-            Some(Expr::NotIn(Box::new(col("id")), vec![Literal::Int(1), Literal::Int(2)])),
+            Some(Expr::NotIn(
+                Box::new(col("id")),
+                vec![Literal::Int(1), Literal::Int(2)],
+            )),
         )))
         .unwrap();
     assert_eq!(not_in.len(), 1);
@@ -330,7 +364,10 @@ fn exists_and_in_subquery() {
     let sub = Select {
         table: "orders".into(),
         columns: vec![col("user_id")],
-        filter: Some(Expr::Gt(Box::new(col("total")), Box::new(Expr::Literal(Literal::Float(100.0))))),
+        filter: Some(Expr::Gt(
+            Box::new(col("total")),
+            Box::new(Expr::Literal(Literal::Float(100.0))),
+        )),
         order_by: vec![],
         limit: None,
         offset: None,
@@ -357,7 +394,10 @@ fn exists_and_in_subquery() {
     let none = Select {
         table: "orders".into(),
         columns: vec![],
-        filter: Some(Expr::Gt(Box::new(col("total")), Box::new(Expr::Literal(Literal::Float(1000.0))))),
+        filter: Some(Expr::Gt(
+            Box::new(col("total")),
+            Box::new(Expr::Literal(Literal::Float(1000.0))),
+        )),
         order_by: vec![],
         limit: None,
         offset: None,
@@ -393,7 +433,10 @@ fn cte_materializes_and_reads() {
                 Box::new(col("total")),
                 Box::new(Expr::Literal(Literal::Float(100.0))),
             )),
-            order_by: vec![OrderBy { expr: col("id"), direction: Direction::Asc }],
+            order_by: vec![OrderBy {
+                expr: col("id"),
+                direction: Direction::Asc,
+            }],
             limit: None,
             offset: None,
         }),
@@ -556,12 +599,16 @@ fn migrate_records_versions() {
         Migration {
             version: 1,
             name: "init".into(),
-            ops: vec![MigrationOp::CreateTable { name: "users".into() }],
+            ops: vec![MigrationOp::CreateTable {
+                name: "users".into(),
+            }],
         },
         Migration {
             version: 2,
             name: "add_orders".into(),
-            ops: vec![MigrationOp::CreateTable { name: "orders".into() }],
+            ops: vec![MigrationOp::CreateTable {
+                name: "orders".into(),
+            }],
         },
     ];
 
@@ -717,9 +764,11 @@ fn insert_pet(txn: &mut Transaction, id: i64, owner_id: i64, name: &str) -> Resu
 #[test]
 fn migrate_add_foreign_key_backfills_and_enforces() {
     let dir = temp_dir();
-    let mut db =
-        Database::create(&dir, Schema::new(vec![owners_table(), pets_table(false)]).unwrap())
-            .unwrap();
+    let mut db = Database::create(
+        &dir,
+        Schema::new(vec![owners_table(), pets_table(false)]).unwrap(),
+    )
+    .unwrap();
 
     let mut txn = db.begin().unwrap();
     let mut owner = Map::new();
@@ -755,9 +804,11 @@ fn migrate_add_foreign_key_backfills_and_enforces() {
 #[test]
 fn migrate_add_foreign_key_rejects_orphans() {
     let dir = temp_dir();
-    let mut db =
-        Database::create(&dir, Schema::new(vec![owners_table(), pets_table(false)]).unwrap())
-            .unwrap();
+    let mut db = Database::create(
+        &dir,
+        Schema::new(vec![owners_table(), pets_table(false)]).unwrap(),
+    )
+    .unwrap();
 
     let mut txn = db.begin().unwrap();
     let mut owner = Map::new();

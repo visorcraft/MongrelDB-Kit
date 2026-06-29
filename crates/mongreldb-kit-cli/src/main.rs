@@ -26,17 +26,49 @@ enum CliMigrationOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         columns: Option<Value>,
     },
-    DropTable { name: String },
-    AddColumn { table: String, column: String },
-    DropColumn { table: String, column: String },
-    AddIndex { table: String, index: String },
-    DropIndex { table: String, index: String },
-    AddUnique { table: String, constraint: String },
-    DropUnique { table: String, constraint: String },
-    AddForeignKey { table: String, constraint: String },
-    DropForeignKey { table: String, constraint: String },
-    AddCheck { table: String, constraint: String },
-    DropCheck { table: String, constraint: String },
+    DropTable {
+        name: String,
+    },
+    AddColumn {
+        table: String,
+        column: String,
+    },
+    DropColumn {
+        table: String,
+        column: String,
+    },
+    AddIndex {
+        table: String,
+        index: String,
+    },
+    DropIndex {
+        table: String,
+        index: String,
+    },
+    AddUnique {
+        table: String,
+        constraint: String,
+    },
+    DropUnique {
+        table: String,
+        constraint: String,
+    },
+    AddForeignKey {
+        table: String,
+        constraint: String,
+    },
+    DropForeignKey {
+        table: String,
+        constraint: String,
+    },
+    AddCheck {
+        table: String,
+        constraint: String,
+    },
+    DropCheck {
+        table: String,
+        constraint: String,
+    },
     RawSql(String),
 }
 
@@ -45,9 +77,7 @@ impl From<CliMigrationOp> for MigrationOp {
         match op {
             CliMigrationOp::CreateTable { name, .. } => MigrationOp::CreateTable { name },
             CliMigrationOp::DropTable { name } => MigrationOp::DropTable { name },
-            CliMigrationOp::AddColumn { table, column } => {
-                MigrationOp::AddColumn { table, column }
-            }
+            CliMigrationOp::AddColumn { table, column } => MigrationOp::AddColumn { table, column },
             CliMigrationOp::DropColumn { table, column } => {
                 MigrationOp::DropColumn { table, column }
             }
@@ -321,8 +351,8 @@ fn validate_stable_ids(raw: &RawSchema) -> Result<()> {
 }
 
 fn cmd_schema_validate(schema_path: &Path) -> Result<()> {
-    let text =
-        fs::read_to_string(schema_path).context(format!("failed to read {}", schema_path.display()))?;
+    let text = fs::read_to_string(schema_path)
+        .context(format!("failed to read {}", schema_path.display()))?;
     // Stable-ID checks first so the message names the offending id.
     let raw: RawSchema = serde_json::from_str(&text).context("failed to parse schema JSON")?;
     validate_stable_ids(&raw)?;
@@ -335,7 +365,9 @@ fn cmd_schema_validate(schema_path: &Path) -> Result<()> {
 fn cmd_migrate_apply(path: &Path, migrations_path: &Path) -> Result<()> {
     let mut db = Database::open(path).context("failed to open database")?;
     let migrations = read_migrations(migrations_path)?;
-    let applied = db.applied_migrations().context("failed to read applied migrations")?;
+    let applied = db
+        .applied_migrations()
+        .context("failed to read applied migrations")?;
     let pending = plan_migrations(&applied, &migrations);
     if pending.is_empty() {
         println!("no pending migrations");
@@ -350,7 +382,9 @@ fn cmd_migrate_apply(path: &Path, migrations_path: &Path) -> Result<()> {
 
 fn cmd_migrate_status(path: &Path) -> Result<()> {
     let db = Database::open(path).context("failed to open database")?;
-    let applied = db.applied_migrations().context("failed to read applied migrations")?;
+    let applied = db
+        .applied_migrations()
+        .context("failed to read applied migrations")?;
     if applied.is_empty() {
         println!("no migrations applied");
     } else {
@@ -365,7 +399,9 @@ fn cmd_migrate_status(path: &Path) -> Result<()> {
 fn cmd_migrate_plan(path: &Path, migrations_path: &Path) -> Result<()> {
     let db = Database::open(path).context("failed to open database")?;
     let migrations = read_migrations(migrations_path)?;
-    let applied = db.applied_migrations().context("failed to read applied migrations")?;
+    let applied = db
+        .applied_migrations()
+        .context("failed to read applied migrations")?;
     let pending = plan_migrations(&applied, &migrations);
     if pending.is_empty() {
         println!("no pending migrations");
@@ -441,12 +477,7 @@ fn cmd_diff(schema_path: &Path, path: &Path) -> Result<()> {
 
 /// Report added/removed columns, type/nullability/default changes, and stable
 /// column-ID reuse between a stored table and the code table.
-fn diff_columns(
-    name: &str,
-    stored: &Table,
-    code: &Table,
-    note: &mut impl FnMut(String),
-) {
+fn diff_columns(name: &str, stored: &Table, code: &Table, note: &mut impl FnMut(String)) {
     for col in &code.columns {
         if stored.column(&col.name).is_none() {
             note(format!("+ column {name}.{}", col.name));
@@ -481,8 +512,11 @@ fn diff_columns(
         }
     }
     // Stable column-ID reuse: the same id now names a different column.
-    let stored_by_id: HashMap<u32, &str> =
-        stored.columns.iter().map(|c| (c.id, c.name.as_str())).collect();
+    let stored_by_id: HashMap<u32, &str> = stored
+        .columns
+        .iter()
+        .map(|c| (c.id, c.name.as_str()))
+        .collect();
     for col in &code.columns {
         if let Some(&prev_name) = stored_by_id.get(&col.id) {
             if prev_name != col.name {
@@ -579,7 +613,9 @@ fn cmd_generate_migration(schema_path: &Path, from: &Path) -> Result<()> {
     let code = read_schema(schema_path)?;
     let db = Database::open(from).context("failed to open database")?;
     let stored = db.schema();
-    let applied = db.applied_migrations().context("failed to read applied migrations")?;
+    let applied = db
+        .applied_migrations()
+        .context("failed to read applied migrations")?;
 
     let next_version = applied.iter().map(|m| m.version).max().unwrap_or(0) + 1;
     let mut ops = Vec::new();
@@ -606,8 +642,8 @@ fn cmd_generate_migration(schema_path: &Path, from: &Path) -> Result<()> {
         name: "generated".into(),
         ops,
     };
-    let json = serde_json::to_string_pretty(&vec![migration])
-        .context("failed to serialize migration")?;
+    let json =
+        serde_json::to_string_pretty(&vec![migration]).context("failed to serialize migration")?;
     println!("{json}");
     Ok(())
 }
@@ -664,7 +700,11 @@ fn gen_ts(schema: &Schema) -> String {
         out.push_str(&format!("\nexport interface {base}Row {{\n"));
         for col in &table.columns {
             let nullable = if col.nullable { " | null" } else { "" };
-            out.push_str(&format!("\t{}: {}{nullable};\n", col.name, ts_type(col.storage_type)));
+            out.push_str(&format!(
+                "\t{}: {}{nullable};\n",
+                col.name,
+                ts_type(col.storage_type)
+            ));
         }
         out.push_str("}\n");
 
@@ -685,7 +725,11 @@ fn gen_ts(schema: &Schema) -> String {
         out.push_str(&format!("\nexport interface {base}Update {{\n"));
         for col in &table.columns {
             let nullable = if col.nullable { " | null" } else { "" };
-            out.push_str(&format!("\t{}?: {}{nullable};\n", col.name, ts_type(col.storage_type)));
+            out.push_str(&format!(
+                "\t{}?: {}{nullable};\n",
+                col.name,
+                ts_type(col.storage_type)
+            ));
         }
         out.push_str("}\n");
     }
@@ -725,7 +769,11 @@ fn gen_rust(schema: &Schema) -> String {
             "\n#[derive(Debug, Clone, PartialEq)]\npub struct {base}Row {{\n"
         ));
         for col in &table.columns {
-            out.push_str(&format!("    pub {}: {},\n", col.name, rust_field_type(col)));
+            out.push_str(&format!(
+                "    pub {}: {},\n",
+                col.name,
+                rust_field_type(col)
+            ));
         }
         out.push_str("}\n");
 
@@ -736,7 +784,11 @@ fn gen_rust(schema: &Schema) -> String {
             if col_omitted_in_insert(col) {
                 continue;
             }
-            out.push_str(&format!("    pub {}: {},\n", col.name, rust_field_type(col)));
+            out.push_str(&format!(
+                "    pub {}: {},\n",
+                col.name,
+                rust_field_type(col)
+            ));
         }
         out.push_str("}\n");
 
@@ -805,7 +857,11 @@ fn gen_python(schema: &Schema) -> String {
             .iter()
             .filter(|c| !col_omitted_in_insert(c))
             .collect();
-        let required: Vec<&Column> = insert_cols.iter().copied().filter(|c| !c.nullable).collect();
+        let required: Vec<&Column> = insert_cols
+            .iter()
+            .copied()
+            .filter(|c| !c.nullable)
+            .collect();
         let optional: Vec<&Column> = insert_cols.iter().copied().filter(|c| c.nullable).collect();
         if required.is_empty() && optional.is_empty() {
             out.push_str("    pass\n");
@@ -855,7 +911,9 @@ fn cmd_fixture_create(path: &Path, tables: &[String]) -> Result<()> {
             limit: None,
             offset: None,
         });
-        let rows = txn.select(&query).context(format!("failed to select from {name}"))?;
+        let rows = txn
+            .select(&query)
+            .context(format!("failed to select from {name}"))?;
         let values: Vec<Value> = rows.into_iter().map(|r| Value::Object(r.values)).collect();
         out.insert(name.clone(), Value::Array(values));
     }
@@ -875,7 +933,9 @@ fn cmd_fixture_load(path: &Path, fixture_path: &Path) -> Result<()> {
         if db.table(&table).is_none() {
             bail!("table {table} not found in schema");
         }
-        let rows = rows.as_array().context(format!("{table} value must be an array"))?;
+        let rows = rows
+            .as_array()
+            .context(format!("{table} value must be an array"))?;
         for row in rows {
             let values = row
                 .as_object()

@@ -24,14 +24,46 @@ use std::path::Path;
 // messages.
 // ---------------------------------------------------------------------------
 
-create_exception!(mongreldb_kit_py, ValidationError, pyo3::exceptions::PyException);
-create_exception!(mongreldb_kit_py, DuplicateError, pyo3::exceptions::PyException);
-create_exception!(mongreldb_kit_py, ForeignKeyError, pyo3::exceptions::PyException);
-create_exception!(mongreldb_kit_py, RestrictError, pyo3::exceptions::PyException);
-create_exception!(mongreldb_kit_py, MigrationError, pyo3::exceptions::PyException);
-create_exception!(mongreldb_kit_py, ConflictError, pyo3::exceptions::PyException);
-create_exception!(mongreldb_kit_py, StorageError, pyo3::exceptions::PyException);
-create_exception!(mongreldb_kit_py, IntegrityError, pyo3::exceptions::PyException);
+create_exception!(
+    mongreldb_kit_py,
+    ValidationError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    DuplicateError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    ForeignKeyError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    RestrictError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    MigrationError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    ConflictError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    StorageError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    IntegrityError,
+    pyo3::exceptions::PyException
+);
 
 fn map_err(e: KitError) -> PyErr {
     let msg = e.to_string();
@@ -81,7 +113,10 @@ impl PyDatabase {
         Ok(Self { db })
     }
 
-    fn begin<'py>(slf: &Bound<'py, PyDatabase>, py: Python<'py>) -> PyResult<Bound<'py, PyTransaction>> {
+    fn begin<'py>(
+        slf: &Bound<'py, PyDatabase>,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyTransaction>> {
         let this = slf.borrow();
         let txn = this.db.begin().map_err(map_err)?;
         // Safety: the transaction borrows the Database. We keep the Python
@@ -140,7 +175,9 @@ impl Drop for PyTransaction {
     }
 }
 
-fn require_txn<'a>(txn: &'a mut Option<Transaction<'static>>) -> PyResult<&'a mut Transaction<'static>> {
+fn require_txn<'a>(
+    txn: &'a mut Option<Transaction<'static>>,
+) -> PyResult<&'a mut Transaction<'static>> {
     txn.as_mut()
         .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))
 }
@@ -153,15 +190,16 @@ fn row_to_json(row: &mongreldb_kit::Row) -> PyResult<String> {
 impl PyTransaction {
     fn insert(&mut self, table: &str, row_json: &str) -> PyResult<String> {
         let row: Map<String, Value> = serde_json::from_str(row_json).map_err(py_json_err)?;
-        let result = require_txn(&mut self.txn)?.insert(table, row).map_err(map_err)?;
+        let result = require_txn(&mut self.txn)?
+            .insert(table, row)
+            .map_err(map_err)?;
         row_to_json(&result)
     }
 
     /// Insert many rows in this single transaction. `rows_json` is a JSON array of
     /// row objects; returns a list of the inserted rows (with defaults applied).
     fn insert_many(&mut self, table: &str, rows_json: &str) -> PyResult<Vec<String>> {
-        let rows: Vec<Map<String, Value>> =
-            serde_json::from_str(rows_json).map_err(py_json_err)?;
+        let rows: Vec<Map<String, Value>> = serde_json::from_str(rows_json).map_err(py_json_err)?;
         let results = require_txn(&mut self.txn)?
             .insert_many(table, rows)
             .map_err(map_err)?;
@@ -179,7 +217,9 @@ impl PyTransaction {
 
     fn delete(&mut self, table: &str, pk_json: &str) -> PyResult<()> {
         let pk: Value = serde_json::from_str(pk_json).map_err(py_json_err)?;
-        require_txn(&mut self.txn)?.delete(table, &pk).map_err(map_err)
+        require_txn(&mut self.txn)?
+            .delete(table, &pk)
+            .map_err(map_err)
     }
 
     fn get_by_pk(&self, table: &str, pk_json: &str) -> PyResult<Option<String>> {
@@ -222,7 +262,8 @@ impl PyTransaction {
             let ctes = parse_ctes(cj).map_err(map_err)?;
             txn.select_with(&ctes, &select).map_err(map_err)?
         } else if distinct {
-            txn.select_distinct(&Query::Select(select)).map_err(map_err)?
+            txn.select_distinct(&Query::Select(select))
+                .map_err(map_err)?
         } else {
             txn.select(&Query::Select(select)).map_err(map_err)?
         };
@@ -394,7 +435,9 @@ fn parse_filter_node(val: &Value) -> Result<Expr, KitError> {
 fn parse_filter_array(val: &Value) -> Result<Vec<Expr>, KitError> {
     match val {
         Value::Array(items) => items.iter().map(parse_filter_node).collect(),
-        _ => Err(KitError::Validation("and/or expects an array of filters".into())),
+        _ => Err(KitError::Validation(
+            "and/or expects an array of filters".into(),
+        )),
     }
 }
 
@@ -478,7 +521,11 @@ fn parse_subselect(value: &Value) -> Result<Select, KitError> {
     let filter = match obj.get("filter") {
         Some(Value::Object(map)) => Some(parse_filter(map)?),
         Some(Value::Null) | None => None,
-        Some(_) => return Err(KitError::Validation("subquery filter must be an object".into())),
+        Some(_) => {
+            return Err(KitError::Validation(
+                "subquery filter must be an object".into(),
+            ))
+        }
     };
     let columns = match obj.get("columns") {
         Some(Value::Array(items)) => items
@@ -493,8 +540,14 @@ fn parse_subselect(value: &Value) -> Result<Select, KitError> {
         columns,
         filter,
         order_by: Vec::new(),
-        limit: obj.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize),
-        offset: obj.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize),
+        limit: obj
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
+        offset: obj
+            .get("offset")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize),
     })
 }
 

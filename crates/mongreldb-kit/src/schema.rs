@@ -1,8 +1,10 @@
 //! Schema/value conversion between the kit model and MongrelDB core.
 
 use crate::error::{KitError, Result};
-use mongreldb_core::schema::{ColumnDef, ColumnFlags, IndexDef, IndexKind, Schema as CoreSchema, TypeId};
 use mongreldb_core::memtable::Value as CoreValue;
+use mongreldb_core::schema::{
+    ColumnDef, ColumnFlags, IndexDef, IndexKind, Schema as CoreSchema, TypeId,
+};
 use mongreldb_kit_core::schema::{ColumnType, Table as KitTable};
 use serde_json::{Map, Value};
 
@@ -63,11 +65,15 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
 pub(crate) fn to_core_type(ty: ColumnType) -> TypeId {
     match ty {
         ColumnType::Bool => TypeId::Bool,
-        ColumnType::Int8 | ColumnType::Int16 | ColumnType::Int32 | ColumnType::Int64 => TypeId::Int64,
-        ColumnType::Float32 | ColumnType::Float64 => TypeId::Float64,
-        ColumnType::Text | ColumnType::Bytes | ColumnType::Json | ColumnType::Date | ColumnType::DateTime => {
-            TypeId::Bytes
+        ColumnType::Int8 | ColumnType::Int16 | ColumnType::Int32 | ColumnType::Int64 => {
+            TypeId::Int64
         }
+        ColumnType::Float32 | ColumnType::Float64 => TypeId::Float64,
+        ColumnType::Text
+        | ColumnType::Bytes
+        | ColumnType::Json
+        | ColumnType::Date
+        | ColumnType::DateTime => TypeId::Bytes,
         ColumnType::TimestampNanos => TypeId::Int64,
     }
 }
@@ -138,7 +144,10 @@ pub fn core_row_to_json(row: &mongreldb_core::memtable::Row, table: &KitTable) -
             .unwrap_or(CoreValue::Null);
         values.insert(col.name.clone(), core_to_json(&v, col.storage_type)?);
     }
-    Ok(Row { row_id: row.row_id.0, values })
+    Ok(Row {
+        row_id: row.row_id.0,
+        values,
+    })
 }
 
 /// A kit row, identified by its internal storage row id and column values.
@@ -159,7 +168,10 @@ impl Row {
         } else {
             let mut obj = Map::new();
             for name in &table.primary_key {
-                obj.insert(name.clone(), self.values.get(name).cloned().unwrap_or(Value::Null));
+                obj.insert(
+                    name.clone(),
+                    self.values.get(name).cloned().unwrap_or(Value::Null),
+                );
             }
             Some(Value::Object(obj))
         }
@@ -173,7 +185,10 @@ pub fn pk_value(values: &Map<String, Value>, table: &KitTable) -> Option<Value> 
     } else {
         let mut obj = Map::new();
         for name in &table.primary_key {
-            obj.insert(name.clone(), values.get(name).cloned().unwrap_or(Value::Null));
+            obj.insert(
+                name.clone(),
+                values.get(name).cloned().unwrap_or(Value::Null),
+            );
         }
         Some(Value::Object(obj))
     }
@@ -195,13 +210,20 @@ pub fn pk_to_map(pk: &Value, table: &KitTable) -> Result<Map<String, Value>> {
         scalar if table.primary_key.len() == 1 => {
             map.insert(table.primary_key[0].clone(), scalar.clone());
         }
-        _ => return Err(KitError::Validation("primary key value shape mismatch".into())),
+        _ => {
+            return Err(KitError::Validation(
+                "primary key value shape mismatch".into(),
+            ))
+        }
     }
     Ok(map)
 }
 
 /// Build a core cell vector from a JSON row and kit table definition.
-pub fn row_to_core_cells(values: &Map<String, Value>, table: &KitTable) -> Result<Vec<(u16, CoreValue)>> {
+pub fn row_to_core_cells(
+    values: &Map<String, Value>,
+    table: &KitTable,
+) -> Result<Vec<(u16, CoreValue)>> {
     let mut cells = Vec::with_capacity(table.columns.len());
     for col in &table.columns {
         let v = values.get(&col.name).cloned().unwrap_or(Value::Null);

@@ -4,10 +4,10 @@ use crate::error::{KitError, Result};
 use crate::internal::{ensure_internal_tables, internal_tables_core};
 use crate::schema::to_core_schema;
 use mongreldb_core::epoch::Snapshot;
-use mongreldb_core::Database as CoreDatabase;
 use mongreldb_core::memtable::Row as CoreRow;
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::Schema as CoreSchema;
+use mongreldb_core::Database as CoreDatabase;
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
 use serde_json::Value;
@@ -253,6 +253,46 @@ impl Database {
         let handle = self.inner.table(table_name).map_err(KitError::from)?;
         let guard = handle.lock();
         guard.visible_rows(snapshot).map_err(KitError::from)
+    }
+
+    /// Query visible core rows with native `Condition`s at a specific read
+    /// snapshot (Kit Priority 1 pushdown). Resolves `conditions` via core's
+    /// indexes (HOT / bitmap / range) and returns only the matching rows —
+    /// avoiding the full scan that `visible_core_rows_at` does. Returns the
+    /// empty vec when no conditions match, and falls back to
+    /// `visible_core_rows_at` when `conditions` is empty (unfiltered).
+    pub(crate) fn query_core_rows_at(
+        &self,
+        table_name: &str,
+        conditions: &[mongreldb_core::query::Condition],
+        snapshot: Snapshot,
+    ) -> Result<Vec<CoreRow>> {
+        if conditions.is_empty() {
+            return self.visible_core_rows_at(table_name, snapshot);
+        }
+        let handle = self.inner.table(table_name).map_err(KitError::from)?;
+        let mut guard = handle.lock();
+        let q = mongreldb_core::query::Query {
+            conditions: conditions.to_vec(),
+        };
+        guard.query(&q).map_err(KitError::from)
+    }
+
+    /// Count visible rows matching `conditions` without materializing them
+    /// (Kit Priority 7 pushdown). Returns `None` when the conditions cannot be
+    /// served by indexes (caller falls back to counting materialized rows).
+    #[allow(dead_code)] // Wired in a follow-up COUNT(*) fast path.
+    pub(crate) fn count_core_rows_at(
+        &self,
+        table_name: &str,
+        conditions: &[mongreldb_core::query::Condition],
+        snapshot: Snapshot,
+    ) -> Result<Option<u64>> {
+        let handle = self.inner.table(table_name).map_err(KitError::from)?;
+        let mut guard = handle.lock();
+        guard
+            .count_conditions(conditions, snapshot)
+            .map_err(KitError::from)
     }
 
     /// Materialize a single row by storage row id.

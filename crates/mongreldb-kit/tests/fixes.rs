@@ -28,7 +28,10 @@ fn nullable(mut c: Column) -> Column {
 }
 
 fn row(pairs: &[(&str, Value)]) -> Map<String, Value> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 fn select_filter(table: &str, filter: Expr) -> Query {
@@ -71,8 +74,11 @@ fn nullable_columns_store_real_null_and_round_trip() {
     assert_eq!(inserted.values.get("val"), Some(&Value::Null));
     assert_eq!(inserted.values.get("txt"), Some(&Value::Null));
     // Row 2 has a real zero and a real empty string, distinct from null.
-    txn.insert("t", row(&[("id", json!(2)), ("val", json!(0)), ("txt", json!(""))]))
-        .unwrap();
+    txn.insert(
+        "t",
+        row(&[("id", json!(2)), ("val", json!(0)), ("txt", json!(""))]),
+    )
+    .unwrap();
     txn.commit().unwrap();
 
     let txn = db.begin().unwrap();
@@ -85,13 +91,19 @@ fn nullable_columns_store_real_null_and_round_trip() {
 
     // is_null matches the real null only; is_not_null matches the real zero.
     let nulls = txn
-        .select(&select_filter("t", Expr::IsNull(Box::new(Expr::Column("val".into())))))
+        .select(&select_filter(
+            "t",
+            Expr::IsNull(Box::new(Expr::Column("val".into()))),
+        ))
         .unwrap();
     assert_eq!(nulls.len(), 1);
     assert_eq!(nulls[0].values.get("id"), Some(&json!(1)));
 
     let not_nulls = txn
-        .select(&select_filter("t", Expr::IsNotNull(Box::new(Expr::Column("val".into())))))
+        .select(&select_filter(
+            "t",
+            Expr::IsNotNull(Box::new(Expr::Column("val".into()))),
+        ))
         .unwrap();
     assert_eq!(not_nulls.len(), 1);
     assert_eq!(not_nulls[0].values.get("id"), Some(&json!(2)));
@@ -175,7 +187,10 @@ fn duplicate_single_pk_throws_and_reinsert_after_delete_works() {
     let schema = Schema::new(vec![Table {
         id: 1,
         name: "k".into(),
-        columns: vec![col(1, "id", ColumnType::Int64), col(2, "v", ColumnType::Text)],
+        columns: vec![
+            col(1, "id", ColumnType::Int64),
+            col(2, "v", ColumnType::Text),
+        ],
         primary_key: vec!["id".into()],
         indexes: vec![],
         foreign_keys: vec![],
@@ -186,7 +201,8 @@ fn duplicate_single_pk_throws_and_reinsert_after_delete_works() {
     let db = Database::create(&dir, schema).unwrap();
 
     let mut txn = db.begin().unwrap();
-    txn.insert("k", row(&[("id", json!(1)), ("v", json!("a"))])).unwrap();
+    txn.insert("k", row(&[("id", json!(1)), ("v", json!("a"))]))
+        .unwrap();
     txn.commit().unwrap();
 
     // A duplicate single-column PK is rejected, not upserted.
@@ -199,7 +215,11 @@ fn duplicate_single_pk_throws_and_reinsert_after_delete_works() {
     // The original row is intact (no last-writer-wins upsert happened).
     let txn = db.begin().unwrap();
     assert_eq!(
-        txn.get_by_pk("k", &json!(1)).unwrap().unwrap().values.get("v"),
+        txn.get_by_pk("k", &json!(1))
+            .unwrap()
+            .unwrap()
+            .values
+            .get("v"),
         Some(&json!("a"))
     );
 
@@ -209,12 +229,17 @@ fn duplicate_single_pk_throws_and_reinsert_after_delete_works() {
     txn.commit().unwrap();
 
     let mut txn = db.begin().unwrap();
-    txn.insert("k", row(&[("id", json!(1)), ("v", json!("c"))])).unwrap();
+    txn.insert("k", row(&[("id", json!(1)), ("v", json!("c"))]))
+        .unwrap();
     txn.commit().unwrap();
 
     let txn = db.begin().unwrap();
     assert_eq!(
-        txn.get_by_pk("k", &json!(1)).unwrap().unwrap().values.get("v"),
+        txn.get_by_pk("k", &json!(1))
+            .unwrap()
+            .unwrap()
+            .values
+            .get("v"),
         Some(&json!("c"))
     );
 }
@@ -227,7 +252,10 @@ fn unique_index_enforces_uniqueness() {
     let schema = Schema::new(vec![Table {
         id: 1,
         name: "u".into(),
-        columns: vec![col(1, "id", ColumnType::Int64), col(2, "email", ColumnType::Text)],
+        columns: vec![
+            col(1, "id", ColumnType::Int64),
+            col(2, "email", ColumnType::Text),
+        ],
         primary_key: vec!["id".into()],
         indexes: vec![Index {
             name: "idx_email".into(),
@@ -262,7 +290,10 @@ fn non_unique_index_does_not_enforce_uniqueness() {
     let schema = Schema::new(vec![Table {
         id: 1,
         name: "u".into(),
-        columns: vec![col(1, "id", ColumnType::Int64), col(2, "email", ColumnType::Text)],
+        columns: vec![
+            col(1, "id", ColumnType::Int64),
+            col(2, "email", ColumnType::Text),
+        ],
         primary_key: vec!["id".into()],
         indexes: vec![Index {
             name: "idx_email".into(),
@@ -322,7 +353,10 @@ fn auto_increment_pks_do_not_collide() {
 
     let txn = db.begin().unwrap();
     let rows = txn
-        .select(&select_filter("k", Expr::IsNotNull(Box::new(Expr::Column("id".into())))))
+        .select(&select_filter(
+            "k",
+            Expr::IsNotNull(Box::new(Expr::Column("id".into()))),
+        ))
         .unwrap();
     assert_eq!(rows.len(), 3);
 }
@@ -335,7 +369,10 @@ fn insert_many_inserts_a_batch_in_one_transaction() {
     let schema = Schema::new(vec![Table {
         id: 1,
         name: "k".into(),
-        columns: vec![col(1, "id", ColumnType::Int64), col(2, "code", ColumnType::Text)],
+        columns: vec![
+            col(1, "id", ColumnType::Int64),
+            col(2, "code", ColumnType::Text),
+        ],
         primary_key: vec!["id".into()],
         indexes: vec![],
         foreign_keys: vec![],
@@ -366,9 +403,12 @@ fn insert_many_inserts_a_batch_in_one_transaction() {
 
     let count = |db: &Database| {
         let txn = db.begin().unwrap();
-        txn.select(&select_filter("k", Expr::IsNotNull(Box::new(Expr::Column("id".into())))))
-            .unwrap()
-            .len()
+        txn.select(&select_filter(
+            "k",
+            Expr::IsNotNull(Box::new(Expr::Column("id".into()))),
+        ))
+        .unwrap()
+        .len()
     };
     assert_eq!(count(&db), 3);
 
@@ -451,7 +491,10 @@ fn insert_many_assigns_sequence_pks() {
         )
         .unwrap();
     txn.commit().unwrap();
-    let ids: Vec<_> = inserted.iter().map(|r| r.values.get("id").cloned()).collect();
+    let ids: Vec<_> = inserted
+        .iter()
+        .map(|r| r.values.get("id").cloned())
+        .collect();
     assert_eq!(ids, vec![Some(json!(1)), Some(json!(2)), Some(json!(3))]);
 }
 
@@ -473,7 +516,10 @@ fn cascade_delete_removes_all_children() {
     let child = Table {
         id: 2,
         name: "child".into(),
-        columns: vec![col(1, "id", ColumnType::Int64), col(2, "parent_id", ColumnType::Int64)],
+        columns: vec![
+            col(1, "id", ColumnType::Int64),
+            col(2, "parent_id", ColumnType::Int64),
+        ],
         primary_key: vec!["id".into()],
         indexes: vec![],
         foreign_keys: vec![ForeignKey {
@@ -504,8 +550,14 @@ fn cascade_delete_removes_all_children() {
 
     let txn = db.begin().unwrap();
     let children = txn
-        .select(&select_filter("child", Expr::IsNotNull(Box::new(Expr::Column("id".into())))))
+        .select(&select_filter(
+            "child",
+            Expr::IsNotNull(Box::new(Expr::Column("id".into()))),
+        ))
         .unwrap();
-    assert!(children.is_empty(), "expected all children cascaded, got {children:?}");
+    assert!(
+        children.is_empty(),
+        "expected all children cascaded, got {children:?}"
+    );
     assert!(txn.get_by_pk("parent", &json!(1)).unwrap().is_none());
 }

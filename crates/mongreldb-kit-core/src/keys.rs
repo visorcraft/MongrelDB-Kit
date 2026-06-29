@@ -106,9 +106,8 @@ fn split_components(encoded: &str) -> Vec<String> {
             continue;
         }
         if ch == ':' {
-            let starts_typed = current.starts_with("s:")
-                || current.starts_with("i:")
-                || current.starts_with("n:");
+            let starts_typed =
+                current.starts_with("s:") || current.starts_with("i:") || current.starts_with("n:");
             if starts_typed {
                 tokens.push(std::mem::take(&mut current));
                 continue;

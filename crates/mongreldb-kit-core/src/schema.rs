@@ -290,7 +290,10 @@ impl Schema {
         })
     }
 
-    fn validate_table(table: &Table, table_names: &HashMap<String, usize>) -> Result<(), SchemaError> {
+    fn validate_table(
+        table: &Table,
+        table_names: &HashMap<String, usize>,
+    ) -> Result<(), SchemaError> {
         let mut column_names = HashMap::with_capacity(table.columns.len());
         let mut column_ids = HashMap::with_capacity(table.columns.len());
 
@@ -398,21 +401,13 @@ mod tests {
 
     #[test]
     fn schema_rejects_duplicate_table_name() {
-        let err = Schema::new(vec![
-            make_table("a", 1),
-            make_table("a", 2),
-        ])
-        .unwrap_err();
+        let err = Schema::new(vec![make_table("a", 1), make_table("a", 2)]).unwrap_err();
         assert!(matches!(err, SchemaError::DuplicateTableName(n) if n == "a"));
     }
 
     #[test]
     fn schema_rejects_duplicate_table_id() {
-        let err = Schema::new(vec![
-            make_table("a", 1),
-            make_table("b", 1),
-        ])
-        .unwrap_err();
+        let err = Schema::new(vec![make_table("a", 1), make_table("b", 1)]).unwrap_err();
         assert!(matches!(err, SchemaError::DuplicateTableId(1)));
     }
 
@@ -463,7 +458,10 @@ mod tests {
         .unwrap();
         let table = schema.table("users").unwrap();
         assert_eq!(table.unique_constraints.len(), 1);
-        assert_eq!(table.unique_constraints[0].columns, vec!["email".to_string()]);
+        assert_eq!(
+            table.unique_constraints[0].columns,
+            vec!["email".to_string()]
+        );
     }
 
     #[test]
@@ -497,31 +495,29 @@ mod tests {
 
     #[test]
     fn schema_roundtrips_json() {
-        let schema = Schema::new(vec![
-            Table {
-                id: 1,
-                name: "users".into(),
-                columns: vec![
-                    Column::new(1, "id", ColumnType::Int64),
-                    Column {
-                        nullable: true,
-                        ..Column::new(2, "email", ColumnType::Text)
-                    },
-                ],
-                primary_key: vec!["id".into()],
-                indexes: vec![Index {
-                    name: "idx_email".into(),
-                    columns: vec!["email".into()],
-                    unique: true,
-                }],
-                foreign_keys: vec![],
-                unique_constraints: vec![],
-                check_constraints: vec![CheckConstraint {
-                    name: "chk_id_positive".into(),
-                    expr: "id > 0".into(),
-                }],
-            },
-        ])
+        let schema = Schema::new(vec![Table {
+            id: 1,
+            name: "users".into(),
+            columns: vec![
+                Column::new(1, "id", ColumnType::Int64),
+                Column {
+                    nullable: true,
+                    ..Column::new(2, "email", ColumnType::Text)
+                },
+            ],
+            primary_key: vec!["id".into()],
+            indexes: vec![Index {
+                name: "idx_email".into(),
+                columns: vec!["email".into()],
+                unique: true,
+            }],
+            foreign_keys: vec![],
+            unique_constraints: vec![],
+            check_constraints: vec![CheckConstraint {
+                name: "chk_id_positive".into(),
+                expr: "id > 0".into(),
+            }],
+        }])
         .unwrap();
 
         let json = serde_json::to_string(&schema).unwrap();

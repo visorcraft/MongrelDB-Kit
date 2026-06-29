@@ -13,22 +13,14 @@ fn temp_db_path() -> std::path::PathBuf {
 #[test]
 fn init_creates_database_directory() {
     let path = temp_db_path();
-    bin()
-        .arg("init")
-        .arg(&path)
-        .assert()
-        .success();
+    bin().arg("init").arg(&path).assert().success();
     assert!(path.join("kit_schema.json").exists());
 }
 
 #[test]
 fn check_returns_ok_after_init() {
     let path = temp_db_path();
-    bin()
-        .arg("init")
-        .arg(&path)
-        .assert()
-        .success();
+    bin().arg("init").arg(&path).assert().success();
     bin()
         .arg("check")
         .arg(&path)
@@ -78,11 +70,7 @@ fn schema_validate_accepts_valid_schema() {
 #[test]
 fn migrate_status_shows_no_pending_after_init() {
     let path = temp_db_path();
-    bin()
-        .arg("init")
-        .arg(&path)
-        .assert()
-        .success();
+    bin().arg("init").arg(&path).assert().success();
     bin()
         .arg("migrate")
         .arg("status")

@@ -192,7 +192,9 @@ fn backfill_unique(
     constraint: &str,
 ) -> Result<()> {
     let table = schema.table(table_name).ok_or_else(|| {
-        KitError::Migration(format!("add_unique: table {table_name} not found in schema"))
+        KitError::Migration(format!(
+            "add_unique: table {table_name} not found in schema"
+        ))
     })?;
     let uq = table
         .unique_constraints
@@ -251,10 +253,7 @@ fn backfill_unique(
                     CoreValue::Bytes(table_name.as_bytes().to_vec()),
                 ),
                 (cols::UQ_OWNER_PK, CoreValue::Bytes(owner_pk.into_bytes())),
-                (
-                    cols::UQ_CREATED,
-                    CoreValue::Bytes(now.clone().into_bytes()),
-                ),
+                (cols::UQ_CREATED, CoreValue::Bytes(now.clone().into_bytes())),
             ],
         )
         .map_err(KitError::from)?;
@@ -289,7 +288,9 @@ fn backfill_foreign_key(
     constraint: &str,
 ) -> Result<()> {
     let table = schema.table(table_name).ok_or_else(|| {
-        KitError::Migration(format!("add_foreign_key: table {table_name} not found in schema"))
+        KitError::Migration(format!(
+            "add_foreign_key: table {table_name} not found in schema"
+        ))
     })?;
     let fk = table
         .foreign_keys
@@ -357,10 +358,7 @@ fn backfill_foreign_key(
                 ),
                 (cols::RG_PK, CoreValue::Bytes(encoded_pk.into_bytes())),
                 (cols::RG_VERSION, CoreValue::Int64(version)),
-                (
-                    cols::RG_UPDATED,
-                    CoreValue::Bytes(now.clone().into_bytes()),
-                ),
+                (cols::RG_UPDATED, CoreValue::Bytes(now.clone().into_bytes())),
             ],
         )
         .map_err(KitError::from)?;
@@ -395,7 +393,10 @@ fn record_migration(
     let now = crate::internal::iso_now();
     let cells = vec![
         (cols::MIG_VERSION, CoreValue::Int64(migration.version)),
-        (cols::MIG_NAME, CoreValue::Bytes(migration.name.clone().into_bytes())),
+        (
+            cols::MIG_NAME,
+            CoreValue::Bytes(migration.name.clone().into_bytes()),
+        ),
         (
             cols::MIG_CHECKSUM,
             CoreValue::Bytes(migration.checksum().into_bytes()),
