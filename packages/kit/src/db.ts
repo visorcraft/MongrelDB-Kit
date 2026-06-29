@@ -10,8 +10,7 @@ import type {
 import { Schema } from './schema.js';
 import {
 	internalTables,
-	kitSchemaCatalog,
-	kitSequences
+	kitSchemaCatalog
 } from './internalTables.js';
 import type { TableSpec, ColumnStorageType, CheckSpec } from './types.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
@@ -41,6 +40,7 @@ type MongrelColumnSpec = {
 	ty: number;
 	primaryKey: boolean;
 	nullable: boolean;
+	autoIncrement?: boolean;
 };
 
 type MongrelIndexSpec = {
@@ -123,7 +123,11 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			name: col.name,
 			ty: toMongrelColumnType(col.storageType),
 			primaryKey: col.primaryKey,
-			nullable: col.nullable
+			nullable: col.nullable,
+			// A Kit sequence-default column maps to the engine's native
+			// AUTO_INCREMENT allocator (a per-table WAL-durable counter) instead
+			// of the legacy __kit_sequences hot row.
+			autoIncrement: col.default?.kind === 'sequence'
 		})),
 		indexes
 	};
@@ -251,47 +255,20 @@ export class KitDatabase {
 		return this.db.begin();
 	}
 
-	allocateSequenceSync(name: string, count = 1): bigint {
-		const txn = this.db.begin();
-		const seqTable = txn.table('__kit_sequences');
-		const handle = this.db.table('__kit_sequences');
-		const matches = handle.query([
-			{
-				kind: addon.ConditionKind.BitmapEq,
-				columnId: columnId(kitSequences, 'sequence_name'),
-				text: name
-			}
-		]);
-		const existing = matches[0] ?? null;
-		const now = isoNow();
-		// Sequences are 1-based, matching SQL AUTO_INCREMENT / SERIAL. A starting
-		// value of 0 is unsafe: 0 is falsy and collides with the "unset" sentinel
-		// applications use for nullable foreign keys.
-		let start: bigint;
-		if (!existing) {
-			start = 1n;
-			seqTable.put([
-				{ columnId: columnId(kitSequences, 'sequence_name'), text: name },
-				{ columnId: columnId(kitSequences, 'next_value'), int64: start + BigInt(count) },
-				{ columnId: columnId(kitSequences, 'updated_at'), text: now }
-			]);
-		} else {
-			const nextCell = existing.cells.find(
-				(c) => c.columnId === columnId(kitSequences, 'next_value')
-			);
-			const current = nextCell?.int64 ?? 1n;
-			start = current;
-			seqTable.put([
-				{ columnId: columnId(kitSequences, 'sequence_name'), text: name },
-				{ columnId: columnId(kitSequences, 'next_value'), int64: current + BigInt(count) },
-				{ columnId: columnId(kitSequences, 'updated_at'), text: now }
-			]);
-		}
-		txn.commit();
-		return start;
-	}
-
-	async allocateSequence(name: string, count = 1): Promise<bigint> {
-		return this.allocateSequenceSync(name, count);
+	/**
+	 * Reserve (without inserting) the next engine-native AUTO_INCREMENT value for
+	 * `tableName`, advancing the engine's per-table counter. Returns `null` when
+	 * the table has no auto-increment column.
+	 *
+	 * This is the replacement for the legacy `allocateSequenceSync` hot-row
+	 * scheme: it is a pure in-memory counter bump (no `__kit_sequences` row, no
+	 * extra commit) that becomes durable when a row carrying the reserved id
+	 * commits. An aborted reservation simply leaves a gap, which the never-reuse
+	 * rule permits. Used by `prepareInsertRowSync` so a transaction can stage the
+	 * row with an explicit id and still return it from `executeSync()`.
+	 */
+	reserveAutoIncSync(tableName: string): bigint | null {
+		const reserved = this.db.table(tableName).reserveAutoInc();
+		return reserved ?? null;
 	}
 }

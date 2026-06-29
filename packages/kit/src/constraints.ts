@@ -329,6 +329,9 @@ export function deleteUniqueGuards(
 	table: TableSpec,
 	pkValue: PkValue
 ): void {
+	// No unique constraints means no guard rows to clean up — skip the per-row
+	// query on __kit_unique_keys entirely (a hot cost in bulk deletes).
+	if (table.unique.length === 0) return;
 	const ownerPk = encodedPk(pkValue);
 	const ownerTableCol = columnId(kitUniqueKeys, 'owner_table');
 	const constraintNames = new Set(table.unique.map((uq) => uq.name));

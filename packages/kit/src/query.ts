@@ -21,6 +21,15 @@ import {
 } from './constraints.js';
 import { KitError, isRetryableConflict } from './errors.js';
 import { encodedPk } from './keys.js';
+import { packRows, packRowIds } from './packing.js';
+import type { Schema } from './schema.js';
+
+/** True when some table in the schema has a foreign key referencing `tableName`. */
+function isReferencedTable(schema: Schema, tableName: string): boolean {
+	return schema
+		.tablesList()
+		.some((t) => t.foreignKeys.some((fk) => fk.referencesTable === tableName));
+}
 
 declare module './db.js' {
 	interface KitDatabase {
@@ -773,13 +782,10 @@ function makeConstraintKit(kit: KitDatabase): ConstraintKit {
 	return { db: kit.nativeDb, schema: kit.schema };
 }
 
-function makeDefaultContext(kit: KitDatabase): DefaultContext {
+function makeDefaultContext(): DefaultContext {
 	return {
 		now: new Date().toISOString(),
-		uuid: () => randomUUID(),
-		allocateSequence: () => {
-			throw new KitError('Sequence defaults must be allocated before applyDefaults');
-		}
+		uuid: () => randomUUID()
 	};
 }
 
@@ -789,15 +795,22 @@ function prepareInsertRowSync(
 	row: Record<string, unknown>
 ): Record<string, unknown> {
 	const withSequence: Record<string, unknown> = { ...row };
+	// Engine-native AUTO_INCREMENT: reserve the id up front so the cross-table
+	// transaction can stage the row with an explicit value (the engine counter
+	// is in-memory and becomes durable when the row commits — no __kit_sequences
+	// hot row, no extra commit). At most one sequence column per table.
 	for (const col of table.columns) {
 		if (
 			(withSequence[col.name] === undefined || withSequence[col.name] === null) &&
 			col.default?.kind === 'sequence'
 		) {
-			withSequence[col.name] = kit.allocateSequenceSync(col.default.name, 1);
+			const reserved = kit.reserveAutoIncSync(table.name);
+			if (reserved !== null) {
+				withSequence[col.name] = reserved;
+			}
 		}
 	}
-	const withDefaults = applyDefaults(table, withSequence, makeDefaultContext(kit));
+	const withDefaults = applyDefaults(table, withSequence, makeDefaultContext());
 	// Normalize any column still unset to explicit null, so the stored row and
 	// the returned row agree (an unset nullable column reads back as null).
 	for (const col of table.columns) {
@@ -1365,8 +1378,13 @@ export class InsertManyBuilder<T extends TableSpec> {
 				enforceForeignKeys(kit, txn, this.table, defaulted);
 				stageUniqueGuards(kit, txn, this.table, defaulted, pkValue);
 				stagePkGuard(kit, txn, this.table, pkValue, pkExplicit, pkSeen);
-				txn.put(this.table.name, toCells(this.table, defaulted));
 				results.push(defaulted);
+			}
+			// Stage all main-table rows in one packed crossing instead of a
+			// per-row NAPI `put`. Guard rows above are already staged into the
+			// same transaction; everything commits atomically.
+			if (results.length > 0) {
+				txn.putPacked(this.table.name, packRows(this.table, results));
 			}
 		});
 
@@ -1406,7 +1424,7 @@ export class UpdateBuilder<T extends TableSpec> {
 			? evaluatePredicate(db, this.table, this._where)
 			: fullScanRows(db, this.table);
 		const patch = this._patch as Record<string, unknown>;
-		const ctx = makeDefaultContext(this.kit);
+		const ctx = makeDefaultContext();
 		const kit = makeConstraintKit(this.kit);
 		const updated: Record<string, unknown>[] = [];
 
@@ -1462,8 +1480,25 @@ export class DeleteBuilder<T extends TableSpec> {
 			? evaluatePredicate(db, this.table, this._where)
 			: fullScanRows(db, this.table);
 		const kit = makeConstraintKit(this.kit);
-		let deleted = 0;
 
+		// Fast path: a single-column-PK table with no unique constraints and no
+		// incoming foreign keys has no guard rows and no cascade work, so a delete
+		// reduces to dropping the matched row ids. Batch them in one packed
+		// crossing instead of per-row planDelete (which would also run a
+		// __kit_unique_keys / __kit_row_guards query per row).
+		if (
+			this.table.primaryKey.length === 1 &&
+			this.table.unique.length === 0 &&
+			!isReferencedTable(this.kit.schema, this.table.name)
+		) {
+			if (matches.length === 0) return 0n;
+			runSyncTxn(this.kit, (txn) => {
+				txn.deletePacked(this.table.name, packRowIds(matches.map((m) => m.rowId)));
+			});
+			return BigInt(matches.length);
+		}
+
+		let deleted = 0;
 		runSyncTxn(this.kit, (txn) => {
 			deleted = 0;
 			for (const matched of matches) {

@@ -69,7 +69,7 @@ export interface MigrationContext {
 }
 
 type MongrelSchemaSpec = {
-	columns: { id: number; name: string; ty: number; primaryKey: boolean; nullable: boolean }[];
+	columns: { id: number; name: string; ty: number; primaryKey: boolean; nullable: boolean; autoIncrement?: boolean }[];
 	indexes: { name: string; columnId: number; kind: number }[];
 };
 
@@ -155,7 +155,8 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			name: col.name,
 			ty: toMongrelColumnType(col.storageType),
 			primaryKey: col.primaryKey,
-			nullable: col.nullable
+			nullable: col.nullable,
+			autoIncrement: col.default?.kind === 'sequence'
 		})),
 		indexes
 	};
@@ -708,9 +709,14 @@ function computeDefaultValue(column: ColumnSpec, kit: KitDatabase): unknown {
 		case 'uuid':
 			return randomUUID();
 		case 'sequence':
-			// Synchronous allocation is not available from KitDatabase; sequence defaults
-			// during migration backfills are not supported yet.
-			throw new KitMigrationError(`sequence default for column "${column.name}" is not supported in migrations`);
+			// Sequences are now engine-managed AUTO_INCREMENT, so a freshly
+			// created table with a sequence column migrates fine (the engine
+			// allocates on insert). What is NOT supported is back-filling an
+			// AUTO_INCREMENT value onto existing rows during `addColumn` — each
+			// row would need its own id and re-putting changes identities.
+			throw new KitMigrationError(
+				`AUTO_INCREMENT column "${column.name}" cannot be added with a NOT NULL backfill; add it nullable (or create the table with it)`
+			);
 		case 'custom':
 			return source.fn();
 		default:

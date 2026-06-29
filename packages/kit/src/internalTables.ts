@@ -22,16 +22,6 @@ export const kitSchemaCatalog = table('__kit_schema_catalog', {
 	primaryKey: ['schema_version']
 });
 
-export const kitSequences = table('__kit_sequences', {
-	columns: [
-		text('sequence_name', { primaryKey: true }),
-		int('next_value', { nullable: false }),
-		text('updated_at', { nullable: false })
-	],
-	primaryKey: ['sequence_name'],
-	indexes: [index(['sequence_name'])]
-});
-
 export const kitUniqueKeys = table('__kit_unique_keys', {
 	columns: [
 		text('encoded_key', { primaryKey: true }),
@@ -69,7 +59,6 @@ export const kitMigrationLocks = table('__kit_migration_locks', {
 export const internalTables = [
 	kitSchemaMigrations,
 	kitSchemaCatalog,
-	kitSequences,
 	kitUniqueKeys,
 	kitRowGuards,
 	kitMigrationLocks

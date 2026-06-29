@@ -123,8 +123,7 @@ describe('validateRow', () => {
 		});
 		const ctx: DefaultContext = {
 			now: '2024-01-01T00:00:00Z',
-			uuid: () => '00000000-0000-0000-0000-000000000000',
-			allocateSequence: () => 1n
+			uuid: () => '00000000-0000-0000-0000-000000000000'
 		};
 		const row = applyDefaults(items, { id: 1n }, ctx);
 		expect(() => validateRow(items, row)).not.toThrow();

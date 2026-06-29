@@ -43,17 +43,40 @@ describe('sequence default on insert (auto-increment)', () => {
 		}
 	});
 
-	it('honours an explicitly supplied id and keeps the sequence independent', () => {
+	it('advances the counter past an explicitly supplied id (no future collision)', () => {
 		const { db, dir } = fresh();
 		try {
 			const explicit = db.insertInto(widgets).values({ id: 100n, name: 'x' }).executeSync();
 			expect(explicit.id).toBe(100n);
-			// The sequence is not advanced by explicit inserts; it still starts at 1.
+			// Engine-native AUTO_INCREMENT advances the counter past the explicit
+			// id so a later auto-assign can never collide with it. (This replaces
+			// the legacy Kit guarantee that explicit inserts left the sequence
+			// untouched — engine ownership makes the collision-free rule primary.)
 			const auto = db.insertInto(widgets).values({ name: 'y' }).executeSync();
-			expect(auto.id).toBe(1n);
+			expect(auto.id).toBe(101n);
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('survives reopen and never reuses ids', () => {
+		const { db, dir } = fresh();
+		try {
+			db.insertInto(widgets).values({ name: 'a' }).executeSync();
+			db.insertInto(widgets).values({ name: 'b' }).executeSync();
+			db.close();
+			const db2 = KitDatabase.openSync(dir, schema);
+			db2.migrateSync(schema, migrations);
+			const row = db2.insertInto(widgets).values({ name: 'c' }).executeSync();
+			expect(row.id).toBe(3n);
+			db2.close();
+		} finally {
+			try {
+				rmSync(dir, { recursive: true, force: true });
+			} catch {
+				/* dir already removed if close path failed */
+			}
 		}
 	});
 });

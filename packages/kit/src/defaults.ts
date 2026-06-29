@@ -10,7 +10,6 @@ export type DefaultValue =
 export interface DefaultContext {
 	now: string;
 	uuid: () => string;
-	allocateSequence: (name: string, count?: number) => bigint;
 }
 
 export function staticDefault(value: unknown): DefaultValue {
@@ -59,13 +58,17 @@ export function applyDefaults(
 			case 'now':
 				out[col.name] = col.storageType === 'date' ? ctx.now.slice(0, 10) : ctx.now;
 				break;
-			case 'uuid':
-				out[col.name] = ctx.uuid();
-				break;
-			case 'sequence':
-				out[col.name] = ctx.allocateSequence(source.name, 1);
-				break;
-			case 'custom':
+		case 'uuid':
+			out[col.name] = ctx.uuid();
+			break;
+		// 'sequence' columns are engine-managed AUTO_INCREMENT: the caller
+		// (prepareInsertRowSync) reserves the id up front via reserveAutoIncSync,
+		// so the value is already present here. If it was somehow omitted, leave
+		// it unset — the engine assigns it on insert (and a null/undefined PK is
+		// caught by validation).
+		case 'sequence':
+			break;
+		case 'custom':
 				out[col.name] = source.fn();
 				break;
 		}
