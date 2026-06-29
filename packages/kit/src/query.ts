@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ConditionKind } from 'mongreldb/native.js';
-import type { Database as NativeDatabase, Cell, RowJs, Transaction } from 'mongreldb/native.js';
+import type { Database as NativeDatabase, ConditionSpec, Transaction } from 'mongreldb/native.js';
 import { KitDatabase } from './db.js';
 import type { TableSpec, ColumnSpec, PkValue } from './types.js';
 import type { Row, Insert, Update } from './types.js';
@@ -23,6 +23,7 @@ import { KitError, isRetryableConflict } from './errors.js';
 import { encodedPk } from './keys.js';
 import { packRows, packRowIds } from './packing.js';
 import type { Schema } from './schema.js';
+import { rowFromRowJs } from './rows.js';
 
 /** True when some table in the schema has a foreign key referencing `tableName`. */
 function isReferencedTable(schema: Schema, tableName: string): boolean {
@@ -257,25 +258,6 @@ export function avg(column: ColumnSpec): AggregateSpec {
 	return { fn: 'avg', column };
 }
 
-function cellValue(cell: Cell | undefined): unknown {
-	if (!cell) return null;
-	if (cell.text !== undefined) return cell.text;
-	if (cell.int64 !== undefined) return cell.int64;
-	if (cell.boolean !== undefined) return cell.boolean;
-	if (cell.float64 !== undefined) return cell.float64;
-	if (cell.bytes !== undefined) return cell.bytes;
-	return null;
-}
-
-function rowFromRowJs(table: TableSpec, rowJs: RowJs): Record<string, unknown> {
-	const row: Record<string, unknown> = {};
-	for (const col of table.columns) {
-		const cell = rowJs.cells.find((c) => c.columnId === col.id);
-		row[col.name] = cellValue(cell);
-	}
-	return row;
-}
-
 function isIndexed(table: TableSpec, columnName: string): boolean {
 	if (table.primaryKey.includes(columnName)) return true;
 	if (table.indexes.some((idx) => idx.columns.includes(columnName))) return true;
@@ -283,19 +265,45 @@ function isIndexed(table: TableSpec, columnName: string): boolean {
 	return false;
 }
 
-function makeEqCondition(table: TableSpec, column: ColumnSpec, value: unknown) {
+type PredicatePlan = {
+	conditions: ConditionSpec[];
+	residual?: Predicate;
+	alwaysFalse?: boolean;
+};
+
+function isBitmapTextColumn(column: ColumnSpec): boolean {
+	return (
+		column.storageType === 'text' ||
+		column.storageType === 'timestamp' ||
+		column.storageType === 'date' ||
+		column.storageType === 'json'
+	);
+}
+
+function makeEqCondition(table: TableSpec, column: ColumnSpec, value: unknown): ConditionSpec | null {
 	if (value === null || value === undefined) return null;
 
 	if (column.storageType === 'int64') {
+		if (typeof value !== 'bigint') return null;
 		return {
 			kind: ConditionKind.RangeInt,
 			columnId: column.id,
-			int64Lo: value as bigint,
-			int64Hi: value as bigint
+			int64Lo: value,
+			int64Hi: value
 		};
 	}
 
-	if (isIndexed(table, column.name)) {
+	if (column.storageType === 'float64') {
+		if (typeof value !== 'number' || Number.isNaN(value)) return null;
+		return {
+			kind: ConditionKind.RangeF64,
+			columnId: column.id,
+			float64Lo: value,
+			float64Hi: value
+		};
+	}
+
+	if (isIndexed(table, column.name) && isBitmapTextColumn(column)) {
 		return {
 			kind: ConditionKind.BitmapEq,
 			columnId: column.id,
@@ -306,36 +314,71 @@ function makeEqCondition(table: TableSpec, column: ColumnSpec, value: unknown) {
 	return null;
 }
 
-function makeRangeCondition(
+function makeInCondition(
 	table: TableSpec,
+	column: ColumnSpec,
+	values: unknown[]
+): ConditionSpec | null {
+	if (!isIndexed(table, column.name) || !isBitmapTextColumn(column)) return null;
+	if (values.length === 0 || values.some((v) => v === null || v === undefined)) return null;
+	return {
+		kind: ConditionKind.BitmapIn,
+		columnId: column.id,
+		values: [...new Set(values.map((v) => String(v)))]
+	};
+}
+
+type RangeConditionPlan =
+	| { condition: ConditionSpec; residual?: Predicate }
+	| { alwaysFalse: true };
+
+function makeRangeCondition(
 	column: ColumnSpec,
 	op: 'gt' | 'gte' | 'lt' | 'lte',
 	value: unknown
-) {
+): RangeConditionPlan | null {
 	if (column.storageType === 'int64') {
-		const v = value as bigint;
+		if (typeof value !== 'bigint') return null;
+		const v = value;
 		let lo = I64_MIN;
 		let hi = I64_MAX;
 		switch (op) {
-			case 'gt':
+			case 'gt': {
+				if (v < I64_MIN) break;
+				if (v >= I64_MAX) return { alwaysFalse: true };
+				lo = v + 1n;
+				break;
+			}
 			case 'gte':
+				if (v <= I64_MIN) break;
+				if (v > I64_MAX) return { alwaysFalse: true };
 				lo = v;
 				break;
-			case 'lt':
+			case 'lt': {
+				if (v <= I64_MIN) return { alwaysFalse: true };
+				if (v > I64_MAX) break;
+				hi = v - 1n;
+				break;
+			}
 			case 'lte':
+				if (v < I64_MIN) return { alwaysFalse: true };
+				if (v >= I64_MAX) break;
 				hi = v;
 				break;
 		}
 		return {
-			kind: ConditionKind.RangeInt,
-			columnId: column.id,
-			int64Lo: lo,
-			int64Hi: hi
+			condition: {
+				kind: ConditionKind.RangeInt,
+				columnId: column.id,
+				int64Lo: lo,
+				int64Hi: hi
+			}
 		};
 	}
 
 	if (column.storageType === 'float64') {
-		const v = value as number;
+		if (typeof value !== 'number' || Number.isNaN(value)) return { alwaysFalse: true };
+		const v = value;
 		let lo = -Infinity;
 		let hi = Infinity;
 		switch (op) {
@@ -349,10 +392,13 @@ function makeRangeCondition(
 				break;
 		}
 		return {
-			kind: ConditionKind.RangeF64,
-			columnId: column.id,
-			float64Lo: lo,
-			float64Hi: hi
+			condition: {
+				kind: ConditionKind.RangeF64,
+				columnId: column.id,
+				float64Lo: lo,
+				float64Hi: hi
+			},
+			residual: op === 'gt' || op === 'lt' ? { kind: op, column, value } : undefined
 		};
 	}
 
@@ -384,181 +430,123 @@ function makeRangeFilter(
 	};
 }
 
-function fullScanCondition(table: TableSpec) {
-	const intColumn = table.columns.find((c) => c.storageType === 'int64');
-	if (intColumn) {
-		return {
-			kind: ConditionKind.RangeInt,
-			columnId: intColumn.id,
-			int64Lo: I64_MIN,
-			int64Hi: I64_MAX
-		};
-	}
-
-	const floatColumn = table.columns.find((c) => c.storageType === 'float64');
-	if (floatColumn) {
-		return {
-			kind: ConditionKind.RangeF64,
-			columnId: floatColumn.id,
-			float64Lo: -Infinity,
-			float64Hi: Infinity
-		};
-	}
-
-	const pkColumn = table.columns.find((c) => table.primaryKey.includes(c.name));
-	if (pkColumn) {
-		return {
-			kind: ConditionKind.Pk,
-			columnId: pkColumn.id
-		};
-	}
-
-	throw new KitError(`Full table scan on "${table.name}" requires an int64, float64, or primary key`);
+function fullScanRows(db: NativeDatabase, table: TableSpec): MatchedRow[] {
+	return queryNativeRows(db, table, []);
 }
 
-function fullScanRows(db: NativeDatabase, table: TableSpec): MatchedRow[] {
-	const condition = fullScanCondition(table);
+function queryNativeRows(
+	db: NativeDatabase,
+	table: TableSpec,
+	conditions: ConditionSpec[]
+): MatchedRow[] {
 	return db
 		.table(table.name)
-		.query([condition])
+		.query(conditions)
 		.map((rowJs) => ({ rowId: rowJs.rowId, row: rowFromRowJs(table, rowJs) }));
 }
 
-function evaluateLeafPredicate(
-	db: NativeDatabase,
-	table: TableSpec,
-	predicate: Predicate
-): MatchedRow[] {
+function andResidual(predicates: Predicate[]): Predicate | undefined {
+	const residuals = predicates.filter((p): p is Predicate => p !== undefined);
+	if (residuals.length === 0) return undefined;
+	if (residuals.length === 1) return residuals[0];
+	return { kind: 'and', predicates: residuals };
+}
+
+function residualPlan(predicate: Predicate): PredicatePlan {
+	return { conditions: [], residual: predicate };
+}
+
+function compilePredicate(table: TableSpec, predicate: Predicate): PredicatePlan {
 	switch (predicate.kind) {
 		case 'eq': {
 			const condition = makeEqCondition(table, predicate.column, predicate.value);
-			const filter = (row: Record<string, unknown>) => row[predicate.column.name] === predicate.value;
-			if (condition) {
-				return db
-					.table(table.name)
-					.query([condition])
-					.map((rowJs) => ({ rowId: rowJs.rowId, row: rowFromRowJs(table, rowJs) }))
-					.filter((m) => filter(m.row));
-			}
-			return fullScanRows(db, table).filter((m) => filter(m.row));
-		}
-		case 'ne': {
-			const filter = (row: Record<string, unknown>) => row[predicate.column.name] !== predicate.value;
-			return fullScanRows(db, table).filter((m) => filter(m.row));
+			return condition ? { conditions: [condition] } : residualPlan(predicate);
 		}
 		case 'gt':
 		case 'gte':
 		case 'lt':
 		case 'lte': {
-			const condition = makeRangeCondition(table, predicate.column, predicate.kind, predicate.value);
-			const filter = makeRangeFilter(predicate.kind, predicate.column, predicate.value);
-			const rows = condition
-				? db
-						.table(table.name)
-						.query([condition])
-						.map((rowJs) => ({ rowId: rowJs.rowId, row: rowFromRowJs(table, rowJs) }))
-				: fullScanRows(db, table);
-			return rows.filter((m) => filter(m.row));
-		}
-		case 'null': {
-			const filter = predicate.not
-				? (row: Record<string, unknown>) => row[predicate.column.name] != null
-				: (row: Record<string, unknown>) => row[predicate.column.name] == null;
-			return fullScanRows(db, table).filter((m) => filter(m.row));
+			const condition = makeRangeCondition(predicate.column, predicate.kind, predicate.value);
+			if (!condition) return residualPlan(predicate);
+			if ('alwaysFalse' in condition) return { conditions: [], alwaysFalse: true };
+			return {
+				conditions: [condition.condition],
+				residual: condition.residual
+			};
 		}
 		case 'in': {
-			if (predicate.values.length === 0) return [];
-			const pushable = predicate.values.every(
-				(v) => makeEqCondition(table, predicate.column, v) !== null
-			);
-			if (pushable) {
-				const seen = new Set<bigint>();
-				const matched: MatchedRow[] = [];
-				for (const value of predicate.values) {
-					const condition = makeEqCondition(table, predicate.column, value)!;
-					for (const rowJs of db.table(table.name).query([condition])) {
-						if (!seen.has(rowJs.rowId)) {
-							seen.add(rowJs.rowId);
-							matched.push({ rowId: rowJs.rowId, row: rowFromRowJs(table, rowJs) });
-						}
-					}
-				}
-				return matched;
+			if (predicate.values.length === 0) return { conditions: [], alwaysFalse: true };
+			if (predicate.values.length === 1) {
+				return compilePredicate(table, {
+					kind: 'eq',
+					column: predicate.column,
+					value: predicate.values[0]
+				});
 			}
-			return fullScanRows(db, table).filter((m) =>
-				predicate.values.some((v) => m.row[predicate.column.name] === v)
-			);
+			const condition = makeInCondition(table, predicate.column, predicate.values);
+			return condition ? { conditions: [condition] } : residualPlan(predicate);
+		}
+		case 'and': {
+			const conditions: ConditionSpec[] = [];
+			const residuals: Predicate[] = [];
+			for (const child of predicate.predicates) {
+				const plan = compilePredicate(table, child);
+				if (plan.alwaysFalse) return { conditions: [], alwaysFalse: true };
+				conditions.push(...plan.conditions);
+				if (plan.residual) residuals.push(plan.residual);
+			}
+			return { conditions, residual: andResidual(residuals) };
+		}
+		case 'inSub': {
+			return compilePredicate(table, {
+				kind: 'in',
+				column: predicate.column,
+				values: predicate.subquery.scalarValuesSync()
+			});
+		}
+		case 'exists':
+			return predicate.subquery.hasRowsSync() !== predicate.negate
+				? { conditions: [] }
+				: { conditions: [], alwaysFalse: true };
+		case 'or': {
+			const inPlan = compileOrAsIn(table, predicate.predicates);
+			return inPlan ?? residualPlan(predicate);
 		}
 		default:
-			throw new KitError('Unexpected predicate kind');
+			return residualPlan(predicate);
 	}
 }
 
-function unionRows(a: MatchedRow[], b: MatchedRow[]): MatchedRow[] {
-	const map = new Map<bigint, MatchedRow>();
-	for (const row of a) map.set(row.rowId, row);
-	for (const row of b) {
-		if (!map.has(row.rowId)) map.set(row.rowId, row);
-	}
-	return Array.from(map.values());
-}
-
-function intersectRows(a: MatchedRow[], b: MatchedRow[]): MatchedRow[] {
-	const map = new Map<bigint, MatchedRow>();
-	for (const row of a) map.set(row.rowId, row);
-	const result: MatchedRow[] = [];
-	for (const row of b) {
-		if (map.has(row.rowId)) result.push(row);
-	}
-	return result;
-}
-
-function evaluatePredicate(
-	db: NativeDatabase,
-	table: TableSpec,
-	predicate: Predicate
-): MatchedRow[] {
-	if (predicate.kind === 'and') {
-		if (predicate.predicates.length === 0) return fullScanRows(db, table);
-		let result = evaluatePredicate(db, table, predicate.predicates[0]!);
-		for (let i = 1; i < predicate.predicates.length; i++) {
-			result = intersectRows(result, evaluatePredicate(db, table, predicate.predicates[i]!));
-			if (result.length === 0) break;
+function compileOrAsIn(table: TableSpec, predicates: Predicate[]): PredicatePlan | null {
+	let column: ColumnSpec | undefined;
+	const values: unknown[] = [];
+	for (const predicate of predicates) {
+		if (predicate.kind === 'eq') {
+			if (!column) column = predicate.column;
+			if (column.id !== predicate.column.id) return null;
+			values.push(predicate.value);
+			continue;
 		}
-		return result;
-	}
-
-	if (predicate.kind === 'or') {
-		let result: MatchedRow[] = [];
-		for (const sub of predicate.predicates) {
-			result = unionRows(result, evaluatePredicate(db, table, sub));
+		if (predicate.kind === 'in') {
+			if (!column) column = predicate.column;
+			if (column.id !== predicate.column.id) return null;
+			values.push(...predicate.values);
+			continue;
 		}
-		return result;
+		return null;
 	}
+	if (!column) return { conditions: [], alwaysFalse: true };
+	if (values.length === 0) return { conditions: [], alwaysFalse: true };
+	const condition = makeInCondition(table, column, values);
+	return condition ? { conditions: [condition] } : null;
+}
 
-	if (predicate.kind === 'not') {
-		const inner = evaluatePredicate(db, table, predicate.predicate);
-		const removed = new Set(inner.map((m) => m.rowId));
-		return fullScanRows(db, table).filter((m) => !removed.has(m.rowId));
-	}
-
-	if (predicate.kind === 'exists') {
-		// Uncorrelated EXISTS: evaluate the subquery once; it gates the scan.
-		return predicate.subquery.hasRowsSync() !== predicate.negate ? fullScanRows(db, table) : [];
-	}
-
-	if (predicate.kind === 'inSub') {
-		const values = predicate.subquery.scalarValuesSync();
-		return evaluateLeafPredicate(db, table, { kind: 'in', column: predicate.column, values });
-	}
-
-	if (predicate.kind === 'like' || predicate.kind === 'contains' || predicate.kind === 'notIn') {
-		// ponytail: no native FM-index / set pushdown for these; the only index
-		// kind the kit creates is Bitmap, so we full-scan and match in JS.
-		return fullScanRows(db, table).filter((m) => matchRowPredicate(m.row, predicate));
-	}
-
-	return evaluateLeafPredicate(db, table, predicate);
+function evaluatePredicate(db: NativeDatabase, table: TableSpec, predicate: Predicate): MatchedRow[] {
+	const plan = compilePredicate(table, predicate);
+	if (plan.alwaysFalse) return [];
+	const rows =
+		plan.conditions.length > 0 ? queryNativeRows(db, table, plan.conditions) : fullScanRows(db, table);
+	return plan.residual ? rows.filter((m) => matchRowPredicate(m.row, plan.residual!)) : rows;
 }
 
 /**
@@ -1061,6 +1049,16 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> implements S
 		if (this._count) {
 			if (!this._where && !this._source) {
 				return db.table(this.table.name).count() as TResult;
+			}
+			if (this._where && !this._source) {
+				const plan = compilePredicate(this.table, this._where);
+				if (plan.alwaysFalse) return 0n as TResult;
+				if (!plan.residual) {
+					if (plan.conditions.length === 0) {
+						return db.table(this.table.name).count() as TResult;
+					}
+					return db.table(this.table.name).countWhere(plan.conditions) as TResult;
+				}
 			}
 			return BigInt(this.resolveMatched().length) as TResult;
 		}

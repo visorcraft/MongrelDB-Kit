@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ConditionKind } from 'mongreldb/native.js';
 import { KitDatabase } from './db.js';
 import { Schema, table, int, text, real, unique, index, foreignKey, timestamp, date } from './schema.js';
 import { nowDefault } from './defaults.js';
@@ -11,6 +12,7 @@ import {
 	asc,
 	desc,
 	and,
+	inList,
 	not,
 	like,
 	contains,
@@ -100,6 +102,48 @@ function withDbSync(fn: (db: KitDatabase) => void): void {
 	}
 }
 
+function traceNativeTable(db: KitDatabase, tableName: string): {
+	queryCalls: () => number;
+	countWhereCalls: () => number;
+	conditions: () => unknown[][];
+	restore: () => void;
+} {
+	const native = db.nativeDb as any;
+	const originalTable = native.table;
+	const calls = { query: 0, countWhere: 0, conditions: [] as unknown[][] };
+	native.table = function (name: string) {
+		const handle = originalTable.call(this, name);
+		if (name !== tableName) return handle;
+		return new Proxy(handle, {
+			get(target, prop, receiver) {
+				if (prop === 'query') {
+					return (conditions: unknown[]) => {
+						calls.query++;
+						calls.conditions.push(conditions);
+						return target.query(conditions);
+					};
+				}
+				if (prop === 'countWhere') {
+					return (conditions: unknown[]) => {
+						calls.countWhere++;
+						calls.conditions.push(conditions);
+						return target.countWhere(conditions);
+					};
+				}
+				return Reflect.get(target, prop, receiver);
+			}
+		});
+	};
+	return {
+		queryCalls: () => calls.query,
+		countWhereCalls: () => calls.countWhere,
+		conditions: () => calls.conditions,
+		restore: () => {
+			native.table = originalTable;
+		}
+	};
+}
+
 describe('query builder', () => {
 	it('inserts and selects one row', async () => {
 		await withDb(async (db) => {
@@ -121,6 +165,51 @@ describe('query builder', () => {
 			const rows = await db.selectFrom(users).where(eq(users.id, 1n)).execute();
 			expect(rows).toHaveLength(1);
 			expect(rows[0].email).toBe('one@example.com');
+		});
+	});
+
+	it('collapses pushable AND predicates into one native query', () => {
+		withDbSync((db) => {
+			db.insertInto(users).values({ id: 1n, email: 'one@example.com' }).executeSync();
+			db.insertInto(users).values({ id: 2n, email: 'two@example.com' }).executeSync();
+			const trace = traceNativeTable(db, users.name);
+			try {
+				const rows = db
+					.selectFrom(users)
+					.where(and(eq(users.id, 1n), eq(users.email, 'one@example.com')))
+					.executeSync();
+				expect(rows).toHaveLength(1);
+				expect(rows[0].email).toBe('one@example.com');
+				expect(trace.queryCalls()).toBe(1);
+				expect(trace.conditions()[0]).toHaveLength(2);
+			} finally {
+				trace.restore();
+			}
+		});
+	});
+
+	it('uses native BitmapIn cardinality for filtered counts', () => {
+		withDbSync((db) => {
+			db.insertInto(users).values({ id: 1n, email: 'one@example.com' }).executeSync();
+			db.insertInto(users).values({ id: 2n, email: 'two@example.com' }).executeSync();
+			db.insertInto(users).values({ id: 3n, email: 'three@example.com' }).executeSync();
+			const trace = traceNativeTable(db, users.name);
+			try {
+				const total = db
+					.selectFrom(users)
+					.where(inList(users.email, ['one@example.com', 'three@example.com']))
+					.selectCount()
+					.executeSync();
+				expect(total).toBe(2n);
+				expect(trace.queryCalls()).toBe(0);
+				expect(trace.countWhereCalls()).toBe(1);
+				expect(trace.conditions()[0]).toHaveLength(1);
+				expect((trace.conditions()[0]![0] as { kind: ConditionKind }).kind).toBe(
+					ConditionKind.BitmapIn
+				);
+			} finally {
+				trace.restore();
+			}
 		});
 	});
 

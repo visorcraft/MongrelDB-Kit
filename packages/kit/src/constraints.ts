@@ -12,6 +12,7 @@ import {
 	KitError
 } from './errors.js';
 import { KIT_KEY_VERSION, encodedPk, encodeRowGuardKey, encodeUniqueKey } from './keys.js';
+import { cellValue, rowFromRowJs } from './rows.js';
 
 export interface ConstraintKit {
 	db: MongrelDatabase;
@@ -35,16 +36,6 @@ function columnId(table: TableSpec, name: string): number {
 
 function isoNow(): string {
 	return new Date().toISOString();
-}
-
-function cellValue(cell: Cell | undefined): unknown {
-	if (!cell) return null;
-	if (cell.text !== undefined) return cell.text;
-	if (cell.int64 !== undefined) return cell.int64;
-	if (cell.boolean !== undefined) return cell.boolean;
-	if (cell.float64 !== undefined) return cell.float64;
-	if (cell.bytes !== undefined) return cell.bytes;
-	return null;
 }
 
 export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] {
@@ -75,15 +66,6 @@ export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] 
 			}
 		}
 	});
-}
-
-function rowFromRowJs(table: TableSpec, rowJs: RowJs): Record<string, unknown> {
-	const row: Record<string, unknown> = {};
-	for (const col of table.columns) {
-		const cell = rowJs.cells.find((c) => c.columnId === col.id);
-		row[col.name] = cellValue(cell);
-	}
-	return row;
 }
 
 function findByPk(db: NativeDatabase, table: TableSpec, pkValue: PkValue): RowJs | null {
