@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ConditionKind } from 'mongreldb/native.js';
+import { ColumnType, ConditionKind } from 'mongreldb/native.js';
 import { KitDatabase } from './db.js';
 import { Schema, table, int, text, index, unique, foreignKey } from './schema.js';
+import { sequenceDefault } from './defaults.js';
 import {
 	migrate,
 	migrationChecksum,
@@ -626,5 +627,109 @@ describe('migration ops', () => {
 				)
 			).rejects.toBeInstanceOf(KitForeignKeyError);
 		});
+	});
+
+	it('addColumn forwards the autoIncrement flag for sequence-default columns', () => {
+		const widgetsV1 = table('widgets', {
+			columns: [text('name', { nullable: false })],
+			primaryKey: []
+		});
+		const widgetsV2 = table('widgets', {
+			columns: [
+				int('id', { primaryKey: true, default: sequenceDefault('widgets_id_seq') }),
+				text('name', { nullable: false })
+			],
+			primaryKey: ['id']
+		});
+
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([widgetsV2]));
+		try {
+			const migrations: Migration[] = [
+				{
+					version: 1,
+					name: 'create_widgets',
+					up: (ctx) => {
+						ctx.ensureTable(widgetsV1);
+					}
+				},
+				{
+					version: 2,
+					name: 'add_id',
+					up: (ctx) => {
+						ctx.addColumn('widgets', widgetsV2.columns[0]);
+					}
+				}
+			];
+
+			db.migrateSync(new Schema([widgetsV2]), migrations);
+
+			const row = db.insertInto(widgetsV2).values({ name: 'a' }).executeSync();
+			expect(row.id).toBe(1n);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('seeds engine counters from a legacy __kit_sequences table', () => {
+		const widgets = table('widgets', {
+			columns: [
+				int('id', { primaryKey: true, default: sequenceDefault('widgets_id_seq') }),
+				text('name', { nullable: false })
+			],
+			primaryKey: ['id']
+		});
+
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([widgets]));
+		try {
+			// Manually create the pre-switch sequence table and bump the widgets
+			// sequence past any existing rows.
+			const native = db.nativeDb;
+			native.createTable('__kit_sequences', {
+				columns: [
+					{
+						id: 1,
+						name: 'sequence_name',
+						ty: ColumnType.Bytes,
+						primaryKey: true,
+						nullable: false
+					},
+					{
+						id: 2,
+						name: 'next_value',
+						ty: ColumnType.Int64,
+						primaryKey: false,
+						nullable: false
+					}
+				],
+				indexes: []
+			});
+			const seq = native.table('__kit_sequences');
+			seq.put([
+				{ columnId: 1, text: 'widgets_id_seq' },
+				{ columnId: 2, int64: 100n }
+			]);
+			seq.commit();
+
+			const migrations: Migration[] = [
+				{
+					version: 1,
+					name: 'create_widgets',
+					up: (ctx) => {
+						ctx.ensureTable(widgets);
+					}
+				}
+			];
+
+			db.migrateSync(new Schema([widgets]), migrations);
+
+			const row = db.insertInto(widgets).values({ name: 'a' }).executeSync();
+			expect(row.id).toBeGreaterThanOrEqual(100n);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
