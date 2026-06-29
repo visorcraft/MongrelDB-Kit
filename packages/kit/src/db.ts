@@ -251,6 +251,29 @@ export class KitDatabase {
 		return this.db.tableNames().filter((name) => !name.startsWith('__kit_'));
 	}
 
+	/**
+	 * Rename a live table from `oldName` to `newName`. The source must exist and
+	 * be live; the target must not collide with an existing table (the engine
+	 * enforces both). The rename is durable: it is logged to the WAL and applied
+	 * again on reopen. The `table_id`, schema, and on-disk layout are unchanged,
+	 * so outstanding handles and indexes remain valid.
+	 *
+	 * Internal `__kit_`-prefixed names are off-limits in both directions: an app
+	 * table cannot be renamed to a `__kit_` name (it would vanish from
+	 * {@link KitDatabase.tableNames}, which filters that prefix) and an internal
+	 * table cannot be renamed away from its expected name (the Kit looks internal
+	 * tables up by name). This keeps the internal-table namespace invariant
+	 * intact without the engine needing to know about Kit conventions.
+	 */
+	renameTable(oldName: string, newName: string): void {
+		if (oldName.startsWith('__kit_') || newName.startsWith('__kit_')) {
+			throw new Error(
+				"renameTable: names beginning with '__kit_' are reserved for internal tables"
+			);
+		}
+		this.db.renameTable(oldName, newName);
+	}
+
 	begin(): Transaction {
 		return this.db.begin();
 	}
