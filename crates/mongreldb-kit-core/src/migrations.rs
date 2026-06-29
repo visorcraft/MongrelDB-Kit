@@ -11,6 +11,7 @@ pub enum MigrationOp {
     DropTable { name: String },
     AddColumn { table: String, column: String },
     DropColumn { table: String, column: String },
+    AlterColumn { table: String, column: String },
     AddIndex { table: String, index: String },
     DropIndex { table: String, index: String },
     AddUnique { table: String, constraint: String },
@@ -58,6 +59,11 @@ fn canonical_op(op: &MigrationOp) -> String {
         ),
         MigrationOp::DropColumn { table, column } => format!(
             r#"{{"op":"drop_column","table":{},"column":{}}}"#,
+            json_string(table),
+            json_string(column)
+        ),
+        MigrationOp::AlterColumn { table, column } => format!(
+            r#"{{"op":"alter_column","table":{},"column":{}}}"#,
             json_string(table),
             json_string(column)
         ),
@@ -207,6 +213,18 @@ mod tests {
         assert_eq!(
             migration_checksum(1, "init", &[]),
             "6408373a4372a2c49859db2a4548ea43308e5ba7dd3609998ca376606cf09757"
+        );
+        // An alter_column op (also shared with the TypeScript test).
+        assert_eq!(
+            migration_checksum(
+                3,
+                "alter_payload_type",
+                &[MigrationOp::AlterColumn {
+                    table: "weather_cache".into(),
+                    column: "payload_json".into()
+                }]
+            ),
+            "eabab2122bc784d989e7b368e93f68d1ba1c08ec82ddd1aa132a94eaf6b5db66"
         );
     }
 

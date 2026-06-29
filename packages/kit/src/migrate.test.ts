@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ColumnType, ConditionKind } from 'mongreldb/native.js';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, index, unique, foreignKey } from './schema.js';
+import { Schema, table, int, text, json, index, unique, foreignKey } from './schema.js';
 import { sequenceDefault } from './defaults.js';
 import {
 	migrate,
@@ -12,6 +12,7 @@ import {
 	dropTable,
 	addUnique,
 	addForeignKey,
+	alterColumn,
 	type Migration
 } from './migrate.js';
 import type { TableSpec } from './types.js';
@@ -404,6 +405,15 @@ describe('migrationChecksum', () => {
 		expect(migrationChecksum({ version: 1, name: 'init', up: () => undefined })).toBe(
 			'6408373a4372a2c49859db2a4548ea43308e5ba7dd3609998ca376606cf09757'
 		);
+		// An alter_column op (also shared with the Rust kit test).
+		expect(
+			migrationChecksum({
+				version: 3,
+				name: 'alter_payload_type',
+				ops: [{ kind: 'alterColumn', table: 'weather_cache', column: 'payload_json' }],
+				up: () => undefined
+			})
+		).toBe('eabab2122bc784d989e7b368e93f68d1ba1c08ec82ddd1aa132a94eaf6b5db66');
 	});
 
 	it('changes when version, name, or any op changes', () => {
@@ -727,6 +737,159 @@ describe('migration ops', () => {
 
 			const row = db.insertInto(widgets).values({ name: 'a' }).executeSync();
 			expect(row.id).toBeGreaterThanOrEqual(100n);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('alterColumn changes the application type and preserves existing rows', async () => {
+		// Schema v1 declares payload as text; the table is created and a row is
+		// inserted as a JSON string. Schema v2 redecls payload as json and a
+		// migration alters the column in place.
+		const cacheV1 = table('weather_cache', {
+			columns: [
+				int('id', { primaryKey: true }),
+				text('payload', { nullable: false })
+			],
+			primaryKey: ['id']
+		});
+		const cacheV2 = table('weather_cache', {
+			columns: [
+				int('id', { primaryKey: true }),
+				json('payload', { nullable: false })
+			],
+			primaryKey: ['id']
+		});
+
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([cacheV1]));
+		try {
+			const payload = JSON.stringify({ daily: { time: ['2026-01-01'] } });
+			await db.insertInto(cacheV1).values({ id: 1n, payload }).execute();
+
+			await alterColumn(db, 'weather_cache', 'payload', cacheV2.column('payload'));
+
+			// text and json share ColumnType.Bytes, so the stored UTF-8 bytes are
+			// untouched and the row reads back identically.
+			const rows = await db.selectFrom(cacheV2).execute();
+			expect(rows).toHaveLength(1);
+			expect(rows[0].payload).toBe(payload);
+
+			// The in-memory schema now reports the json application type.
+			const col = db.schema.table('weather_cache').columns.find((c) => c.name === 'payload');
+			expect(col?.applicationType).toBe('json');
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('alterColumn runs inside a migration and is recorded in the catalog', async () => {
+		const cacheV1 = table('weather_cache', {
+			columns: [
+				int('id', { primaryKey: true }),
+				text('payload', { nullable: false })
+			],
+			primaryKey: ['id']
+		});
+		const cacheV2 = table('weather_cache', {
+			columns: [
+				int('id', { primaryKey: true }),
+				json('payload', { nullable: false })
+			],
+			primaryKey: ['id']
+		});
+
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([cacheV1]));
+		try {
+			await db.insertInto(cacheV1).values({ id: 1n, payload: '{"a":1}' }).execute();
+
+			const migrations: Migration[] = [
+				{
+					version: 1,
+					name: 'create_cache',
+					ops: [{ kind: 'createTable', name: 'weather_cache' }],
+					up: async (ctx) => {
+						await ctx.ensureTable(cacheV1);
+					}
+				},
+				{
+					version: 2,
+					name: 'payload_to_json',
+					ops: [{ kind: 'alterColumn', table: 'weather_cache', column: 'payload' }],
+					up: async (ctx) => {
+						await ctx.alterColumn('weather_cache', 'payload', cacheV2.column('payload'));
+					}
+				}
+			];
+
+			// The schema passed to migrate() is the v2 shape (source of truth).
+			await migrate(db, new Schema([cacheV2]), migrations);
+
+			const records = await db.selectFrom(kitSchemaMigrations).execute();
+			expect(records.map((r) => Number(r.version))).toEqual([1, 2]);
+
+			const col = db.schema.table('weather_cache').columns.find((c) => c.name === 'payload');
+			expect(col?.applicationType).toBe('json');
+
+			const rows = await db.selectFrom(cacheV2).execute();
+			expect(rows[0].payload).toBe('{"a":1}');
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('alterColumn rejects a storage-type change that would require re-encoding', async () => {
+		const widgets = table('widgets', {
+			columns: [int('id', { primaryKey: true }), int('qty', { nullable: false })],
+			primaryKey: ['id']
+		});
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([widgets]));
+		try {
+			// int64 -> float64 maps to a different engine ColumnType.
+			const realQty = { ...widgets.column('qty'), storageType: 'float64' as const, applicationType: 'float64' as const };
+			await expect(alterColumn(db, 'widgets', 'qty', realQty as any)).rejects.toBeInstanceOf(
+				KitMigrationError
+			);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('alterColumn rejects a nullability change', async () => {
+		const widgets = table('widgets', {
+			columns: [int('id', { primaryKey: true }), text('name', { nullable: false })],
+			primaryKey: ['id']
+		});
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([widgets]));
+		try {
+			const nullableName = { ...widgets.column('name'), nullable: true as const };
+			await expect(alterColumn(db, 'widgets', 'name', nullableName as any)).rejects.toBeInstanceOf(
+				KitMigrationError
+			);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('alterColumn rejects an unknown column', async () => {
+		const widgets = table('widgets', {
+			columns: [int('id', { primaryKey: true }), text('name', { nullable: false })],
+			primaryKey: ['id']
+		});
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([widgets]));
+		try {
+			await expect(
+				alterColumn(db, 'widgets', 'ghost', text('ghost', { nullable: false }))
+			).rejects.toBeInstanceOf(KitMigrationError);
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });

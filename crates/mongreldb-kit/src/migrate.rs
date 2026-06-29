@@ -135,10 +135,14 @@ fn apply_migration_ops(
             }
             MigrationOp::AddCheck { .. }
             | MigrationOp::DropCheck { .. }
-            | MigrationOp::DropForeignKey { .. } => {
-                // Metadata-only: check evaluation and foreign-key enforcement are
-                // driven by the re-persisted schema, so there is no catalog or
-                // guard mutation to perform here.
+            | MigrationOp::DropForeignKey { .. }
+            | MigrationOp::AlterColumn { .. } => {
+                // Metadata-only: check evaluation, foreign-key enforcement, and
+                // column application-type/constraints are driven by the
+                // re-persisted schema, so there is no catalog or guard mutation
+                // to perform here. `alter_column` is restricted by the checksum
+                // contract to same-storage-type, same-nullability changes
+                // (e.g. text <-> json), so no row rewrite is needed.
             }
             MigrationOp::DropColumn { table, column } => {
                 return Err(KitError::Migration(format!(

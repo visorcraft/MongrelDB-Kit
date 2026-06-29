@@ -26,6 +26,8 @@ type MongrelModule = {
 	Database: {
 		open(path: string): MongrelDatabase;
 		withPath(path: string): MongrelDatabase;
+		createEncrypted(path: string, passphrase: string): MongrelDatabase;
+		openEncrypted(path: string, passphrase: string): MongrelDatabase;
 	};
 	ColumnType: typeof NativeColumnType;
 	IndexKindSpec: typeof NativeIndexKindSpec;
@@ -168,7 +170,19 @@ export class KitDatabase {
 		return kitDb;
 	}
 
-	static openSync(path: string, schema: Schema): KitDatabase {
+	static openSync(
+		path: string,
+		schema: Schema,
+		options?: { encryption?: { passphrase: string } }
+	): KitDatabase {
+		if (options?.encryption?.passphrase) {
+			try {
+				return KitDatabase.openEncryptedSync(path, schema, options.encryption.passphrase);
+			} catch {
+				return KitDatabase.createEncryptedSync(path, schema, options.encryption.passphrase);
+			}
+		}
+
 		let db: MongrelDatabase;
 		try {
 			db = addon.Database.open(path);
@@ -176,6 +190,26 @@ export class KitDatabase {
 			db = addon.Database.withPath(path);
 		}
 
+		return KitDatabase.initialize(db, schema);
+	}
+
+	static createEncryptedSync(path: string, schema: Schema, passphrase: string): KitDatabase {
+		if (!passphrase) {
+			throw new Error('createEncryptedSync requires a non-empty passphrase');
+		}
+		const db = addon.Database.createEncrypted(path, passphrase);
+		return KitDatabase.initialize(db, schema);
+	}
+
+	static openEncryptedSync(path: string, schema: Schema, passphrase: string): KitDatabase {
+		if (!passphrase) {
+			throw new Error('openEncryptedSync requires a non-empty passphrase');
+		}
+		const db = addon.Database.openEncrypted(path, passphrase);
+		return KitDatabase.initialize(db, schema);
+	}
+
+	private static initialize(db: MongrelDatabase, schema: Schema): KitDatabase {
 		const kitDb = new KitDatabase(db, schema);
 		kitDb.ensureInternalTables();
 		for (const table of schema.tablesList()) {

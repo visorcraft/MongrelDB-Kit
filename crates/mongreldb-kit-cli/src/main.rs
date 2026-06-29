@@ -37,6 +37,10 @@ enum CliMigrationOp {
         table: String,
         column: String,
     },
+    AlterColumn {
+        table: String,
+        column: String,
+    },
     AddIndex {
         table: String,
         index: String,
@@ -80,6 +84,9 @@ impl From<CliMigrationOp> for MigrationOp {
             CliMigrationOp::AddColumn { table, column } => MigrationOp::AddColumn { table, column },
             CliMigrationOp::DropColumn { table, column } => {
                 MigrationOp::DropColumn { table, column }
+            }
+            CliMigrationOp::AlterColumn { table, column } => {
+                MigrationOp::AlterColumn { table, column }
             }
             CliMigrationOp::AddIndex { table, index } => MigrationOp::AddIndex { table, index },
             CliMigrationOp::DropIndex { table, index } => MigrationOp::DropIndex { table, index },

@@ -78,6 +78,7 @@ export type MigrationOp =
 	| { kind: 'dropTable'; name: string }
 	| { kind: 'addColumn'; table: string; column: string }
 	| { kind: 'dropColumn'; table: string; column: string }
+	| { kind: 'alterColumn'; table: string; column: string }
 	| { kind: 'addIndex'; table: string; index: string }
 	| { kind: 'dropIndex'; table: string; index: string }
 	| { kind: 'addUnique'; table: string; constraint: string }
@@ -106,6 +107,7 @@ export interface MigrationContext {
 	db: NativeDatabase;
 	ensureTable: (table: TableSpec) => Promise<void> | void;
 	addColumn: (tableName: string, column: ColumnSpec) => Promise<void> | void;
+	alterColumn: (tableName: string, columnName: string, newColumn: ColumnSpec) => Promise<void> | void;
 	sql: (sql: string) => Promise<unknown[]> | unknown[];
 }
 
@@ -273,6 +275,8 @@ function canonicalOp(op: MigrationOp): string {
 			return `{"op":"add_column","table":${s(op.table)},"column":${s(op.column)}}`;
 		case 'dropColumn':
 			return `{"op":"drop_column","table":${s(op.table)},"column":${s(op.column)}}`;
+		case 'alterColumn':
+			return `{"op":"alter_column","table":${s(op.table)},"column":${s(op.column)}}`;
 		case 'addIndex':
 			return `{"op":"add_index","table":${s(op.table)},"index":${s(op.index)}}`;
 		case 'dropIndex':
@@ -455,6 +459,8 @@ function makeContext(kit: KitDatabase): MigrationContext {
 		db: kit.nativeDb,
 		ensureTable: (table: TableSpec) => createTable(kit, table),
 		addColumn: (tableName: string, column: ColumnSpec) => addColumn(kit, tableName, column),
+		alterColumn: (tableName: string, columnName: string, newColumn: ColumnSpec) =>
+			alterColumn(kit, tableName, columnName, newColumn),
 		sql: (sql: string) => runSql(kit.nativeDb, sql)
 	};
 }
@@ -564,6 +570,8 @@ function makeContextSync(kit: KitDatabase): MigrationContext {
 		db: kit.nativeDb,
 		ensureTable: (table: TableSpec) => createTableSync(kit, table),
 		addColumn: (tableName: string, column: ColumnSpec) => addColumnSync(kit, tableName, column),
+		alterColumn: (tableName: string, columnName: string, newColumn: ColumnSpec) =>
+			alterColumnSync(kit, tableName, columnName, newColumn),
 		sql: () => {
 			throw new KitMigrationError('sql() is not available in synchronous migrations');
 		}
@@ -809,6 +817,72 @@ function addColumnSync(kit: KitDatabase, tableName: string, column: ColumnSpec):
 
 export async function addColumn(kit: KitDatabase, tableName: string, column: ColumnSpec): Promise<void> {
 	addColumnSync(kit, tableName, column);
+}
+
+/**
+ * Change the declared type or constraints of an existing column in place.
+ *
+ * MongrelDB has no native in-place column-type change, so this only supports
+ * alterations whose old and new storage types map to the same engine
+ * {@link ColumnType} (for example `text` ↔ `json` ↔ `bytes`, all stored as
+ * UTF-8 bytes) and that leave the column's nullability unchanged. Such a
+ * change is purely Kit-level metadata: the on-disk bytes are identical, so no
+ * row rewrite is needed and the updated application type is captured when the
+ * migration runner rewrites `__kit_schema_catalog` after all ops complete.
+ *
+ * Storage-type or nullability changes would require a table rebuild (the
+ * engine cannot re-encode or relax existing columns); they are rejected here
+ * with a message pointing at the add-column / backfill / drop-column pattern.
+ */
+export async function alterColumn(
+	kit: KitDatabase,
+	tableName: string,
+	columnName: string,
+	newColumn: ColumnSpec
+): Promise<void> {
+	alterColumnSync(kit, tableName, columnName, newColumn);
+}
+
+function alterColumnSync(
+	kit: KitDatabase,
+	tableName: string,
+	columnName: string,
+	newColumn: ColumnSpec
+): void {
+	const table = kit.schema.table(tableName);
+	const existingIndex = table.columns.findIndex((c) => c.name === columnName);
+	if (existingIndex === -1) {
+		throw new KitMigrationError(`Column "${columnName}" not found in table "${tableName}"`);
+	}
+	const existing = table.columns[existingIndex];
+
+	// Preserve the stable id and name; only type/constraint metadata may
+	// change. Renaming a column is not supported by this op.
+	const resolved: ColumnSpec = { ...newColumn, id: existing.id, name: existing.name };
+
+	const oldNativeTy = toMongrelColumnType(existing.storageType);
+	const newNativeTy = toMongrelColumnType(resolved.storageType);
+	if (newNativeTy !== oldNativeTy) {
+		throw new KitMigrationError(
+			`alterColumn cannot change the storage type of "${tableName}"."${columnName}" ` +
+				`(${existing.storageType} -> ${resolved.storageType}); cross-type conversion requires re-encoding. ` +
+				`Add a new column, backfill, and drop the old one instead.`
+		);
+	}
+
+	if (resolved.nullable !== existing.nullable) {
+		throw new KitMigrationError(
+			`alterColumn cannot change the nullability of "${tableName}"."${columnName}" ` +
+				`(${existing.nullable} -> ${resolved.nullable}); MongrelDB has no in-place native alter. ` +
+				`Use an add-column / backfill / drop-column migration instead.`
+		);
+	}
+
+	// No native change is required: the on-disk bytes are identical for
+	// same-ColumnType columns (text/json/bytes are all UTF-8 bytes). Update the
+	// Kit-level column spec so validation and the re-persisted schema catalog
+	// reflect the new application type and constraints.
+	(table.columns as ColumnSpec[])[existingIndex] = resolved;
 }
 
 export async function addIndex(kit: KitDatabase, tableName: string, index: IndexSpec): Promise<void> {
