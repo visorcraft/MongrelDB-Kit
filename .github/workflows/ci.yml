@@ -13,13 +13,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Engine-free checks. The `mongreldb-kit-core` crate has no dependency on the
-  # MongrelDB engine, and `tsc --noEmit` / Python facade imports do not exercise
-  # the native addon, so these run without checking out the engine repo.
+  # Fast feedback. `mongreldb-kit-core` itself does not link against the
+  # MongrelDB engine, but the workspace cannot be resolved without the engine
+  # present: `crates/mongreldb-kit` depends on it via a sibling path dep
+  # (`../../../mongreldb/...`), and every `cargo` invocation loads the whole
+  # workspace manifest. So the engine is checked out as a sibling here too,
+  # matching the `integration` job layout. `tsc --noEmit` / the Python facade
+  # import still do not exercise the native addon.
   lint-and-core:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout kit
+        uses: actions/checkout@v4
+        with:
+          path: MongrelDB-Kit
+
+      - name: Checkout MongrelDB engine (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: visorcraft/mongreldb
+          path: mongreldb
+          token: ${{ secrets.MONGRELDB_TOKEN || github.token }}
 
       - name: Install Rust (rustfmt, clippy)
         uses: dtolnay/rust-toolchain@stable
@@ -27,14 +41,19 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: MongrelDB-Kit
 
       - name: rustfmt
+        working-directory: MongrelDB-Kit
         run: cargo fmt --all --check
 
       - name: clippy (core crate)
+        working-directory: MongrelDB-Kit
         run: cargo clippy -p mongreldb-kit-core --all-targets -- -D warnings
 
       - name: Rust core tests
+        working-directory: MongrelDB-Kit
         run: cargo test -p mongreldb-kit-core
 
       - name: Setup Node
@@ -43,12 +62,13 @@ jobs:
           node-version: 22
 
       - name: TypeScript typecheck
-        working-directory: packages/kit
+        working-directory: MongrelDB-Kit/packages/kit
         run: |
           npm install --no-save
           npm run check
 
       - name: Python facade import
+        working-directory: MongrelDB-Kit
         run: python -c "import sys; sys.path.insert(0, 'python/mongreldb_kit'); import mongreldb_kit._schema"
 
   # Full integration. Requires the MongrelDB engine repo checked out as a sibling
