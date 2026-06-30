@@ -38,6 +38,13 @@ function isoNow(): string {
 	return new Date().toISOString();
 }
 
+/** True when some table in the schema has a foreign key referencing `tableName`. */
+export function isReferencedTable(schema: Schema, tableName: string): boolean {
+	return schema
+		.tablesList()
+		.some((t) => t.foreignKeys.some((fk) => fk.referencesTable === tableName));
+}
+
 export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] {
 	return table.columns.map((col) => {
 		const value = row[col.name];
@@ -68,7 +75,7 @@ export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] 
 	});
 }
 
-function findByPk(db: NativeDatabase, table: TableSpec, pkValue: PkValue): RowJs | null {
+export function findByPk(db: NativeDatabase, table: TableSpec, pkValue: PkValue): RowJs | null {
 	if (table.primaryKey.length === 1) {
 		const scalar = Array.isArray(pkValue) ? pkValue[0] : pkValue;
 		if (scalar === null) {
@@ -309,14 +316,17 @@ export function deleteUniqueGuards(
 	kit: ConstraintKit,
 	txn: Transaction,
 	table: TableSpec,
-	pkValue: PkValue
+	pkValue: PkValue,
+	onlyConstraints?: string[]
 ): void {
 	// No unique constraints means no guard rows to clean up — skip the per-row
 	// query on __kit_unique_keys entirely (a hot cost in bulk deletes).
 	if (table.unique.length === 0) return;
 	const ownerPk = encodedPk(pkValue);
 	const ownerTableCol = columnId(kitUniqueKeys, 'owner_table');
-	const constraintNames = new Set(table.unique.map((uq) => uq.name));
+	const allowed = onlyConstraints
+		? new Set(onlyConstraints)
+		: new Set(table.unique.map((uq) => uq.name));
 	const existing = kit.db.table('__kit_unique_keys').query([
 		{ kind: ConditionKind.BitmapEq, columnId: ownerTableCol, text: table.name }
 	]);
@@ -324,7 +334,7 @@ export function deleteUniqueGuards(
 		const constraintCell = guard.cells.find(
 			(c) => c.columnId === columnId(kitUniqueKeys, 'constraint_name')
 		);
-		if (!constraintNames.has(String(cellValue(constraintCell) ?? ''))) {
+		if (!allowed.has(String(cellValue(constraintCell) ?? ''))) {
 			continue;
 		}
 		const ownerPkCell = guard.cells.find(
@@ -480,4 +490,27 @@ function planDeleteRecursive(
 	deleteRowGuard(kit, txn, table.name, pkValue);
 	deleted.add(visitKey);
 	currentPath.delete(visitKey);
+}
+
+/** Delete every Kit guard row owned by `tableName` (used by `truncateTable`). */
+export function deleteGuardsForTable(
+	kit: ConstraintKit,
+	txn: Transaction,
+	tableName: string
+): void {
+	const ownerTableCol = columnId(kitUniqueKeys, 'owner_table');
+	const uniqueKeys = kit.db.table('__kit_unique_keys').query([
+		{ kind: ConditionKind.BitmapEq, columnId: ownerTableCol, text: tableName }
+	]);
+	for (const row of uniqueKeys) {
+		txn.delete('__kit_unique_keys', row.rowId);
+	}
+
+	const tableNameCol = columnId(kitRowGuards, 'table_name');
+	const rowGuards = kit.db.table('__kit_row_guards').query([
+		{ kind: ConditionKind.BitmapEq, columnId: tableNameCol, text: tableName }
+	]);
+	for (const row of rowGuards) {
+		txn.delete('__kit_row_guards', row.rowId);
+	}
 }

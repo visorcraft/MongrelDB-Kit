@@ -14,6 +14,8 @@ import {
 } from './internalTables.js';
 import type { TableSpec, ColumnStorageType, CheckSpec } from './types.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
+import { isReferencedTable, deleteGuardsForTable, type ConstraintKit } from './constraints.js';
+import { KitError, isRetryableConflict } from './errors.js';
 
 type MongrelColumnSpec = {
 	id: number;
@@ -146,6 +148,49 @@ function columnId(table: TableSpec, name: string): number {
 
 function isoNow(): string {
 	return new Date().toISOString();
+}
+
+/**
+ * Run `fn` inside a fresh transaction, retrying bounded-exponentially on
+ * retryable conflicts. Exported so query builders and `KitDatabase` methods
+ * can share one implementation.
+ */
+export function runSyncTxn(
+	kit: KitDatabase,
+	fn: (txn: Transaction) => void,
+	opts: { maxRetries?: number; baseDelayMs?: number } = {}
+): void {
+	const maxRetries = opts.maxRetries ?? 5;
+	const baseDelayMs = opts.baseDelayMs ?? 1;
+
+	let lastErr: unknown;
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		const txn = kit.begin();
+		try {
+			fn(txn);
+			txn.commit();
+			return;
+		} catch (err) {
+			try {
+				txn.rollback();
+			} catch {
+				// ignore rollback errors
+			}
+			lastErr = err;
+			if (attempt < maxRetries && isRetryableConflict(err)) {
+				const delay = baseDelayMs * (attempt + 1);
+				if (delay > 0) {
+					const start = Date.now();
+					while (Date.now() - start < delay) {
+						// busy wait
+					}
+				}
+				continue;
+			}
+			throw err;
+		}
+	}
+	throw lastErr;
 }
 
 export class KitDatabase {
@@ -328,5 +373,31 @@ export class KitDatabase {
 	reserveAutoIncSync(tableName: string): bigint | null {
 		const reserved = this.db.table(tableName).reserveAutoInc();
 		return reserved ?? null;
+	}
+
+	/**
+	 * Remove every row from `tableName` and clear the Kit guard rows owned by
+	 * that table. Throws when another table has a foreign key referencing it.
+	 */
+	truncateTable(tableName: string): void {
+		this.schema.table(tableName);
+		const references = this.schema
+			.tablesList()
+			.flatMap((t) =>
+				t.foreignKeys
+					.filter((fk) => fk.referencesTable === tableName)
+					.map((fk) => `${t.name}.${fk.name}`)
+			);
+		if (references.length > 0) {
+			throw new KitError(
+				`table ${tableName} is referenced by foreign key(s): ${references.join(', ')}`,
+				'RESTRICT'
+			);
+		}
+		const kit: ConstraintKit = { db: this.nativeDb, schema: this.schema };
+		runSyncTxn(this, (txn) => {
+			txn.truncate(tableName);
+			deleteGuardsForTable(kit, txn, tableName);
+		});
 	}
 }

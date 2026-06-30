@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ConditionKind } from 'mongreldb/native.js';
 import type { Database as NativeDatabase, ConditionSpec, Transaction } from 'mongreldb/native.js';
-import { KitDatabase } from './db.js';
+import { KitDatabase, runSyncTxn } from './db.js';
 import type { TableSpec, ColumnSpec, PkValue } from './types.js';
 import type { Row, Insert, Update } from './types.js';
 import type { DefaultContext } from './defaults.js';
@@ -17,20 +17,15 @@ import {
 	planDelete,
 	pkValueFromRow,
 	pkValuesEqual,
+	findByPk,
+	isReferencedTable,
 	type ConstraintKit
 } from './constraints.js';
-import { KitError, isRetryableConflict } from './errors.js';
+import { KitError } from './errors.js';
 import { encodedPk } from './keys.js';
 import { packRows, packRowIds } from './packing.js';
 import type { Schema } from './schema.js';
 import { rowFromRowJs } from './rows.js';
-
-/** True when some table in the schema has a foreign key referencing `tableName`. */
-function isReferencedTable(schema: Schema, tableName: string): boolean {
-	return schema
-		.tablesList()
-		.some((t) => t.foreignKeys.some((fk) => fk.referencesTable === tableName));
-}
 
 declare module './db.js' {
 	interface KitDatabase {
@@ -38,6 +33,7 @@ declare module './db.js' {
 		insertInto<T extends TableSpec>(table: T): InsertBuilder<T>;
 		updateTable<T extends TableSpec>(table: T): UpdateBuilder<T>;
 		deleteFrom<T extends TableSpec>(table: T): DeleteBuilder<T>;
+		truncateTable(tableName: string): void;
 		/**
 		 * Materialize `builder` as a named CTE and return a scope whose
 		 * `selectFrom(name)` reads those rows in memory. Chain `.with(...)` for
@@ -777,6 +773,17 @@ function makeDefaultContext(): DefaultContext {
 	};
 }
 
+/** Project `row` to only the requested columns, or return it unchanged. */
+function projectRow(
+	row: Record<string, unknown>,
+	columns?: ColumnSpec[]
+): Record<string, unknown> {
+	if (!columns) return row;
+	const projected: Record<string, unknown> = {};
+	for (const col of columns) projected[col.name] = row[col.name];
+	return projected;
+}
+
 function prepareInsertRowSync(
 	kit: KitDatabase,
 	table: TableSpec,
@@ -807,51 +814,6 @@ function prepareInsertRowSync(
 	return withDefaults;
 }
 
-function runSyncTxn(
-	kit: KitDatabase,
-	fn: (txn: Transaction) => void,
-	opts: { maxRetries?: number; baseDelayMs?: number } = {}
-): void {
-	const maxRetries = opts.maxRetries ?? 5;
-	const baseDelayMs = opts.baseDelayMs ?? 1;
-
-	let lastErr: unknown;
-	for (let attempt = 0; attempt <= maxRetries; attempt++) {
-		const txn = kit.begin();
-		try {
-			fn(txn);
-			txn.commit();
-			return;
-		} catch (err) {
-			try {
-				txn.rollback();
-			} catch {
-				// ignore rollback errors
-			}
-			lastErr = err;
-			// Kit-level conflicts (e.g. unique-guard or row-guard write-write
-			// races) and native MongrelDB conflicts are both retryable. The
-			// native addon prefixes commit-time conflict messages with
-			// `__CONFLICT__:`; the kit throws KitConflictError.
-			if (attempt < maxRetries && isRetryableConflict(err)) {
-				// Synchronous bounded backoff. Keep the delay small so single-
-				// threaded tests stay fast; the loop bound guarantees forward
-				// progress.
-				const delay = baseDelayMs * (attempt + 1);
-				if (delay > 0) {
-					const start = Date.now();
-					while (Date.now() - start < delay) {
-						// busy wait
-					}
-				}
-				continue;
-			}
-			throw err;
-		}
-	}
-	throw lastErr;
-}
-
 function applyUpdateDefaults(
 	table: TableSpec,
 	merged: Record<string, unknown>,
@@ -871,6 +833,58 @@ function applyUpdateDefaults(
 
 function hasForeignKeyChange(table: TableSpec, patch: Record<string, unknown>): boolean {
 	return table.foreignKeys.some((fk) => fk.columns.some((colName) => patch[colName] !== undefined));
+}
+
+/**
+ * Apply `patch` to `existingRow` inside `txn`, updating guards and foreign-key
+ * touches as needed. Returns the merged row.
+ */
+function uniqueConstraintChanged(
+	uq: { name: string; columns: string[] },
+	existingRow: Record<string, unknown>,
+	merged: Record<string, unknown>
+): boolean {
+	return uq.columns.some((colName) => existingRow[colName] !== merged[colName]);
+}
+
+function applyUpdateInTxn(
+	kit: ConstraintKit,
+	txn: Transaction,
+	table: TableSpec,
+	existingRow: Record<string, unknown>,
+	existingRowId: bigint,
+	patch: Record<string, unknown>
+): Record<string, unknown> {
+	const merged = { ...existingRow, ...patch };
+	applyUpdateDefaults(table, merged, patch, makeDefaultContext());
+	validateRow(table, merged);
+	const oldPkValue = pkValueFromRow(table, existingRow);
+	const newPkValue = pkValueFromRow(table, merged);
+	const pkChanged = !pkValuesEqual(oldPkValue, newPkValue);
+
+	// Only delete guards for unique constraints whose values actually changed.
+	// Deleting unchanged guards and then re-staging them can race with the same
+	// transaction's visibility and silently drop the guard.
+	const changedConstraints = table.unique
+		.filter((uq) => uniqueConstraintChanged(uq, existingRow, merged))
+		.map((uq) => uq.name);
+	if (changedConstraints.length > 0) {
+		deleteUniqueGuards(kit, txn, table, oldPkValue, changedConstraints);
+	}
+	if (pkChanged) {
+		deletePkGuard(kit, txn, table, oldPkValue);
+	}
+	if (hasForeignKeyChange(table, patch)) {
+		enforceForeignKeys(kit, txn, table, merged);
+	}
+	txn.delete(table.name, existingRowId);
+	txn.put(table.name, toCells(table, merged));
+	stageUniqueGuards(kit, txn, table, merged, newPkValue);
+	if (pkChanged) {
+		stagePkGuard(kit, txn, table, newPkValue, true);
+	}
+
+	return merged;
 }
 
 /** SUM over an int64 column yields bigint; over a float64 column yields number. */
@@ -1296,8 +1310,12 @@ function prepareInsertSync<T extends TableSpec>(
 	return { defaulted, pkValue, pkExplicit };
 }
 
-export class InsertBuilder<T extends TableSpec> {
+export class InsertBuilder<T extends TableSpec, TResult = Row<T>> {
 	private _row?: Insert<T>;
+	private _returning?: ColumnSpec[];
+	private _onConflict?:
+		| { kind: 'do_nothing' }
+		| { kind: 'do_update'; patch: Record<string, unknown> };
 
 	constructor(
 		private readonly kit: KitDatabase,
@@ -1318,7 +1336,27 @@ export class InsertBuilder<T extends TableSpec> {
 		return new InsertManyBuilder<T>(this.kit, this.table, rows);
 	}
 
-	executeSync(): Row<T> {
+	returning<C extends ColumnSpec[]>(...columns: [...C]): InsertBuilder<T, Pick<Row<T>, C[number]['name']>> {
+		const next = new InsertBuilder<T, Pick<Row<T>, C[number]['name']>>(this.kit, this.table);
+		next._row = this._row;
+		next._returning = columns;
+		next._onConflict = this._onConflict;
+		return next;
+	}
+
+	// `onConflict*` mutate this builder because the result type does not
+	// change; `returning` clones because it changes the generic result type.
+	onConflictDoNothing(): InsertBuilder<T, TResult> {
+		this._onConflict = { kind: 'do_nothing' };
+		return this;
+	}
+
+	onConflictDoUpdate(patch: Partial<Row<T>>): InsertBuilder<T, TResult> {
+		this._onConflict = { kind: 'do_update', patch: patch as Record<string, unknown> };
+		return this;
+	}
+
+	executeSync(): TResult {
 		if (this._row === undefined) {
 			throw new KitError('values() must be called before execute()');
 		}
@@ -1327,8 +1365,26 @@ export class InsertBuilder<T extends TableSpec> {
 			this.table,
 			this._row as Record<string, unknown>
 		);
-		const kit = makeConstraintKit(this.kit);
 
+		if (this._onConflict) {
+			const existingRowJs = findByPk(this.kit.nativeDb, this.table, pkValue);
+			if (existingRowJs) {
+				const existingRow = rowFromRowJs(this.table, existingRowJs);
+				if (this._onConflict.kind === 'do_nothing') {
+					return projectRow(existingRow, this._returning) as TResult;
+				}
+				const patch = this._onConflict.patch;
+				const kit = makeConstraintKit(this.kit);
+				let merged: Record<string, unknown>;
+				runSyncTxn(this.kit, (txn) => {
+					merged = applyUpdateInTxn(kit, txn, this.table, existingRow, existingRowJs.rowId, patch);
+				});
+
+				return projectRow(merged!, this._returning) as TResult;
+			}
+		}
+
+		const kit = makeConstraintKit(this.kit);
 		runSyncTxn(this.kit, (txn) => {
 			enforceForeignKeys(kit, txn, this.table, defaulted);
 			stageUniqueGuards(kit, txn, this.table, defaulted, pkValue);
@@ -1336,10 +1392,10 @@ export class InsertBuilder<T extends TableSpec> {
 			txn.put(this.table.name, toCells(this.table, defaulted));
 		});
 
-		return defaulted as Row<T>;
+		return projectRow(defaulted, this._returning) as TResult;
 	}
 
-	async execute(): Promise<Row<T>> {
+	async execute(): Promise<TResult> {
 		return this.executeSync();
 	}
 }
@@ -1394,9 +1450,10 @@ export class InsertManyBuilder<T extends TableSpec> {
 	}
 }
 
-export class UpdateBuilder<T extends TableSpec> {
+export class UpdateBuilder<T extends TableSpec, TResult = Row<T>[]> {
 	private _patch?: Update<T>;
 	private _where?: Predicate;
+	private _returning?: ColumnSpec[];
 
 	constructor(
 		private readonly kit: KitDatabase,
@@ -1413,7 +1470,15 @@ export class UpdateBuilder<T extends TableSpec> {
 		return this;
 	}
 
-	executeSync(): Row<T>[] {
+	returning<C extends ColumnSpec[]>(...columns: [...C]): UpdateBuilder<T, Pick<Row<T>, C[number]['name']>[]> {
+		const next = new UpdateBuilder<T, Pick<Row<T>, C[number]['name']>[]>(this.kit, this.table);
+		next._patch = this._patch;
+		next._where = this._where;
+		next._returning = columns;
+		return next;
+	}
+
+	executeSync(): TResult {
 		if (this._patch === undefined) {
 			throw new KitError('set() must be called before execute()');
 		}
@@ -1422,45 +1487,27 @@ export class UpdateBuilder<T extends TableSpec> {
 			? evaluatePredicate(db, this.table, this._where)
 			: fullScanRows(db, this.table);
 		const patch = this._patch as Record<string, unknown>;
-		const ctx = makeDefaultContext();
 		const kit = makeConstraintKit(this.kit);
 		const updated: Record<string, unknown>[] = [];
 
 		runSyncTxn(this.kit, (txn) => {
 			for (const matched of matches) {
-				const merged = { ...matched.row, ...patch };
-				applyUpdateDefaults(this.table, merged, patch, ctx);
-				validateRow(this.table, merged);
-				const oldPkValue = pkValueFromRow(this.table, matched.row);
-				const newPkValue = pkValueFromRow(this.table, merged);
-				const pkChanged = !pkValuesEqual(oldPkValue, newPkValue);
-				deleteUniqueGuards(kit, txn, this.table, oldPkValue);
-				if (pkChanged) {
-					deletePkGuard(kit, txn, this.table, oldPkValue);
-				}
-				if (hasForeignKeyChange(this.table, patch)) {
-					enforceForeignKeys(kit, txn, this.table, merged);
-				}
-				txn.delete(this.table.name, matched.rowId);
-				txn.put(this.table.name, toCells(this.table, merged));
-				stageUniqueGuards(kit, txn, this.table, merged, newPkValue);
-				if (pkChanged) {
-					stagePkGuard(kit, txn, this.table, newPkValue, true);
-				}
+				const merged = applyUpdateInTxn(kit, txn, this.table, matched.row, matched.rowId, patch);
 				updated.push(merged);
 			}
 		});
 
-		return updated as Row<T>[];
+		return updated.map((row) => projectRow(row, this._returning)) as TResult;
 	}
 
-	async execute(): Promise<Row<T>[]> {
+	async execute(): Promise<TResult> {
 		return this.executeSync();
 	}
 }
 
-export class DeleteBuilder<T extends TableSpec> {
+export class DeleteBuilder<T extends TableSpec, TResult = bigint> {
 	private _where?: Predicate;
+	private _returning?: ColumnSpec[];
 
 	constructor(
 		private readonly kit: KitDatabase,
@@ -1472,12 +1519,48 @@ export class DeleteBuilder<T extends TableSpec> {
 		return this;
 	}
 
-	executeSync(): bigint {
+	returning<C extends ColumnSpec[]>(...columns: [...C]): DeleteBuilder<T, Pick<Row<T>, C[number]['name']>[]> {
+		const next = new DeleteBuilder<T, Pick<Row<T>, C[number]['name']>[]>(this.kit, this.table);
+		next._where = this._where;
+		next._returning = columns;
+		return next;
+	}
+
+	executeSync(): TResult {
 		const db = this.kit.nativeDb;
 		const matches = this._where
 			? evaluatePredicate(db, this.table, this._where)
 			: fullScanRows(db, this.table);
 		const kit = makeConstraintKit(this.kit);
+
+		if (this._returning) {
+			const projected = matches.map((m) => projectRow(m.row, this._returning));
+
+			if (
+				this.table.primaryKey.length === 1 &&
+				this.table.unique.length === 0 &&
+				!isReferencedTable(this.kit.schema, this.table.name)
+			) {
+				if (matches.length > 0) {
+					runSyncTxn(this.kit, (txn) => {
+						txn.deletePacked(this.table.name, packRowIds(matches.map((m) => m.rowId)));
+					});
+				}
+				return projected as TResult;
+			}
+
+			runSyncTxn(this.kit, (txn) => {
+				for (const matched of matches) {
+					const pkValue = pkValueFromRow(this.table, matched.row);
+					// Reuse the row already fetched by the scan to avoid an O(n^2) re-read.
+					planDelete(kit, txn, this.table, pkValue, {
+						row: matched.row,
+						rowId: matched.rowId
+					});
+				}
+			});
+			return projected as TResult;
+		}
 
 		// Fast path: a single-column-PK table with no unique constraints and no
 		// incoming foreign keys has no guard rows and no cascade work, so a delete
@@ -1489,11 +1572,11 @@ export class DeleteBuilder<T extends TableSpec> {
 			this.table.unique.length === 0 &&
 			!isReferencedTable(this.kit.schema, this.table.name)
 		) {
-			if (matches.length === 0) return 0n;
+			if (matches.length === 0) return 0n as TResult;
 			runSyncTxn(this.kit, (txn) => {
 				txn.deletePacked(this.table.name, packRowIds(matches.map((m) => m.rowId)));
 			});
-			return BigInt(matches.length);
+			return BigInt(matches.length) as TResult;
 		}
 
 		let deleted = 0;
@@ -1510,10 +1593,10 @@ export class DeleteBuilder<T extends TableSpec> {
 			}
 		});
 
-		return BigInt(deleted);
+		return BigInt(deleted) as TResult;
 	}
 
-	async execute(): Promise<bigint> {
+	async execute(): Promise<TResult> {
 		return this.executeSync();
 	}
 }

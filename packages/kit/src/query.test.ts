@@ -632,3 +632,203 @@ describe('query builder extensions', () => {
 		});
 	});
 });
+
+describe('DML returning and upsert', () => {
+	it('insert returning projects the row to requested columns', async () => {
+		await withDb(async (db) => {
+			const row = await db
+				.insertInto(users)
+				.values({ id: 1n, email: 'a@example.com' })
+				.returning(users.email)
+				.execute();
+			expect(row).toEqual({ email: 'a@example.com' });
+
+			const full = await db.insertInto(users).values({ id: 2n, email: 'b@example.com' }).execute();
+			expect(full.id).toBe(2n);
+			expect(full.email).toBe('b@example.com');
+		});
+	});
+
+	it('insert on conflict do nothing returns the existing row', async () => {
+		await withDb(async (db) => {
+			await db.insertInto(users).values({ id: 1n, email: 'a@example.com' }).execute();
+
+			const row = await db
+				.insertInto(users)
+				.values({ id: 1n, email: 'b@example.com' })
+				.onConflictDoNothing()
+				.returning(users.email)
+				.execute();
+			expect(row).toEqual({ email: 'a@example.com' });
+
+			const rows = await db.selectFrom(users).where(eq(users.id, 1n)).execute();
+			expect(rows[0].email).toBe('a@example.com');
+		});
+	});
+
+	it('insert on conflict do update merges the patch into the existing row', async () => {
+		await withDb(async (db) => {
+			await db.insertInto(users).values({ id: 1n, email: 'a@example.com' }).execute();
+
+			const row = await db
+				.insertInto(users)
+				.values({ id: 1n, email: 'ignored@example.com' })
+				.onConflictDoUpdate({ email: 'updated@example.com' })
+				.returning(users.id, users.email)
+				.execute();
+			expect(row).toEqual({ id: 1n, email: 'updated@example.com' });
+
+			const rows = await db.selectFrom(users).where(eq(users.id, 1n)).execute();
+			expect(rows[0].email).toBe('updated@example.com');
+		});
+	});
+
+	it('update returning returns the post-image projected rows', async () => {
+		await withDb(async (db) => {
+			await db.insertInto(users).values({ id: 1n, email: 'a@example.com' }).execute();
+			await db.insertInto(users).values({ id: 2n, email: 'b@example.com' }).execute();
+
+			const rows = await db
+				.updateTable(users)
+				.set({ email: 'changed@example.com' })
+				.where(eq(users.id, 1n))
+				.returning(users.id, users.email)
+				.execute();
+			expect(rows).toEqual([{ id: 1n, email: 'changed@example.com' }]);
+		});
+	});
+
+	it('delete returning returns the pre-image projected rows', async () => {
+		await withDb(async (db) => {
+			await db.insertInto(users).values({ id: 1n, email: 'a@example.com' }).execute();
+			await db.insertInto(users).values({ id: 2n, email: 'b@example.com' }).execute();
+
+			const rows = await db
+				.deleteFrom(users)
+				.where(eq(users.id, 1n))
+				.returning(users.id, users.email)
+				.execute();
+			expect(rows).toEqual([{ id: 1n, email: 'a@example.com' }]);
+
+			const remaining = await db.selectFrom(users).execute();
+			expect(remaining).toHaveLength(1);
+			expect(remaining[0].id).toBe(2n);
+		});
+	});
+
+	it('truncateTable empties the table and clears unique guards', async () => {
+		const categories = table('categories', {
+			columns: [int('id', { primaryKey: true }), text('code', { nullable: false })],
+			primaryKey: ['id'],
+			unique: [unique(['code'], { name: 'categories_code_uq' })]
+		});
+
+		const dir = makeTempDir();
+		const db = await KitDatabase.open(dir, new Schema([categories]));
+		try {
+			await db.insertInto(categories).values({ id: 1n, code: 'a' }).execute();
+			await db.insertInto(categories).values({ id: 2n, code: 'b' }).execute();
+
+			db.truncateTable(categories.name);
+
+			expect(await db.selectFrom(categories).execute()).toHaveLength(0);
+
+			// Reusing the same PK and unique value must succeed after truncate.
+			const reused = await db
+				.insertInto(categories)
+				.values({ id: 1n, code: 'a' })
+				.returning(categories.id, categories.code)
+				.execute();
+			expect(reused).toEqual({ id: 1n, code: 'a' });
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('update returning returns an empty array when no rows match', async () => {
+		await withDb(async (db) => {
+			await db.insertInto(users).values({ id: 1n, email: 'a@example.com' }).execute();
+
+			const rows = await db
+				.updateTable(users)
+				.set({ email: 'changed@example.com' })
+				.where(eq(users.id, 99n))
+				.returning(users.id, users.email)
+				.execute();
+			expect(rows).toEqual([]);
+		});
+	});
+
+	it('delete returning returns an empty array when no rows match', async () => {
+		await withDb(async (db) => {
+			await db.insertInto(users).values({ id: 1n, email: 'a@example.com' }).execute();
+
+			const rows = await db
+				.deleteFrom(users)
+				.where(eq(users.id, 99n))
+				.returning(users.id, users.email)
+				.execute();
+			expect(rows).toEqual([]);
+		});
+	});
+
+	it('onConflictDoUpdate can change the primary key and clears the old guard', async () => {
+		await withDb(async (db) => {
+			await db
+				.insertInto(groupMembers)
+				.values({ group_id: 1n, user_id: 10n, role: 'member' })
+				.execute();
+
+			const row = await db
+				.insertInto(groupMembers)
+				.values({ group_id: 1n, user_id: 10n, role: 'ignored' })
+				.onConflictDoUpdate({ user_id: 11n })
+				.returning(groupMembers.group_id, groupMembers.user_id, groupMembers.role)
+				.execute();
+			expect(row).toEqual({ group_id: 1n, user_id: 11n, role: 'member' });
+
+			const moved = await db
+				.selectFrom(groupMembers)
+				.where(and(eq(groupMembers.group_id, 1n), eq(groupMembers.user_id, 11n)))
+				.execute();
+			expect(moved).toHaveLength(1);
+
+			const oldPk = await db
+				.selectFrom(groupMembers)
+				.where(and(eq(groupMembers.group_id, 1n), eq(groupMembers.user_id, 10n)))
+				.execute();
+			expect(oldPk).toEqual([]);
+
+			// Reusing the old PK should now succeed.
+			await db
+				.insertInto(groupMembers)
+				.values({ group_id: 1n, user_id: 10n, role: 'returned' })
+				.execute();
+		});
+	});
+
+	it('onConflictDoUpdate rejects a patch that violates a foreign key', async () => {
+		await withDb(async (db) => {
+			await db.insertInto(users).values({ id: 1n, email: 'author@example.com' }).execute();
+			await db.insertInto(posts).values({ id: 1n, authorId: 1n }).execute();
+
+			await expect(
+				db
+					.insertInto(posts)
+					.values({ id: 1n, authorId: 1n })
+					.onConflictDoUpdate({ authorId: 99n })
+					.execute()
+			).rejects.toBeInstanceOf(KitForeignKeyError);
+		});
+	});
+
+	it('truncateTable throws when the table is referenced by a foreign key', async () => {
+		await withDb(async (db) => {
+			await db.insertInto(users).values({ id: 1n, email: 'a@example.com' }).execute();
+			await expect(() => db.truncateTable(users.name)).toThrow(
+				'table users is referenced by foreign key(s): posts.posts_author_fk'
+			);
+		});
+	});
+});
