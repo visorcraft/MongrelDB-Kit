@@ -229,6 +229,105 @@ const removed = db.deleteFrom(orders).where(eq(orders.id, o2.id)).executeSync();
 
 `.where(...)` is optional — omitting it deletes every row in the table.
 
+### RETURNING clause
+
+`insertInto`, `updateTable`, and `deleteFrom` builders all accept `.returning(...)` to project
+the write result onto a chosen set of columns. The TypeScript result type narrows accordingly,
+and the column order in each returned object matches the order of the arguments.
+
+```ts
+// Insert: returns { id: bigint; email: string }
+const inserted = db
+  .insertInto(customers)
+  .values({ email: 'dan@example.com', name: 'Dan' })
+  .returning(customers.id, customers.email)
+  .executeSync();
+
+// Update: returns Array<{ id: bigint; status: string }>
+const shipped = db
+  .updateTable(orders)
+  .set({ status: 'shipped' })
+  .where(eq(orders.customer_id, ada.id))
+  .returning(orders.id, orders.status)
+  .executeSync();
+
+// Delete: without returning it returns bigint; with returning it returns the projection.
+const archived = db
+  .deleteFrom(orders)
+  .where(eq(orders.status, 'pending'))
+  .returning(orders.id, orders.status)
+  .executeSync();
+// archived: Array<{ id: bigint; status: string }>
+```
+
+Without `.returning(...)`, inserts and updates still return full rows, and deletes still return
+a count. `.returning(...)` is variadic — pass each column as an argument.
+
+### Upsert — ON CONFLICT
+
+`insertInto(...).values(...).onConflictDoNothing()` and `.onConflictDoUpdate(patch)` provide
+`INSERT ... ON CONFLICT` semantics. The conflict is detected on the primary key.
+
+`.onConflictDoNothing()` returns the existing row unchanged when the primary key already exists;
+otherwise it inserts the new row.
+
+```ts
+const dan = db
+  .insertInto(customers)
+  .values({ email: 'dan@example.com', name: 'Dan' })
+  .executeSync();
+
+// Primary key already exists -> the existing row is returned unchanged.
+const unchanged = db
+  .insertInto(customers)
+  .values({ id: dan.id, email: 'dan2@example.com', name: 'Daniel' })
+  .onConflictDoNothing()
+  .returning(customers.id, customers.email)
+  .executeSync();
+// unchanged.email === 'dan@example.com'
+```
+
+`.onConflictDoUpdate(patch)` merges `patch` into the existing row when the primary key conflicts.
+For a new row, the row is inserted as-is (the patch is ignored).
+
+```ts
+// Existing row: name is patched to 'Daniel'; other columns keep the proposed values.
+const merged = db
+  .insertInto(customers)
+  .values({ id: dan.id, email: 'dan2@example.com', name: 'Daniel', tier: 'paid' })
+  .onConflictDoUpdate({ name: 'Daniel' })
+  .returning(customers.id, customers.email, customers.tier)
+  .executeSync();
+// merged.email === 'dan2@example.com', merged.tier === 'paid'; name is now 'Daniel'
+
+// No conflict -> the row is inserted unchanged.
+const eve = db
+  .insertInto(customers)
+  .values({ email: 'eve@example.com', name: 'Eve' })
+  .onConflictDoUpdate({ name: 'Evelyn' })
+  .returning(customers.id, customers.email)
+  .executeSync();
+// eve.email === 'eve@example.com'
+```
+
+### Truncate
+
+`db.truncateTable(tableName)` removes every row from a table in a single transaction and clears
+the Kit guard rows owned by that table. It respects `RESTRICT` semantics: if another table has a
+foreign key referencing the target table, the call throws a `RESTRICT` error.
+
+```ts
+// Safe: order_items is not referenced by any other application table.
+db.truncateTable('order_items');
+
+// Throws: orders is referenced by order_items.fk_order_id_orders.
+db.truncateTable('orders');
+// KitError: table orders is referenced by foreign key(s): order_items.fk_order_id_orders
+```
+
+Truncation is faster than a row-by-row delete because it bypasses per-row `onDelete` actions and
+does not return a count.
+
 ## Aggregates
 
 Whole-table scalar aggregates are terminal methods on `SelectBuilder`. They honor `.where(...)` but

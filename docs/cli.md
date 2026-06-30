@@ -38,6 +38,7 @@ the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 | `generate types <schema.json> --lang <ts\|rust\|python>` | Generate typed row/insert/update definitions |
 | `fixture create <path> <tables...>` | Dump selected table rows to JSON |
 | `fixture load <path> <fixture.json>` | Load rows from a JSON fixture |
+| `truncate <path> <table>` | Remove all rows from a table |
 
 `mongreldb-kit --help` and `mongreldb-kit <command> --help` print the same
 information at the terminal.
@@ -286,11 +287,46 @@ mongreldb-kit fixture load ./store.kitdb ./seed.json
 > `table <name> not found in schema`. Point them at an application-managed
 > database rather than a bare `init`'d one.
 
+## truncate
+
+Remove all rows from a table in a single transaction.
+
+```sh
+mongreldb-kit truncate <path> <table>
+```
+
+The table must already exist in the database's stored schema. The command opens the
+database, runs the truncate inside a transaction, and commits.
+
+```sh
+# Assuming ./store.kitdb already has a 'customers' table:
+echo '{"customers":[{"id":1,"email":"ada@example.com","name":"Ada","tier":"free"}]}' > /tmp/row.json
+mongreldb-kit fixture load ./store.kitdb /tmp/row.json
+mongreldb-kit fixture create ./store.kitdb customers
+# {
+#   "customers": [ { "id": 1, "email": "ada@example.com", "name": "Ada", "tier": "free" } ]
+# }
+
+mongreldb-kit truncate ./store.kitdb customers
+# table customers truncated
+
+mongreldb-kit fixture create ./store.kitdb customers
+# {
+#   "customers": []
+# }
+```
+
+> **RESTRICT semantics.** `truncate` fails when another table has a foreign key referencing the
+target table. Remove dependent rows first, or define the referencing foreign key with
+`on_delete: cascade` and delete the parent rows instead — `truncate` itself always refuses when
+references exist.
+
 ## Notes
 
 - Commands that read a database (`check`, `doctor`, `schema print`, `migrate
   status`, `diff`, `generate migration`, `fixture`) open it read-mostly and do
-  not change application data except `migrate apply` and `fixture load`.
+  not change application data except `migrate apply`, `fixture load`, and
+  `truncate`.
 - `schema validate`, `diff`, `generate migration`, and `generate types` read a
   schema **JSON file**, not a live database. Keep that file in sync with your
   code schema (or export it from your application).

@@ -267,6 +267,108 @@ rows = txn.join(
 `txn.select` also takes `ctes=[{"name", "table", ...}]` to materialize common table expressions
 before the body runs. Joins, aggregates, group/having, and CTEs are computed in memory.
 
+## Phase 1 DML
+
+In addition to the single-row `insert`, `update`, and `delete` methods, the transaction handle
+exposes the Phase 1 DML operations: `insert_returning`, `upsert`, `update_where`, `delete_where`,
+and `truncate`.
+
+### `insert_returning`
+
+Insert a row and project the result to a subset of columns. The `returning` list is required.
+
+```python
+with db.begin() as txn:
+    row = txn.insert_returning(
+        "users",
+        {"id": 1, "email": "alice@example.com", "name": "Alice"},
+        returning=["id", "email"],
+    )
+    # row == {"id": 1, "email": "alice@example.com"}
+```
+
+The keys in the returned dict appear in the same order as `returning`.
+
+### `upsert`
+
+`txn.upsert(table, row, on_conflict=..., returning=[...])` performs an insert with an
+`ON CONFLICT` action. The conflict is detected on the primary key. `on_conflict` defaults to
+`do_nothing` when omitted.
+
+```python
+with db.begin() as txn:
+    alice = txn.insert("users", {"id": 1, "email": "alice@example.com", "name": "Alice"})
+
+    # DO NOTHING — existing row is returned unchanged.
+    result = txn.upsert(
+        "users",
+        {"id": 1, "email": "alice@example.com", "name": "Alicia"},
+        on_conflict="do_nothing",
+        returning=["id", "name"],
+    )
+    # result["name"] == "Alice"
+
+    # DO UPDATE — merge a patch into the existing row.
+    result = txn.upsert(
+        "users",
+        {"id": 1, "email": "alice@example.com", "name": "Alicia"},
+        on_conflict={"do_update": {"set": {"name": "Alicia"}}},
+        returning=["id", "name"],
+    )
+    # result["name"] == "Alicia"
+```
+
+The shorthand form `{"do_update": {"name": "Alicia"}}` is also accepted.
+
+### `update_where`
+
+Update every row matching `filter` (omit `filter` to update every row). Returns the updated rows
+as a list of dicts.
+
+```python
+with db.begin() as txn:
+    updated = txn.update_where(
+        "posts",
+        set={"published": True},
+        filter={"user_id": {"eq": alice["id"]}},
+        returning=["id", "title", "published"],
+    )
+    # updated == [{"id": 1, "title": "Hello Kit", "published": True}, ...]
+```
+
+### `delete_where`
+
+Delete every row matching `filter` (omit `filter` to delete every row). Returns the deleted rows
+as a list of dicts.
+
+```python
+with db.begin() as txn:
+    removed = txn.delete_where(
+        "posts",
+        filter={"published": {"eq": True}},
+        returning=["id"],
+    )
+    # removed == [{"id": 1}, ...]
+```
+
+### `truncate`
+
+Remove every row from a table in one operation. It fails with `RestrictError` when another table
+references it.
+
+```python
+with db.begin() as txn:
+    txn.truncate("posts")
+    txn.commit()
+```
+
+Because `posts` has a foreign key to `users`, `txn.truncate("users")` would raise `RestrictError`.
+
+> **Return shapes.** `insert_returning` and `upsert` return a single dict; `update_where` and
+`delete_where` return a list of dicts. `returning` is required for `insert_returning` and optional
+for the other three; when supplied, only those columns are included and the key order matches the
+list order.
+
 ## Migrations
 
 ```python
