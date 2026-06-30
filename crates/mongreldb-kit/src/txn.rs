@@ -363,7 +363,6 @@ impl<'a> Transaction<'a> {
                 self.check_foreign_keys(&t, &merged)?;
                 self.reserve_unique_guards(&t, &merged, Some(&old.values))?;
                 self.touch_foreign_key_guards(&t, &merged)?;
-                self.delete_guards_for(&t, &old.values)?;
 
                 let insert_cells = row_to_core_cells(&merged, &t)?;
                 let mut patch_values = Map::new();
@@ -403,18 +402,14 @@ impl<'a> Transaction<'a> {
                         UpsertAction::DoUpdate(patch_to_core_cells(&patch, &t)?)
                     }
                 };
-                self.core.upsert(table, cells, action).map_err(KitError::from)?;
+                self.core
+                    .upsert(table, cells, action)
+                    .map_err(KitError::from)?;
                 self.staged.push(StagedOp::Insert {
                     table: table.to_string(),
                     values: values.clone(),
                 });
-                project_returning(
-                    &Row {
-                        row_id: 0,
-                        values,
-                    },
-                    &returning,
-                )
+                project_returning(&Row { row_id: 0, values }, &returning)
             }
         }
     }
@@ -563,17 +558,59 @@ impl<'a> Transaction<'a> {
                 upsert.on_conflict.clone(),
                 upsert.returning.clone(),
             )?]),
-            Query::Update(update) => self.update_where(
-                &update.table,
-                update.filter.clone(),
-                update.set.clone(),
-                update.returning.clone(),
-            ),
-            Query::Delete(delete) => self.delete_where(
-                &delete.table,
-                delete.filter.clone(),
-                delete.returning.clone(),
-            ),
+            Query::Update(update) => {
+                if update.pk.is_some() && update.filter.is_some() {
+                    return Err(KitError::Validation(
+                        "update cannot specify both pk and filter".into(),
+                    ));
+                }
+                if let Some(pk) = &update.pk {
+                    let row = self.update(&update.table, pk, update.set.clone())?;
+                    Ok(vec![project_returning(&row, &update.returning)?])
+                } else if let Some(filter) = &update.filter {
+                    self.update_where(
+                        &update.table,
+                        Some(filter.clone()),
+                        update.set.clone(),
+                        update.returning.clone(),
+                    )
+                } else {
+                    Err(KitError::Validation(
+                        "update requires either a pk or a filter".into(),
+                    ))
+                }
+            }
+            Query::Delete(delete) => {
+                if delete.pk.is_some() && delete.filter.is_some() {
+                    return Err(KitError::Validation(
+                        "delete cannot specify both pk and filter".into(),
+                    ));
+                }
+                if let Some(pk) = &delete.pk {
+                    let t = self.require_table(&delete.table)?;
+                    let pk_map = pk_to_map(pk, t)?;
+                    let projected = match self.get_by_pk_internal(&delete.table, &pk_map)? {
+                        Some(row) => project_returning(&row, &delete.returning)?,
+                        None => {
+                            // Propagate the NotFound error from the canonical delete path.
+                            self.delete(&delete.table, pk)?;
+                            unreachable!("delete returned Ok for a missing row")
+                        }
+                    };
+                    self.delete(&delete.table, pk)?;
+                    Ok(vec![projected])
+                } else if let Some(filter) = &delete.filter {
+                    self.delete_where(
+                        &delete.table,
+                        Some(filter.clone()),
+                        delete.returning.clone(),
+                    )
+                } else {
+                    Err(KitError::Validation(
+                        "delete requires either a pk or a filter".into(),
+                    ))
+                }
+            }
             Query::Aggregate(_) | Query::Join(_) => Err(KitError::Validation(
                 "aggregate/join are not mutating statements".into(),
             )),
@@ -1596,8 +1633,20 @@ fn row_matches_condition(table: &KitTable, row: &Row, condition: &Condition) -> 
                 _ => false,
             }
         }
-        // Conditions the Kit never emits (Ann, SparseMatch, FmContainsAll,
-        // IsNull, IsNotNull) — assume the index already resolved them.
+        Condition::IsNull { column_id } => {
+            let Some(col) = column_by_id(table, *column_id) else {
+                return false;
+            };
+            matches!(row.values.get(&col.name), None | Some(Value::Null))
+        }
+        Condition::IsNotNull { column_id } => {
+            let Some(col) = column_by_id(table, *column_id) else {
+                return false;
+            };
+            !matches!(row.values.get(&col.name), None | Some(Value::Null))
+        }
+        // Conditions the Kit never emits (Ann, SparseMatch, FmContainsAll)
+        // — assume the index already resolved them.
         _ => true,
     }
 }

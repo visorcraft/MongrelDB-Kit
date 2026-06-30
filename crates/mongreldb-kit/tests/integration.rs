@@ -1,9 +1,11 @@
+use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::{ColumnFlags, TypeId};
+use mongreldb_core::MongrelError as CoreError;
 use mongreldb_kit::{
-    AggFunc, Aggregate, AggregateQuery, Column, ColumnType, Cte, Database, Direction, Expr,
+    AggFunc, Aggregate, AggregateQuery, Column, ColumnType, Cte, Database, Delete, Direction, Expr,
     ForeignKey, ForeignKeyAction, Index, Join, JoinKind, JoinQuery, KitError, Literal, Migration,
     MigrationOp, OnConflict, OrderBy, Query, Row, Schema, Select, Table, Transaction,
-    UniqueConstraint,
+    UniqueConstraint, Update,
 };
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
@@ -1337,4 +1339,161 @@ fn migrate_raw_sql_errors_clearly() {
         KitError::Migration(msg) => assert!(msg.contains("RawSql")),
         other => panic!("expected migration error, got {other:?}"),
     }
+}
+
+#[test]
+fn truncate_then_reuse_pk() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "alice@example.com");
+    txn.commit().unwrap();
+
+    let mut txn = db.begin().unwrap();
+    txn.truncate("users").unwrap();
+    txn.commit().unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "alice@example.com");
+    txn.commit().unwrap();
+
+    let txn = db.begin().unwrap();
+    let rows = txn
+        .select(&Query::Select(select_all("users", None)))
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].values.get("id"), Some(&json!(1)));
+}
+
+#[test]
+fn truncate_conflicts_with_concurrent_insert() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
+    let core_db = db.raw();
+
+    let mut seed = core_db.begin();
+    seed.put(
+        "users",
+        vec![
+            (1, CoreValue::Int64(1)),
+            (2, CoreValue::Bytes(b"alice@example.com".to_vec())),
+        ],
+    )
+    .unwrap();
+    seed.commit().unwrap();
+
+    // The insert transaction opens before the truncate commits, so its read
+    // snapshot predates the truncate. Committing the insert afterwards must
+    // fail with a write-write conflict against the table-scope truncate key.
+    let mut insert = core_db.begin();
+    insert
+        .put(
+            "users",
+            vec![
+                (1, CoreValue::Int64(1)),
+                (2, CoreValue::Bytes(b"bob@example.com".to_vec())),
+            ],
+        )
+        .unwrap();
+
+    let mut truncate = core_db.begin();
+    truncate.truncate("users").unwrap();
+    truncate.commit().unwrap();
+
+    let err = insert.commit().unwrap_err();
+    assert!(
+        matches!(err, CoreError::Conflict(_)),
+        "expected conflict, got {err:?}"
+    );
+}
+
+#[test]
+fn update_where_multi_row_returning() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_named_user(&mut txn, 1, "a@example.com", "A");
+    insert_named_user(&mut txn, 2, "b@example.com", "B");
+    insert_named_user(&mut txn, 3, "c@example.com", "C");
+    txn.commit().unwrap();
+
+    let mut patch = Map::new();
+    patch.insert("name".into(), json!("Updated"));
+
+    let mut txn = db.begin().unwrap();
+    let returned = txn
+        .execute(&Query::Update(Update {
+            table: "users".into(),
+            set: patch,
+            filter: Some(Expr::Gt(
+                Box::new(col("id")),
+                Box::new(Expr::Literal(Literal::Int(1))),
+            )),
+            returning: vec!["id".into(), "name".into()],
+            pk: None,
+        }))
+        .unwrap();
+    assert_eq!(returned.len(), 2);
+
+    let mut returned = returned;
+    returned.sort_by_key(|v| v["id"].as_i64().unwrap());
+    assert_eq!(
+        returned,
+        vec![
+            json!({"id": 2, "name": "Updated"}),
+            json!({"id": 3, "name": "Updated"})
+        ]
+    );
+    txn.commit().unwrap();
+}
+
+#[test]
+fn delete_where_multi_row_cascade() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "user@example.com");
+    insert_order(&mut txn, 10, 1, 100.0);
+    insert_order(&mut txn, 11, 1, 50.0);
+
+    let mut item = Map::new();
+    item.insert("id".into(), json!(1));
+    item.insert("order_id".into(), json!(10));
+    item.insert("sku".into(), json!("ABC"));
+    txn.insert("items", item).unwrap();
+
+    let mut item = Map::new();
+    item.insert("id".into(), json!(2));
+    item.insert("order_id".into(), json!(11));
+    item.insert("sku".into(), json!("DEF"));
+    txn.insert("items", item).unwrap();
+    txn.commit().unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let returned = txn
+        .execute(&Query::Delete(Delete {
+            table: "orders".into(),
+            filter: Some(Expr::Gte(
+                Box::new(col("id")),
+                Box::new(Expr::Literal(Literal::Int(10))),
+            )),
+            returning: vec!["id".into()],
+            pk: None,
+        }))
+        .unwrap();
+    assert_eq!(returned.len(), 2);
+
+    let mut returned = returned;
+    returned.sort_by_key(|v| v["id"].as_i64().unwrap());
+    assert_eq!(returned, vec![json!({"id": 10}), json!({"id": 11})]);
+    txn.commit().unwrap();
+
+    let txn = db.begin().unwrap();
+    assert!(txn.get_by_pk("orders", &json!(10)).unwrap().is_none());
+    assert!(txn.get_by_pk("orders", &json!(11)).unwrap().is_none());
+    assert!(txn.get_by_pk("items", &json!(1)).unwrap().is_none());
+    assert!(txn.get_by_pk("items", &json!(2)).unwrap().is_none());
 }

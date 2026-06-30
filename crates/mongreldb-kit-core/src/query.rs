@@ -116,6 +116,10 @@ pub struct Update {
     pub filter: Option<Expr>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub returning: Vec<String>,
+    /// Optional single-row target: the primary key value to update.
+    /// Mutually exclusive with `filter`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pk: Option<serde_json::Value>,
 }
 
 /// A `DELETE` statement.
@@ -126,6 +130,10 @@ pub struct Delete {
     pub filter: Option<Expr>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub returning: Vec<String>,
+    /// Optional single-row target: the primary key value to delete.
+    /// Mutually exclusive with `filter`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pk: Option<serde_json::Value>,
 }
 
 /// An `UPSERT` statement.
@@ -402,6 +410,7 @@ mod tests {
                 vec![Literal::Int(1), Literal::Int(2)],
             )),
             returning: vec![],
+            pk: None,
         });
         let back: Query = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
         assert_eq!(d, back);
