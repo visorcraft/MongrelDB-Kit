@@ -10,7 +10,7 @@ categories = ["database"]
 
 [dependencies]
 mongreldb-kit-core = { path = "../mongreldb-kit-core" }
-mongreldb-core = { path = "../../../mongreldb/crates/mongreldb-core" }
+mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.15.0" }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"
 parking_lot = "0.12"

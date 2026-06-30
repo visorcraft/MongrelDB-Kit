@@ -554,6 +554,7 @@ dependencies = [
 [[package]]
 name = "mongreldb-core"
 version = "0.15.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.15.0#ae1266a8e6130c32f722aacdbb565a0a669edf0d"
 dependencies = [
  "arc-swap",
  "bincode",
