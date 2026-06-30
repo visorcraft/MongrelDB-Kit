@@ -158,6 +158,57 @@ class Transaction:
     def delete(self, table: str, pk: Any) -> None:
         self._handle.delete(table, _to_json(pk))
 
+    def truncate(self, table: str) -> None:
+        self._handle.truncate(table)
+
+    def upsert(
+        self,
+        table: str,
+        row: Any,
+        on_conflict: Optional[Any] = None,
+        returning: Optional[Iterable[str]] = None,
+    ) -> dict[str, Any]:
+        conflict_json = (
+            json.dumps("do_nothing") if on_conflict is None else _to_json(on_conflict)
+        )
+        raw = self._handle.upsert(
+            table,
+            _to_json(row),
+            conflict_json,
+            _to_json(list(returning) if returning is not None else []),
+        )
+        return json.loads(raw)
+
+    def update_where(
+        self,
+        table: str,
+        *,
+        set: Any,
+        filter: Optional[Any] = None,
+        returning: Optional[Iterable[str]] = None,
+    ) -> list[dict[str, Any]]:
+        rows = self._handle.update_where(
+            table,
+            _to_json(filter) if filter is not None else None,
+            _to_json(set),
+            _to_json(list(returning) if returning is not None else []),
+        )
+        return [json.loads(r) for r in rows]
+
+    def delete_where(
+        self,
+        table: str,
+        *,
+        filter: Optional[Any] = None,
+        returning: Optional[Iterable[str]] = None,
+    ) -> list[dict[str, Any]]:
+        rows = self._handle.delete_where(
+            table,
+            _to_json(filter) if filter is not None else None,
+            _to_json(list(returning) if returning is not None else []),
+        )
+        return [json.loads(r) for r in rows]
+
     def get_by_pk(self, table: str, pk: Any) -> Optional[dict[str, Any]]:
         raw = self._handle.get_by_pk(table, _to_json(pk))
         return json.loads(raw) if raw is not None else None

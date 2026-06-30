@@ -9,13 +9,16 @@ use mongreldb_kit_core::keys::{
     encode_unique_key as core_encode_unique_key, KeyComponent,
 };
 use mongreldb_kit_core::query::{
-    Aggregate, AggregateQuery, Cte, Direction, Expr, JoinQuery, Literal, OrderBy, Query, Select,
+    Aggregate, AggregateQuery, Cte, Direction, Expr, JoinQuery, Literal, OnConflict, OrderBy,
+    Query, Select,
 };
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use serde_json::{Map, Value};
+use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::IntoPyObjectExt;
+use serde_json::{Map, Number, Value};
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -186,6 +189,117 @@ fn row_to_json(row: &mongreldb_kit::Row) -> PyResult<String> {
     serde_json::to_string(&row.values).map_err(|e| StorageError::new_err(e.to_string()))
 }
 
+fn value_to_json(value: &Value) -> PyResult<String> {
+    serde_json::to_string(value).map_err(|e| StorageError::new_err(e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Direct serde_json::Value <-> PyObject conversion. These helpers bypass the
+// json.dumps / json.loads round-trip used by the JSON-string methods: rows are
+// built straight into Python dicts, and Python dicts are read straight into the
+// kit `Map<String, Value>` shape.
+// ---------------------------------------------------------------------------
+
+fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
+    match value {
+        Value::Null => Ok(py.None()),
+        Value::Bool(b) => b.into_py_any(py),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.into_py_any(py)
+            } else {
+                n.as_f64().unwrap_or(f64::NAN).into_py_any(py)
+            }
+        }
+        Value::String(s) => s.as_str().into_py_any(py),
+        Value::Array(arr) => {
+            let items = arr
+                .iter()
+                .map(|v| value_to_py(py, v))
+                .collect::<PyResult<Vec<Py<PyAny>>>>()?;
+            items.into_py_any(py)
+        }
+        Value::Object(map) => json_map_to_pydict(py, map),
+    }
+}
+
+fn json_map_to_pydict(py: Python<'_>, map: &Map<String, Value>) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    for (k, v) in map {
+        dict.set_item(k.as_str(), value_to_py(py, v)?)?;
+    }
+    dict.into_py_any(py)
+}
+
+fn row_to_py(py: Python<'_>, row: &mongreldb_kit::Row) -> PyResult<Py<PyAny>> {
+    json_map_to_pydict(py, &row.values)
+}
+
+/// Convert a Python object into the kit JSON model. Booleans are matched before
+/// integers because `bool` is a subclass of `int` in Python.
+fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if obj.is_none() {
+        return Ok(Value::Null);
+    }
+    if let Ok(b) = obj.extract::<bool>() {
+        return Ok(Value::Bool(b));
+    }
+    if let Ok(i) = obj.extract::<i64>() {
+        return Ok(Value::Number(i.into()));
+    }
+    if let Ok(f) = obj.extract::<f64>() {
+        return Ok(Number::from_f64(f)
+            .map(Value::Number)
+            .unwrap_or(Value::Null));
+    }
+    if let Ok(s) = obj.extract::<String>() {
+        return Ok(Value::String(s));
+    }
+    if let Ok(list) = obj.cast::<PyList>() {
+        let mut arr = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            arr.push(py_to_value(&item)?);
+        }
+        return Ok(Value::Array(arr));
+    }
+    if let Ok(tuple) = obj.cast::<PyTuple>() {
+        let mut arr = Vec::with_capacity(tuple.len());
+        for item in tuple.iter() {
+            arr.push(py_to_value(&item)?);
+        }
+        return Ok(Value::Array(arr));
+    }
+    if let Ok(dict) = obj.cast::<PyDict>() {
+        let mut map = Map::with_capacity(dict.len());
+        for (k, v) in dict.iter() {
+            let key: String = k.extract()?;
+            map.insert(key, py_to_value(&v)?);
+        }
+        return Ok(Value::Object(map));
+    }
+    let type_name = obj
+        .get_type()
+        .name()
+        .and_then(|n| n.extract::<String>())
+        .unwrap_or_default();
+    Err(ValidationError::new_err(format!(
+        "cannot convert {type_name} to a JSON value"
+    )))
+}
+
+/// Convert a Python dict row into the kit `Map<String, Value>` shape.
+fn py_row_to_map(obj: &Bound<'_, PyAny>) -> PyResult<Map<String, Value>> {
+    let dict = obj
+        .cast::<PyDict>()
+        .map_err(|_| ValidationError::new_err("row must be a dict"))?;
+    let mut map = Map::with_capacity(dict.len());
+    for (k, v) in dict.iter() {
+        let key: String = k.extract()?;
+        map.insert(key, py_to_value(&v)?);
+    }
+    Ok(map)
+}
+
 #[pymethods]
 impl PyTransaction {
     fn insert(&mut self, table: &str, row_json: &str) -> PyResult<String> {
@@ -206,6 +320,26 @@ impl PyTransaction {
         results.iter().map(row_to_json).collect()
     }
 
+    /// Insert many rows from a Python list of dicts, returning the inserted rows
+    /// as Python dicts. This is the direct-conversion path: each dict is read
+    /// straight into the kit row shape and each result row is built straight into
+    /// a Python dict, with no JSON-string intermediary.
+    fn insert_many_py(
+        &mut self,
+        py: Python<'_>,
+        table: &str,
+        rows: Vec<Py<PyAny>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let mut maps = Vec::with_capacity(rows.len());
+        for row in &rows {
+            maps.push(py_row_to_map(row.bind(py))?);
+        }
+        let results = require_txn(&mut self.txn)?
+            .insert_many(table, maps)
+            .map_err(map_err)?;
+        results.iter().map(|row| row_to_py(py, row)).collect()
+    }
+
     fn update(&mut self, table: &str, pk_json: &str, patch_json: &str) -> PyResult<String> {
         let pk: Value = serde_json::from_str(pk_json).map_err(py_json_err)?;
         let patch: Map<String, Value> = serde_json::from_str(patch_json).map_err(py_json_err)?;
@@ -220,6 +354,56 @@ impl PyTransaction {
         require_txn(&mut self.txn)?
             .delete(table, &pk)
             .map_err(map_err)
+    }
+
+    fn truncate(&mut self, table: &str) -> PyResult<()> {
+        require_txn(&mut self.txn)?.truncate(table).map_err(map_err)
+    }
+
+    fn upsert(
+        &mut self,
+        table: &str,
+        row_json: &str,
+        on_conflict_json: &str,
+        returning_json: &str,
+    ) -> PyResult<String> {
+        let row: Map<String, Value> = serde_json::from_str(row_json).map_err(py_json_err)?;
+        let on_conflict = parse_on_conflict(on_conflict_json)?;
+        let returning: Vec<String> = serde_json::from_str(returning_json).map_err(py_json_err)?;
+        let result = require_txn(&mut self.txn)?
+            .upsert(table, row, on_conflict, returning)
+            .map_err(map_err)?;
+        value_to_json(&result)
+    }
+
+    fn update_where(
+        &mut self,
+        table: &str,
+        filter_json: Option<&str>,
+        patch_json: &str,
+        returning_json: &str,
+    ) -> PyResult<Vec<String>> {
+        let filter = parse_optional_filter(filter_json)?;
+        let patch: Map<String, Value> = serde_json::from_str(patch_json).map_err(py_json_err)?;
+        let returning: Vec<String> = serde_json::from_str(returning_json).map_err(py_json_err)?;
+        let rows = require_txn(&mut self.txn)?
+            .update_where(table, filter, patch, returning)
+            .map_err(map_err)?;
+        rows.iter().map(value_to_json).collect()
+    }
+
+    fn delete_where(
+        &mut self,
+        table: &str,
+        filter_json: Option<&str>,
+        returning_json: &str,
+    ) -> PyResult<Vec<String>> {
+        let filter = parse_optional_filter(filter_json)?;
+        let returning: Vec<String> = serde_json::from_str(returning_json).map_err(py_json_err)?;
+        let rows = require_txn(&mut self.txn)?
+            .delete_where(table, filter, returning)
+            .map_err(map_err)?;
+        rows.iter().map(value_to_json).collect()
     }
 
     fn get_by_pk(&self, table: &str, pk_json: &str) -> PyResult<Option<String>> {
@@ -256,18 +440,64 @@ impl PyTransaction {
             Some(s) => Some(serde_json::from_str::<Value>(s).map_err(py_json_err)?),
             None => None,
         };
-        let select =
-            build_select_stmt(table, filter, order, limit, offset, columns).map_err(map_err)?;
-        let rows = if let Some(cj) = ctes_json {
-            let ctes = parse_ctes(cj).map_err(map_err)?;
-            txn.select_with(&ctes, &select).map_err(map_err)?
-        } else if distinct {
-            txn.select_distinct(&Query::Select(select))
-                .map_err(map_err)?
-        } else {
-            txn.select(&Query::Select(select)).map_err(map_err)?
+        let ctes = match ctes_json {
+            Some(s) => Some(parse_ctes(s).map_err(map_err)?),
+            None => None,
         };
+        let rows = select_core(
+            txn, table, filter, order, limit, offset, columns, distinct, ctes,
+        )?;
         rows.iter().map(row_to_json).collect()
+    }
+
+    /// Run a SELECT and return the rows as Python dicts directly. `filter` and
+    /// `ctes` are Python objects (dict / list, or `None`); the result rows are
+    /// built straight into Python dicts with no JSON-string intermediary.
+    #[pyo3(signature = (table, filter=None, order=None, limit=None, offset=None, columns=None, distinct=false, ctes=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn select_py(
+        &self,
+        py: Python<'_>,
+        table: &str,
+        filter: Option<Py<PyAny>>,
+        order: Option<&str>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        columns: Option<Vec<String>>,
+        distinct: bool,
+        ctes: Option<Py<PyAny>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let txn = self
+            .txn
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))?;
+
+        let filter_value = match filter {
+            Some(obj) if !obj.is_none(py) => Some(py_to_value(obj.bind(py))?),
+            _ => None,
+        };
+        let ctes_value = match ctes {
+            Some(obj) if !obj.is_none(py) => {
+                let value = py_to_value(obj.bind(py))?;
+                let items = value.as_array().ok_or_else(|| {
+                    ValidationError::new_err("ctes must be a list of CTE definitions")
+                })?;
+                Some(parse_ctes_items(items).map_err(map_err)?)
+            }
+            _ => None,
+        };
+        let rows = select_core(
+            txn,
+            table,
+            filter_value,
+            order,
+            limit,
+            offset,
+            columns,
+            distinct,
+            ctes_value,
+        )?;
+        rows.iter().map(|row| row_to_py(py, row)).collect()
     }
 
     /// Run an aggregate / group-by / having query. `aggregates_json` is a JSON
@@ -387,6 +617,33 @@ fn build_select_stmt(
     })
 }
 
+/// Run a SELECT, returning the raw kit rows. Shared by the JSON-string
+/// [`PyTransaction::select`] and the direct-conversion
+/// [`PyTransaction::select_py`]; each then serializes the rows in its own shape.
+#[allow(clippy::too_many_arguments)]
+fn select_core(
+    txn: &Transaction<'static>,
+    table: &str,
+    filter: Option<Value>,
+    order: Option<&str>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    columns: Option<Vec<String>>,
+    distinct: bool,
+    ctes: Option<Vec<Cte>>,
+) -> PyResult<Vec<mongreldb_kit::Row>> {
+    let select =
+        build_select_stmt(table, filter, order, limit, offset, columns).map_err(map_err)?;
+    let rows = match ctes {
+        Some(ctes) => txn.select_with(&ctes, &select).map_err(map_err)?,
+        None if distinct => txn
+            .select_distinct(&Query::Select(select))
+            .map_err(map_err)?,
+        None => txn.select(&Query::Select(select)).map_err(map_err)?,
+    };
+    Ok(rows)
+}
+
 fn parse_optional_filter(filter_json: Option<&str>) -> PyResult<Option<Expr>> {
     match filter_json {
         Some(s) => {
@@ -394,6 +651,48 @@ fn parse_optional_filter(filter_json: Option<&str>) -> PyResult<Option<Expr>> {
             Ok(Some(parse_filter(&map).map_err(map_err)?))
         }
         None => Ok(None),
+    }
+}
+
+fn parse_on_conflict(json: &str) -> PyResult<OnConflict> {
+    let value: Value = serde_json::from_str(json).map_err(py_json_err)?;
+    match value {
+        Value::Null => Ok(OnConflict::DoNothing),
+        Value::String(action) if action == "do_nothing" => Ok(OnConflict::DoNothing),
+        Value::String(action) => Err(ValidationError::new_err(format!(
+            "unknown on_conflict action {action}"
+        ))),
+        Value::Object(mut map) => {
+            if map.contains_key("do_nothing") {
+                return Ok(OnConflict::DoNothing);
+            }
+            if let Some(patch) = map.remove("do_update").or_else(|| map.remove("set")) {
+                return patch
+                    .as_object()
+                    .cloned()
+                    .map(OnConflict::DoUpdate)
+                    .ok_or_else(|| ValidationError::new_err("do_update expects an object"));
+            }
+            if let Some(Value::String(action)) = map.remove("action") {
+                return match action.as_str() {
+                    "do_nothing" => Ok(OnConflict::DoNothing),
+                    "do_update" => map
+                        .remove("set")
+                        .and_then(|v| v.as_object().cloned())
+                        .map(OnConflict::DoUpdate)
+                        .ok_or_else(|| ValidationError::new_err("do_update expects set object")),
+                    other => Err(ValidationError::new_err(format!(
+                        "unknown on_conflict action {other}"
+                    ))),
+                };
+            }
+            Err(ValidationError::new_err(
+                "on_conflict must be do_nothing or do_update",
+            ))
+        }
+        _ => Err(ValidationError::new_err(
+            "on_conflict must be a string, object, or null",
+        )),
     }
 }
 
@@ -491,6 +790,12 @@ fn as_literal_list(value: &Value) -> Result<Vec<Literal>, KitError> {
 /// object (`{ "table", "filter"?, ... }`) plus a `"name"` key.
 fn parse_ctes(json: &str) -> Result<Vec<Cte>, KitError> {
     let items: Vec<Value> = serde_json::from_str(json).map_err(KitError::from)?;
+    parse_ctes_items(&items)
+}
+
+/// Parse already-decoded CTE items. Shared by the JSON-string path
+/// ([`parse_ctes`]) and the direct-conversion `select_py` path.
+fn parse_ctes_items(items: &[Value]) -> Result<Vec<Cte>, KitError> {
     items
         .iter()
         .map(|item| {
