@@ -34,7 +34,7 @@ use mongreldb_kit_core::keys::{
     decode_pk, encode_pk, encode_row_guard_key, encode_unique_key, KeyComponent, KIT_KEY_VERSION,
 };
 use mongreldb_kit_core::planner::{plan_delete, DeletePlan};
-use mongreldb_kit_core::query::{AggregateQuery, Cte, JoinQuery, Query, Select};
+use mongreldb_kit_core::query::{AggregateQuery, Cte, Expr, JoinQuery, OnConflict, Query, Select};
 use mongreldb_kit_core::schema::{
     Column, ColumnType, DefaultKind, ForeignKey, Table as KitTable, UniqueConstraint,
 };
@@ -67,6 +67,7 @@ enum StagedOp {
     /// A delete staged in this transaction. Tracked so `staged_row_exists`
     /// can ignore rows removed earlier in the same transaction.
     Delete { table: String, pk: String },
+    Truncate { table: String },
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +96,16 @@ impl<'a> Transaction<'a> {
     pub fn insert(&mut self, table: &str, row: Map<String, Value>) -> Result<Row> {
         let t = self.require_table(table)?.clone();
         self.do_insert(table, &t, row, None)
+    }
+
+    pub fn insert_returning(
+        &mut self,
+        table: &str,
+        row: Map<String, Value>,
+        returning: Vec<String>,
+    ) -> Result<Value> {
+        let inserted = self.insert(table, row)?;
+        project_returning(&inserted, &returning)
     }
 
     /// Insert many rows into `table` within this single transaction.
@@ -276,6 +287,96 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub fn truncate(&mut self, table: &str) -> Result<()> {
+        let t = self.require_table(table)?.clone();
+        if self.db.schema.tables.iter().any(|other| {
+            other.name != t.name
+                && other
+                    .foreign_keys
+                    .iter()
+                    .any(|fk| fk.references_table == t.name)
+        }) {
+            return Err(KitError::Restrict(format!(
+                "table {} is referenced by a foreign key",
+                t.name
+            )));
+        }
+        self.delete_all_guards_for_table(&t)?;
+        self.core.truncate(table).map_err(KitError::from)?;
+        self.staged.retain(|op| match op {
+            StagedOp::Insert { table: staged, .. }
+            | StagedOp::Update { table: staged, .. }
+            | StagedOp::Delete { table: staged, .. }
+            | StagedOp::Truncate { table: staged } => staged != &t.name,
+        });
+        self.staged.push(StagedOp::Truncate { table: t.name });
+        Ok(())
+    }
+
+    pub fn upsert(
+        &mut self,
+        table: &str,
+        row: Map<String, Value>,
+        on_conflict: OnConflict,
+        returning: Vec<String>,
+    ) -> Result<Value> {
+        let t = self.require_table(table)?.clone();
+        let mut values = row;
+        self.apply_defaults(&mut values, &t)?;
+        for col in &t.columns {
+            values.entry(col.name.clone()).or_insert(Value::Null);
+        }
+        mongreldb_kit_core::validation::validate_row(&t, &values)?;
+        let pk_map = pk_values_map(&t, &values);
+        let existing = self.get_by_pk_internal(table, &pk_map)?;
+        match (existing, on_conflict) {
+            (Some(old), OnConflict::DoNothing) => project_returning(&old, &returning),
+            (Some(old), OnConflict::DoUpdate(patch)) => {
+                let updated = self.update(table, &old.pk(&t).unwrap_or(Value::Null), patch)?;
+                project_returning(&updated, &returning)
+            }
+            (None, _) => {
+                let inserted = self.insert(table, values)?;
+                project_returning(&inserted, &returning)
+            }
+        }
+    }
+
+    pub fn update_where(
+        &mut self,
+        table: &str,
+        filter: Option<Expr>,
+        patch: Map<String, Value>,
+        returning: Vec<String>,
+    ) -> Result<Vec<Value>> {
+        let t = self.require_table(table)?.clone();
+        let rows = self.select(&Query::Select(select_all(table, filter)))?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let pk = row.pk(&t).unwrap_or(Value::Null);
+            let updated = self.update(table, &pk, patch.clone())?;
+            out.push(project_returning(&updated, &returning)?);
+        }
+        Ok(out)
+    }
+
+    pub fn delete_where(
+        &mut self,
+        table: &str,
+        filter: Option<Expr>,
+        returning: Vec<String>,
+    ) -> Result<Vec<Value>> {
+        let t = self.require_table(table)?.clone();
+        let rows = self.select(&Query::Select(select_all(table, filter)))?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(project_returning(&row, &returning)?);
+            let pk = row.pk(&t).unwrap_or(Value::Null);
+            self.delete(table, &pk)?;
+        }
+        Ok(out)
+    }
+
     /// Read a row by primary key.
     pub fn get_by_pk(&self, table: &str, pk: &Value) -> Result<Option<Row>> {
         let t = self.require_table(table)?;
@@ -332,6 +433,37 @@ impl<'a> Transaction<'a> {
     pub fn join(&self, query: &JoinQuery) -> Result<Vec<JoinRow>> {
         let ctx = self.exec_ctx();
         run_join(&ctx, query)
+    }
+
+    pub fn execute(&mut self, query: &Query) -> Result<Vec<Value>> {
+        match query {
+            Query::Select(_) => Err(KitError::Validation("use select() for SELECT".into())),
+            Query::Insert(insert) => Ok(vec![self.insert_returning(
+                &insert.table,
+                insert.values.clone(),
+                insert.returning.clone(),
+            )?]),
+            Query::Upsert(upsert) => Ok(vec![self.upsert(
+                &upsert.table,
+                upsert.values.clone(),
+                upsert.on_conflict.clone(),
+                upsert.returning.clone(),
+            )?]),
+            Query::Update(update) => self.update_where(
+                &update.table,
+                update.filter.clone(),
+                update.set.clone(),
+                update.returning.clone(),
+            ),
+            Query::Delete(delete) => self.delete_where(
+                &delete.table,
+                delete.filter.clone(),
+                delete.returning.clone(),
+            ),
+            Query::Aggregate(_) | Query::Join(_) => Err(KitError::Validation(
+                "aggregate/join are not mutating statements".into(),
+            )),
+        }
     }
 
     /// Build an execution context whose table fetcher reads visible rows at this
@@ -740,6 +872,11 @@ impl<'a> Transaction<'a> {
                         exists = false;
                     }
                 }
+                StagedOp::Truncate { table: t } => {
+                    if t == &table.name {
+                        exists = false;
+                    }
+                }
             }
         }
         exists
@@ -786,6 +923,29 @@ impl<'a> Transaction<'a> {
     fn delete_guards_for(&mut self, table: &KitTable, values: &Map<String, Value>) -> Result<()> {
         let owner_pk = encoded_pk_for(table, values);
         self.delete_unique_guards_for_owner(table, &owner_pk)
+    }
+
+    fn delete_all_guards_for_table(&mut self, table: &KitTable) -> Result<()> {
+        for guard in self.internal_rows(UNIQUE_KEYS)? {
+            let owner_table = internal_bytes(&guard, cols::UQ_OWNER_TABLE).unwrap_or_default();
+            if owner_table == table.name {
+                self.core
+                    .delete(UNIQUE_KEYS, guard.row_id)
+                    .map_err(KitError::from)?;
+            }
+        }
+        for guard in self.internal_rows(ROW_GUARDS)? {
+            let owner_table = internal_bytes(&guard, cols::RG_TABLE).unwrap_or_default();
+            if owner_table == table.name {
+                self.core
+                    .delete(ROW_GUARDS, guard.row_id)
+                    .map_err(KitError::from)?;
+            }
+        }
+        self.staged_unique.retain(|s| s.owner_table != table.name);
+        self.touched_guards
+            .retain(|key| !key.starts_with(&format!("{}:", table.name)));
+        Ok(())
     }
 
     // ── delete planning ────────────────────────────────────────────────────
