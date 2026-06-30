@@ -103,6 +103,8 @@ pub struct Select {
 pub struct Insert {
     pub table: String,
     pub values: serde_json::Map<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub returning: Vec<String>,
 }
 
 /// An `UPDATE` statement.
@@ -112,6 +114,8 @@ pub struct Update {
     pub set: serde_json::Map<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<Expr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub returning: Vec<String>,
 }
 
 /// A `DELETE` statement.
@@ -120,6 +124,26 @@ pub struct Delete {
     pub table: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<Expr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub returning: Vec<String>,
+}
+
+/// An `UPSERT` statement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Upsert {
+    pub table: String,
+    pub values: serde_json::Map<String, serde_json::Value>,
+    pub on_conflict: OnConflict,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub returning: Vec<String>,
+}
+
+/// SQL-style conflict behavior for `UPSERT`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnConflict {
+    DoNothing,
+    DoUpdate(serde_json::Map<String, serde_json::Value>),
 }
 
 /// Top-level query statement.
@@ -130,6 +154,7 @@ pub enum Query {
     Insert(Insert),
     Update(Update),
     Delete(Delete),
+    Upsert(Upsert),
     Aggregate(AggregateQuery),
     Join(JoinQuery),
 }
@@ -365,6 +390,7 @@ mod tests {
         let q = Query::Insert(Insert {
             table: "users".into(),
             values,
+            returning: vec![],
         });
         let back: Query = serde_json::from_str(&serde_json::to_string(&q).unwrap()).unwrap();
         assert_eq!(q, back);
@@ -375,6 +401,7 @@ mod tests {
                 Box::new(Expr::Column("id".into())),
                 vec![Literal::Int(1), Literal::Int(2)],
             )),
+            returning: vec![],
         });
         let back: Query = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
         assert_eq!(d, back);
