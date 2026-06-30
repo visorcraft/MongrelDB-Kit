@@ -3,6 +3,10 @@ fn main() {
         eprintln!("conformance suite failed: {}", e);
         std::process::exit(1);
     }
+    if let Err(e) = conformance_runner::run_phase1_dml() {
+        eprintln!("phase 1 DML conformance failed: {}", e);
+        std::process::exit(1);
+    }
     if let Err(e) = conformance_runner::run_key_encoding() {
         eprintln!("key encoding conformance failed: {}", e);
         std::process::exit(1);

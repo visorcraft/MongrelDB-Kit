@@ -26,11 +26,7 @@ import {
 	or,
 	asc,
 	desc,
-	KitValidationError,
-	KitDuplicateError,
-	KitForeignKeyError,
-	KitRestrictError,
-	KitNotFoundError,
+	KitError,
 	KitMigrationError,
 	migrate,
 	addUnique,
@@ -237,11 +233,9 @@ function buildOrder(table: TableSpec, order: string): any[] {
 }
 
 function errorCode(err: unknown): string {
-	if (err instanceof KitValidationError) return 'VALIDATION';
-	if (err instanceof KitDuplicateError) return 'DUPLICATE';
-	if (err instanceof KitForeignKeyError) return 'FOREIGN_KEY';
-	if (err instanceof KitRestrictError) return 'RESTRICT';
-	if (err instanceof KitNotFoundError) return 'NOT_FOUND';
+	if (err instanceof KitError) {
+		return err.code;
+	}
 	return 'UNKNOWN';
 }
 
@@ -255,6 +249,122 @@ function assertOutcome<T>(scenarioName: string, fn: () => T, expected: any, norm
 	} catch (err) {
 		if (!expected.error) throw err;
 		expect(errorCode(err)).toBe(expected.error);
+	}
+}
+
+function returningColumns(table: TableSpec, names: string[]): ColumnSpec[] {
+	return names.map((name) => {
+		const col = table.columns.find((c) => c.name === name);
+		if (!col) throw new Error(`returning column ${name} not found in ${table.name}`);
+		return col;
+	});
+}
+
+function safeStringify(value: unknown): string {
+	return JSON.stringify(value, (_key, val) =>
+		typeof val === 'bigint' ? String(val) : val
+	);
+}
+
+function assertReturningColumnOrder(
+	scenarioName: string,
+	actual: Record<string, unknown> | Record<string, unknown>[],
+	returning: string[]
+): void {
+	if (Array.isArray(actual)) {
+		for (let i = 0; i < actual.length; i++) {
+			expect(Object.keys(actual[i]), `${scenarioName} row ${i} returning column order`).toEqual(
+				returning
+			);
+		}
+	} else {
+		expect(Object.keys(actual), `${scenarioName} returning column order`).toEqual(returning);
+	}
+}
+
+function runPhase1Step(step: any, expected: any, kit: KitDatabase, schema: Schema): void {
+	const tableSpec = schema.table(step.table);
+	const returningNames = step.returning ?? [];
+	const returning = returningColumns(tableSpec, returningNames);
+	try {
+		let actual: any;
+		if (step.op === 'insert_returning') {
+			actual = kit
+				.insertInto(tableSpec)
+				.values(normalizeRowForTs(tableSpec, step.row))
+				.returning(...returning)
+				.executeSync();
+		} else if (step.op === 'upsert') {
+			let builder = kit
+				.insertInto(tableSpec)
+				.values(normalizeRowForTs(tableSpec, step.row));
+			if (step.on_conflict === 'do_nothing') {
+				builder = builder.onConflictDoNothing();
+			} else if (step.on_conflict && step.on_conflict.do_update) {
+				builder = builder.onConflictDoUpdate(
+					normalizeRowForTs(tableSpec, step.on_conflict.do_update)
+				);
+			} else {
+				throw new Error(`unsupported on_conflict for ${step.name}: ${JSON.stringify(step.on_conflict)}`);
+			}
+			actual = builder.returning(...returning).executeSync();
+		} else if (step.op === 'update_where') {
+			actual = kit
+				.updateTable(tableSpec)
+				.set(normalizeRowForTs(tableSpec, step.patch))
+				.where(buildPredicate(tableSpec, step.filter))
+				.returning(...returning)
+				.executeSync();
+		} else if (step.op === 'delete_where') {
+			actual = kit
+				.deleteFrom(tableSpec)
+				.where(buildPredicate(tableSpec, step.filter))
+				.returning(...returning)
+				.executeSync();
+		} else if (step.op === 'truncate') {
+			kit.truncateTable(step.table);
+			actual = {};
+		} else {
+			throw new Error(`unknown op ${step.op}`);
+		}
+
+		if (expected.error) {
+			throw new Error(
+				`scenario ${step.name} expected error ${expected.error} but succeeded with ${safeStringify(actual)}`
+			);
+		}
+		if ('row' in expected) {
+			const normalized = normalizeRowForCompare(tableSpec, actual as Record<string, unknown>);
+			assertReturningColumnOrder(step.name, normalized, returningNames);
+			expect(normalized, `${step.name} row mismatch`).toEqual(expected.row);
+		} else if ('rows' in expected) {
+			const normalized = (actual as Record<string, unknown>[]).map((row) =>
+				normalizeRowForCompare(tableSpec, row)
+			);
+			assertReturningColumnOrder(step.name, normalized, returningNames);
+			expect(normalized, `${step.name} rows mismatch`).toEqual(expected.rows);
+		} else {
+			expect(actual, `${step.name} empty result mismatch`).toEqual({});
+		}
+	} catch (err) {
+		if (!expected.error) throw err;
+		expect(errorCode(err), `${step.name} error code mismatch`).toBe(expected.error);
+	}
+}
+
+function runPhase1StateChecks(checks: any[], kit: KitDatabase, schema: Schema): void {
+	for (const check of checks) {
+		const tableSpec = schema.table(check.table);
+		let builder = kit.selectFrom(tableSpec);
+		if (check.filter) {
+			builder = builder.where(buildPredicate(tableSpec, check.filter));
+		}
+		const order = check.order ?? '+id';
+		builder = builder.orderBy(...buildOrder(tableSpec, order));
+		const rows = (builder.executeSync() as Record<string, unknown>[]).map((row) =>
+			normalizeRowForCompare(tableSpec, row)
+		);
+		expect(rows, `state check ${check.table}`).toEqual(check.rows);
 	}
 }
 
@@ -421,6 +531,28 @@ describe('mongreldb-kit conformance', () => {
 			for (const scenario of queries) {
 				await runScenario(scenario, expected.queries[scenario.name], kit, schema);
 			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs Phase 1 DML shared fixture', async () => {
+		const schemaRaw = loadJson('schema.json');
+		const migrationsRaw = loadJson('migrations.json');
+		const fixture = loadJson('phase1_dml.json');
+
+		const schema = schemaFromFixture(schemaRaw);
+		const migrations = migrationsRaw.map((m: any) => migrationFromFixture(m, schema));
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-phase1-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			kit.migrateSync(schema, migrations);
+
+			for (const step of fixture.steps) {
+				runPhase1Step(step, step.expected, kit, schema);
+			}
+			runPhase1StateChecks(fixture.state_checks, kit, schema);
 		} finally {
 			kit.close();
 			fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -163,6 +163,56 @@ def test_migration_failure():
             raise AssertionError("expected the unique-backfill migration to fail")
 
 
+def _normalize_on_conflict(on_conflict):
+    if on_conflict is None:
+        return {"do_nothing": {}}
+    if on_conflict == "do_nothing":
+        return {"do_nothing": True}
+    if isinstance(on_conflict, dict) and "do_update" in on_conflict:
+        patch = on_conflict["do_update"]
+        if not isinstance(patch, dict):
+            raise ValueError("do_update on_conflict must contain an object patch")
+    return on_conflict
+
+
+def _assert_returning_order(scenario_name, actual, returning):
+    if isinstance(actual, dict):
+        assert list(actual.keys()) == returning, (
+            f"{scenario_name} returning column order mismatch: "
+            f"{list(actual.keys())} != {returning}"
+        )
+    elif isinstance(actual, list):
+        for i, row in enumerate(actual):
+            assert list(row.keys()) == returning, (
+                f"{scenario_name} row {i} returning column order mismatch: "
+                f"{list(row.keys())} != {returning}"
+            )
+
+
+def _assert_phase1_result(scenario_name, actual, expected, returning):
+    assert "error" not in expected, (
+        f"{scenario_name} expected error {expected['error']} but succeeded with {actual}"
+    )
+    if "row" in expected:
+        _assert_returning_order(scenario_name, actual, returning)
+        assert actual == expected["row"], (
+            f"{scenario_name} row mismatch: {actual} != {expected['row']}"
+        )
+    elif "rows" in expected:
+        _assert_returning_order(scenario_name, actual, returning)
+        assert actual == expected["rows"], (
+            f"{scenario_name} rows mismatch: {actual} != {expected['rows']}"
+        )
+    else:
+        assert actual == {} or actual is None, (
+            f"{scenario_name} expected no data but got {actual}"
+        )
+
+
+def test_phase1_dml():
+    run_phase1_dml()
+
+
 def test_conformance():
     schema = load_json("schema.json")
     migrations = load_json("migrations.json")
@@ -188,3 +238,87 @@ def test_conformance():
             run_delete(db, scenario, expected["deletes"][scenario["name"]])
         for scenario in queries:
             run_query(db, scenario, expected["queries"][scenario["name"]])
+
+        run_phase1_dml_with_db(db)
+        db.close()
+
+
+def run_phase1_dml_with_db(db):
+    """Run the Phase 1 DML fixture against an already-open, migrated database."""
+    fixture = load_json("phase1_dml.json")
+
+    for step in fixture["steps"]:
+        expected = step["expected"]
+        returning = step.get("returning", [])
+        txn = db.begin()
+        committed = False
+        try:
+            op = step["op"]
+            table = step["table"]
+            try:
+                if op == "insert_returning":
+                    result = txn.insert_returning(
+                        table, step["row"], returning
+                    )
+                elif op == "upsert":
+                    result = txn.upsert(
+                        table,
+                        step["row"],
+                        _normalize_on_conflict(step["on_conflict"]),
+                        returning,
+                    )
+                elif op == "update_where":
+                    result = txn.update_where(
+                        table,
+                        set=step["patch"],
+                        filter=step.get("filter"),
+                        returning=returning,
+                    )
+                elif op == "delete_where":
+                    result = txn.delete_where(
+                        table,
+                        filter=step.get("filter"),
+                        returning=returning,
+                    )
+                elif op == "truncate":
+                    txn.truncate(table)
+                    result = {}
+                else:
+                    raise AssertionError(f"unknown op {op}")
+            except Exception as exc:  # noqa: BLE001
+                txn.rollback()
+                _assert_error(step["name"], expected, exc)
+            else:
+                _assert_phase1_result(step["name"], result, expected, returning)
+                txn.commit()
+                committed = True
+        finally:
+            if not committed:
+                try:
+                    txn.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    txn = db.begin()
+    try:
+        for check in fixture["state_checks"]:
+            kwargs = {"order": check.get("order", "+id")}
+            if "filter" in check:
+                kwargs["filter"] = check["filter"]
+            rows = txn.select(check["table"], **kwargs)
+            assert rows == check["rows"], (
+                f"state check {check['table']} mismatch: {rows} != {check['rows']}"
+            )
+    finally:
+        txn.commit()
+
+
+def run_phase1_dml():
+    schema = load_json("schema.json")
+    migrations = load_json("migrations.json")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = kit.Database.create(tmp, schema)
+        db.migrate(migrations)
+        run_phase1_dml_with_db(db)
+        db.close()

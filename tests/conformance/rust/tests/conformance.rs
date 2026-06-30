@@ -12,3 +12,8 @@ fn shared_key_encoding() {
 fn migration_failure() {
     conformance_runner::run_migration_failure().expect("migration failure conformance failed");
 }
+
+#[test]
+fn phase1_dml() {
+    conformance_runner::run_phase1_dml().expect("phase 1 DML conformance failed");
+}

@@ -1,0 +1,593 @@
+{
+  "steps": [
+    {
+      "name": "insert_returning_user",
+      "op": "insert_returning",
+      "table": "users",
+      "row": {
+        "id": 10,
+        "email": "p1-alice@example.com",
+        "role": "user",
+        "age": 30,
+        "handle": "aliceh",
+        "active": false,
+        "meta": null
+      },
+      "returning": ["id", "email"],
+      "expected": {
+        "row": {
+          "id": 10,
+          "email": "p1-alice@example.com"
+        }
+      }
+    },
+    {
+      "name": "seed_user_bob",
+      "op": "insert_returning",
+      "table": "users",
+      "row": {
+        "id": 11,
+        "email": "p1-bob@example.com",
+        "role": "admin",
+        "age": null,
+        "handle": "bobh",
+        "active": false,
+        "meta": null
+      },
+      "returning": ["id", "email", "role", "active"],
+      "expected": {
+        "row": {
+          "id": 11,
+          "email": "p1-bob@example.com",
+          "role": "admin",
+          "active": false
+        }
+      }
+    },
+    {
+      "name": "seed_user_carol",
+      "op": "insert_returning",
+      "table": "users",
+      "row": {
+        "id": 12,
+        "email": "p1-carol@example.com",
+        "role": "user",
+        "age": 25,
+        "handle": "carolh",
+        "active": false,
+        "meta": null
+      },
+      "returning": ["id", "email", "role"],
+      "expected": {
+        "row": {
+          "id": 12,
+          "email": "p1-carol@example.com",
+          "role": "user"
+        }
+      }
+    },
+    {
+      "name": "upsert_do_nothing_existing",
+      "op": "upsert",
+      "table": "users",
+      "row": {
+        "id": 11,
+        "email": "p1-bob@example.com",
+        "role": "admin",
+        "age": 50,
+        "handle": "bobh",
+        "active": true,
+        "meta": null
+      },
+      "on_conflict": "do_nothing",
+      "returning": ["id", "email", "role", "age", "active"],
+      "expected": {
+        "row": {
+          "id": 11,
+          "email": "p1-bob@example.com",
+          "role": "admin",
+          "age": null,
+          "active": false
+        }
+      }
+    },
+    {
+      "name": "upsert_do_nothing_new_row",
+      "op": "upsert",
+      "table": "users",
+      "row": {
+        "id": 13,
+        "email": "p1-erin@example.com",
+        "role": "user",
+        "age": null,
+        "handle": "erinh",
+        "active": false,
+        "meta": null
+      },
+      "on_conflict": "do_nothing",
+      "returning": ["id", "email", "role"],
+      "expected": {
+        "row": {
+          "id": 13,
+          "email": "p1-erin@example.com",
+          "role": "user"
+        }
+      }
+    },
+    {
+      "name": "upsert_do_update_existing",
+      "op": "upsert",
+      "table": "users",
+      "row": {
+        "id": 11,
+        "email": "p1-bob@example.com",
+        "role": "admin",
+        "age": null,
+        "handle": "bobh",
+        "active": false,
+        "meta": null
+      },
+      "on_conflict": {
+        "do_update": {
+          "age": 99
+        }
+      },
+      "returning": ["id", "email", "role", "age", "active"],
+      "expected": {
+        "row": {
+          "id": 11,
+          "email": "p1-bob@example.com",
+          "role": "admin",
+          "age": 99,
+          "active": false
+        }
+      }
+    },
+    {
+      "name": "upsert_do_update_new_row",
+      "op": "upsert",
+      "table": "users",
+      "row": {
+        "id": 14,
+        "email": "p1-frank@example.com",
+        "role": "user",
+        "age": 55,
+        "handle": "frankh",
+        "active": false,
+        "meta": null
+      },
+      "on_conflict": {
+        "do_update": {
+          "age": 55
+        }
+      },
+      "returning": ["id", "email", "age"],
+      "expected": {
+        "row": {
+          "id": 14,
+          "email": "p1-frank@example.com",
+          "age": 55
+        }
+      }
+    },
+    {
+      "name": "insert_returning_missing_required",
+      "op": "insert_returning",
+      "table": "users",
+      "row": {
+        "id": 15,
+        "role": "user",
+        "age": 20,
+        "handle": "eveh",
+        "active": true,
+        "meta": null
+      },
+      "returning": ["id", "email"],
+      "expected": {
+        "error": "VALIDATION"
+      }
+    },
+    {
+      "name": "update_where_role",
+      "op": "update_where",
+      "table": "users",
+      "patch": {
+        "active": true
+      },
+      "filter": {
+        "role": "user"
+      },
+      "returning": ["id", "active"],
+      "expected": {
+        "rows": [
+          {
+            "id": 10,
+            "active": true
+          },
+          {
+            "id": 12,
+            "active": true
+          },
+          {
+            "id": 13,
+            "active": true
+          },
+          {
+            "id": 14,
+            "active": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "update_where_no_match",
+      "op": "update_where",
+      "table": "users",
+      "patch": {
+        "active": true
+      },
+      "filter": {
+        "role": "superuser"
+      },
+      "returning": ["id", "active"],
+      "expected": {
+        "rows": []
+      }
+    },
+    {
+      "name": "update_where_duplicate_error",
+      "op": "update_where",
+      "table": "users",
+      "patch": {
+        "email": "p1-bob@example.com"
+      },
+      "filter": {
+        "id": 10
+      },
+      "returning": ["id", "email"],
+      "expected": {
+        "error": "DUPLICATE"
+      }
+    },
+    {
+      "name": "seed_post_draft",
+      "op": "insert_returning",
+      "table": "posts",
+      "row": {
+        "id": 20,
+        "user_id": 10,
+        "title": "Draft",
+        "slug": "draft-post",
+        "published": false
+      },
+      "returning": ["id", "title", "published"],
+      "expected": {
+        "row": {
+          "id": 20,
+          "title": "Draft",
+          "published": false
+        }
+      }
+    },
+    {
+      "name": "delete_where_unpublished",
+      "op": "delete_where",
+      "table": "posts",
+      "filter": {
+        "published": false
+      },
+      "returning": ["id", "title"],
+      "expected": {
+        "rows": [
+          {
+            "id": 20,
+            "title": "Draft"
+          }
+        ]
+      }
+    },
+    {
+      "name": "seed_post_published",
+      "op": "insert_returning",
+      "table": "posts",
+      "row": {
+        "id": 21,
+        "user_id": 11,
+        "title": "Published",
+        "slug": "published-post",
+        "published": true
+      },
+      "returning": ["id", "title", "published"],
+      "expected": {
+        "row": {
+          "id": 21,
+          "title": "Published",
+          "published": true
+        }
+      }
+    },
+    {
+      "name": "seed_post_by_bob",
+      "op": "insert_returning",
+      "table": "posts",
+      "row": {
+        "id": 22,
+        "user_id": 11,
+        "title": "Bob First",
+        "slug": "bob-first",
+        "published": false
+      },
+      "returning": ["id", "title", "published"],
+      "expected": {
+        "row": {
+          "id": 22,
+          "title": "Bob First",
+          "published": false
+        }
+      }
+    },
+    {
+      "name": "seed_post_by_bob_2",
+      "op": "insert_returning",
+      "table": "posts",
+      "row": {
+        "id": 23,
+        "user_id": 11,
+        "title": "Bob Second",
+        "slug": "bob-second",
+        "published": false
+      },
+      "returning": ["id", "title", "published"],
+      "expected": {
+        "row": {
+          "id": 23,
+          "title": "Bob Second",
+          "published": false
+        }
+      }
+    },
+    {
+      "name": "seed_post_by_bob_3",
+      "op": "insert_returning",
+      "table": "posts",
+      "row": {
+        "id": 24,
+        "user_id": 11,
+        "title": "Bob Third",
+        "slug": "bob-third",
+        "published": true
+      },
+      "returning": ["id", "title", "published"],
+      "expected": {
+        "row": {
+          "id": 24,
+          "title": "Bob Third",
+          "published": true
+        }
+      }
+    },
+    {
+      "name": "seed_post_by_bob_4",
+      "op": "insert_returning",
+      "table": "posts",
+      "row": {
+        "id": 25,
+        "user_id": 11,
+        "title": "Bob Fourth",
+        "slug": "bob-fourth",
+        "published": true
+      },
+      "returning": ["id", "title", "published"],
+      "expected": {
+        "row": {
+          "id": 25,
+          "title": "Bob Fourth",
+          "published": true
+        }
+      }
+    },
+    {
+      "name": "truncate_comments",
+      "op": "truncate",
+      "table": "comments",
+      "expected": {}
+    },
+    {
+      "name": "seed_comment",
+      "op": "insert_returning",
+      "table": "comments",
+      "row": {
+        "id": 200,
+        "post_id": 21,
+        "author_id": 10,
+        "body": "Looks good"
+      },
+      "returning": ["id", "body"],
+      "expected": {
+        "row": {
+          "id": 200,
+          "body": "Looks good"
+        }
+      }
+    },
+    {
+      "name": "seed_comment_201",
+      "op": "insert_returning",
+      "table": "comments",
+      "row": {
+        "id": 201,
+        "post_id": 21,
+        "author_id": 12,
+        "body": "Agreed"
+      },
+      "returning": ["id", "body"],
+      "expected": {
+        "row": {
+          "id": 201,
+          "body": "Agreed"
+        }
+      }
+    },
+    {
+      "name": "delete_where_multi_row",
+      "op": "delete_where",
+      "table": "posts",
+      "filter": {
+        "user_id": 11,
+        "published": false
+      },
+      "returning": ["id", "title"],
+      "expected": {
+        "rows": [
+          {
+            "id": 22,
+            "title": "Bob First"
+          },
+          {
+            "id": 23,
+            "title": "Bob Second"
+          }
+        ]
+      }
+    },
+    {
+      "name": "delete_where_set_null_post",
+      "op": "delete_where",
+      "table": "posts",
+      "filter": {
+        "id": 21
+      },
+      "returning": ["id", "title"],
+      "expected": {
+        "rows": [
+          {
+            "id": 21,
+            "title": "Published"
+          }
+        ]
+      }
+    },
+    {
+      "name": "delete_where_no_match",
+      "op": "delete_where",
+      "table": "comments",
+      "filter": {
+        "post_id": 99
+      },
+      "returning": ["id", "body"],
+      "expected": {
+        "rows": []
+      }
+    },
+    {
+      "name": "delete_where_cascade_user",
+      "op": "delete_where",
+      "table": "users",
+      "filter": {
+        "id": 11
+      },
+      "returning": ["id", "email"],
+      "expected": {
+        "rows": [
+          {
+            "id": 11,
+            "email": "p1-bob@example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "delete_where_restrict_user",
+      "op": "delete_where",
+      "table": "users",
+      "filter": {
+        "id": 10
+      },
+      "returning": ["id", "email"],
+      "expected": {
+        "error": "RESTRICT"
+      }
+    },
+    {
+      "name": "truncate_users_error",
+      "op": "truncate",
+      "table": "users",
+      "expected": {
+        "error": "RESTRICT"
+      }
+    }
+  ],
+  "state_checks": [
+    {
+      "table": "users",
+      "filter": {
+        "role": "user"
+      },
+      "order": "+id",
+      "rows": [
+        {
+          "id": 10,
+          "email": "p1-alice@example.com",
+          "role": "user",
+          "age": 30,
+          "handle": "aliceh",
+          "active": true,
+          "meta": null
+        },
+        {
+          "id": 12,
+          "email": "p1-carol@example.com",
+          "role": "user",
+          "age": 25,
+          "handle": "carolh",
+          "active": true,
+          "meta": null
+        },
+        {
+          "id": 13,
+          "email": "p1-erin@example.com",
+          "role": "user",
+          "age": null,
+          "handle": "erinh",
+          "active": true,
+          "meta": null
+        },
+        {
+          "id": 14,
+          "email": "p1-frank@example.com",
+          "role": "user",
+          "age": 55,
+          "handle": "frankh",
+          "active": true,
+          "meta": null
+        }
+      ]
+    },
+    {
+      "table": "posts",
+      "filter": {
+        "published": true
+      },
+      "order": "+id",
+      "rows": []
+    },
+    {
+      "table": "comments",
+      "order": "+id",
+      "rows": [
+        {
+          "id": 200,
+          "post_id": null,
+          "author_id": 10,
+          "body": "Looks good"
+        },
+        {
+          "id": 201,
+          "post_id": null,
+          "author_id": 12,
+          "body": "Agreed"
+        }
+      ]
+    }
+  ]
+}
