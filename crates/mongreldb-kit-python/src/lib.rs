@@ -98,7 +98,21 @@ fn set_code(m: &Bound<'_, PyModule>, name: &str, code: &str) -> PyResult<()> {
 
 #[pyclass(name = "Database", unsendable)]
 pub struct PyDatabase {
-    db: Database,
+    db: Option<Database>,
+}
+
+impl PyDatabase {
+    fn require_db(&self) -> PyResult<&Database> {
+        self.db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database already closed"))
+    }
+
+    fn require_db_mut(&mut self) -> PyResult<&mut Database> {
+        self.db
+            .as_mut()
+            .ok_or_else(|| PyRuntimeError::new_err("database already closed"))
+    }
 }
 
 #[pymethods]
@@ -106,14 +120,14 @@ impl PyDatabase {
     #[staticmethod]
     fn open(path: &str) -> PyResult<Self> {
         let db = Database::open(Path::new(path)).map_err(map_err)?;
-        Ok(Self { db })
+        Ok(Self { db: Some(db) })
     }
 
     #[staticmethod]
     fn create(path: &str, schema_json: &str) -> PyResult<Self> {
         let schema: KitSchema = serde_json::from_str(schema_json).map_err(py_json_err)?;
         let db = Database::create(Path::new(path), schema).map_err(map_err)?;
-        Ok(Self { db })
+        Ok(Self { db: Some(db) })
     }
 
     fn begin<'py>(
@@ -121,7 +135,7 @@ impl PyDatabase {
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyTransaction>> {
         let this = slf.borrow();
-        let txn = this.db.begin().map_err(map_err)?;
+        let txn = this.require_db()?.begin().map_err(map_err)?;
         // Safety: the transaction borrows the Database. We keep the Python
         // Database object alive by storing a cloned `Py<PyDatabase>` handle,
         // so the reference remains valid for the transaction's lifetime.
@@ -136,12 +150,12 @@ impl PyDatabase {
     fn migrate(&mut self, migrations_json: &str) -> PyResult<()> {
         let migrations: Vec<mongreldb_kit_core::migrations::Migration> =
             serde_json::from_str(migrations_json).map_err(py_json_err)?;
-        mongreldb_kit::migrate(&mut self.db, &migrations).map_err(map_err)
+        mongreldb_kit::migrate(self.require_db_mut()?, &migrations).map_err(map_err)
     }
 
     fn set_schema(&mut self, schema_json: &str) -> PyResult<()> {
         let schema: KitSchema = serde_json::from_str(schema_json).map_err(py_json_err)?;
-        self.db.set_schema(schema);
+        self.require_db_mut()?.set_schema(schema);
         Ok(())
     }
 
@@ -149,13 +163,19 @@ impl PyDatabase {
     /// Retries internally on write-write conflicts.
     #[pyo3(signature = (name, count = 1))]
     fn allocate_sequence(&self, name: &str, count: i64) -> PyResult<i64> {
-        self.db.allocate_sequence(name, count).map_err(map_err)
+        self.require_db()?
+            .allocate_sequence(name, count)
+            .map_err(map_err)
     }
 
     /// Application table names, excluding the reserved `__kit_*` tables. This is
     /// the Python analogue of the raw database accessor.
-    fn table_names(&self) -> Vec<String> {
-        self.db.table_names()
+    fn table_names(&self) -> PyResult<Vec<String>> {
+        Ok(self.require_db()?.table_names())
+    }
+
+    fn close(&mut self) {
+        self.db = None;
     }
 }
 
@@ -308,6 +328,20 @@ impl PyTransaction {
             .insert(table, row)
             .map_err(map_err)?;
         row_to_json(&result)
+    }
+
+    fn insert_returning(
+        &mut self,
+        table: &str,
+        row_json: &str,
+        returning_json: &str,
+    ) -> PyResult<String> {
+        let row: Map<String, Value> = serde_json::from_str(row_json).map_err(py_json_err)?;
+        let returning: Vec<String> = serde_json::from_str(returning_json).map_err(py_json_err)?;
+        let result = require_txn(&mut self.txn)?
+            .insert_returning(table, row, returning)
+            .map_err(map_err)?;
+        value_to_json(&result)
     }
 
     /// Insert many rows in this single transaction. `rows_json` is a JSON array of
@@ -667,6 +701,11 @@ fn parse_on_conflict(json: &str) -> PyResult<OnConflict> {
                 return Ok(OnConflict::DoNothing);
             }
             if let Some(patch) = map.remove("do_update").or_else(|| map.remove("set")) {
+                // Accept both {"do_update": {"set": {...}}} and the older
+                // {"do_update": {...}} shorthand, plus legacy top-level "set".
+                if let Some(Value::Object(inner)) = patch.get("set") {
+                    return Ok(OnConflict::DoUpdate(inner.clone()));
+                }
                 return patch
                     .as_object()
                     .cloned()
@@ -881,7 +920,7 @@ fn migrate(db: &Bound<'_, PyDatabase>, migrations_json: &str) -> PyResult<()> {
     let migrations: Vec<mongreldb_kit_core::migrations::Migration> =
         serde_json::from_str(migrations_json).map_err(py_json_err)?;
     let mut db = db.borrow_mut();
-    mongreldb_kit::migrate(&mut db.db, &migrations).map_err(map_err)
+    mongreldb_kit::migrate(db.require_db_mut()?, &migrations).map_err(map_err)
 }
 
 // ---------------------------------------------------------------------------

@@ -103,6 +103,10 @@ class Database:
         """Application table names, excluding reserved ``__kit_*`` tables."""
         return self._handle.table_names()
 
+    def close(self) -> None:
+        """Close the database handle and release underlying resources."""
+        self._handle.close()
+
     def transaction(self, fn: Any, max_retries: int = 5) -> Any:
         """Run ``fn(txn)`` in a transaction, committing on success and retrying
         the whole callback on retryable write-write conflicts."""
@@ -126,7 +130,7 @@ class Database:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        pass
+        self.close()
 
 
 class Transaction:
@@ -149,6 +153,20 @@ class Transaction:
         """
         results = self._handle.insert_many(table, _to_json(list(rows)))
         return [json.loads(r) for r in results]
+
+    def insert_returning(
+        self,
+        table: str,
+        row: Any,
+        returning: Iterable[str],
+    ) -> dict[str, Any]:
+        """Insert a row and return a subset of its columns (including defaults)."""
+        raw = self._handle.insert_returning(
+            table,
+            _to_json(row),
+            _to_json(list(returning)),
+        )
+        return json.loads(raw)
 
     def update(self, table: str, pk: Any, patch: Any) -> dict[str, Any]:
         return json.loads(
