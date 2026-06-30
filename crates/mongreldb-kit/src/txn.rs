@@ -26,7 +26,7 @@ use crate::db::internal_bytes;
 use crate::error::{KitError, Result};
 use crate::internal::{cols, iso_now, ROW_GUARDS, UNIQUE_KEYS};
 use crate::query::{project_distinct, run_aggregate, run_join, run_select, ExecCtx, JoinRow};
-use crate::schema::{core_row_to_json, pk_to_map, row_to_core_cells, Row};
+use crate::schema::{core_row_to_json, json_to_core, pk_to_map, row_to_core_cells, Row};
 use mongreldb_core::memtable::{Row as CoreRow, Value as CoreValue};
 use mongreldb_core::query::Condition;
 use mongreldb_core::RowId;
@@ -62,12 +62,19 @@ enum StagedOp {
     },
     Update {
         table: String,
+        old_pk: String,
+        row_id: u64,
         values: Map<String, Value>,
     },
     /// A delete staged in this transaction. Tracked so `staged_row_exists`
     /// can ignore rows removed earlier in the same transaction.
-    Delete { table: String, pk: String },
-    Truncate { table: String },
+    Delete {
+        table: String,
+        pk: String,
+    },
+    Truncate {
+        table: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +222,8 @@ impl<'a> Transaction<'a> {
         let temp_id = self.alloc_temp_id();
         self.staged.push(StagedOp::Update {
             table: table.to_string(),
+            old_pk: encoded_pk_for(&t, &old_row.values),
+            row_id: old_row.row_id,
             values: values.clone(),
         });
         Ok(Row {
@@ -289,6 +298,11 @@ impl<'a> Transaction<'a> {
 
     pub fn truncate(&mut self, table: &str) -> Result<()> {
         let t = self.require_table(table)?.clone();
+        if self.has_staged_for(table) {
+            return Err(KitError::Validation(format!(
+                "truncate cannot be combined with prior writes on {table}"
+            )));
+        }
         if self.db.schema.tables.iter().any(|other| {
             other.name != t.name
                 && other
@@ -301,14 +315,15 @@ impl<'a> Transaction<'a> {
                 t.name
             )));
         }
+        let rows = self
+            .db
+            .visible_core_rows_at(table, self.core.read_snapshot())?;
         self.delete_all_guards_for_table(&t)?;
-        self.core.truncate(table).map_err(KitError::from)?;
-        self.staged.retain(|op| match op {
-            StagedOp::Insert { table: staged, .. }
-            | StagedOp::Update { table: staged, .. }
-            | StagedOp::Delete { table: staged, .. }
-            | StagedOp::Truncate { table: staged } => staged != &t.name,
-        });
+        for row in rows {
+            self.core
+                .delete(table, row.row_id)
+                .map_err(KitError::from)?;
+        }
         self.staged.push(StagedOp::Truncate { table: t.name });
         Ok(())
     }
@@ -508,10 +523,12 @@ impl<'a> Transaction<'a> {
         let core_rows = self
             .db
             .visible_core_rows_at(table, self.core.read_snapshot())?;
-        core_rows
+        let mut rows = core_rows
             .into_iter()
             .map(|r| core_row_to_json(&r, t))
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        self.replay_staged_rows(t, &mut rows);
+        Ok(rows)
     }
 
     /// Fetch rows for `table` with native `conditions` resolved by the engine
@@ -519,6 +536,13 @@ impl<'a> Transaction<'a> {
     /// does — the engine resolves conditions via HOT/bitmap/range indexes.
     fn snapshot_rows_pushed(&self, table: &str, conditions: &[Condition]) -> Result<Vec<Row>> {
         let t = self.require_table(table)?;
+        if self.has_staged_for(table) {
+            return Ok(self
+                .snapshot_rows(table)?
+                .into_iter()
+                .filter(|r| row_matches_conditions(t, r, conditions))
+                .collect());
+        }
         let core_rows = self
             .db
             .query_core_rows_at(table, conditions, self.core.read_snapshot())?;
@@ -530,6 +554,10 @@ impl<'a> Transaction<'a> {
 
     fn get_by_pk_internal(&self, table: &str, pk_map: &Map<String, Value>) -> Result<Option<Row>> {
         let t = self.require_table(table)?;
+        if self.has_staged_for(table) {
+            let rows = self.snapshot_rows(table)?;
+            return Ok(rows.into_iter().find(|r| pk_matches(&r.values, pk_map, t)));
+        }
         // Kit Priority 1 pushdown: use native PK index (O(1) HOT probe) instead
         // of O(N) full scan. Falls back to scan if conditions can't be built.
         if let Some(conditions) = crate::pushdown::pk_conditions(t, pk_map) {
@@ -840,6 +868,10 @@ impl<'a> Transaction<'a> {
 
     fn parent_exists(&self, table: &str, pk_map: &Map<String, Value>) -> Result<bool> {
         let t = self.require_table(table)?;
+        if self.has_staged_for(table) {
+            let rows = self.snapshot_rows(table)?;
+            return Ok(rows.iter().any(|r| pk_matches(&r.values, pk_map, t)));
+        }
         // Kit Priority 1 pushdown: O(1) HOT probe instead of O(N) full scan for
         // FK parent existence checks.
         if let Some(conditions) = crate::pushdown::pk_conditions(t, pk_map) {
@@ -862,7 +894,10 @@ impl<'a> Transaction<'a> {
         let mut exists = false;
         for staged in &self.staged {
             match staged {
-                StagedOp::Insert { table: t, values } | StagedOp::Update { table: t, values } => {
+                StagedOp::Insert { table: t, values }
+                | StagedOp::Update {
+                    table: t, values, ..
+                } => {
                     if t == &table.name && pk_matches(values, pk_map, table) {
                         exists = true;
                     }
@@ -917,6 +952,53 @@ impl<'a> Transaction<'a> {
             )
             .map_err(KitError::from)?;
         Ok(())
+    }
+
+    fn has_staged_for(&self, table: &str) -> bool {
+        self.staged.iter().any(|op| match op {
+            StagedOp::Insert { table: t, .. }
+            | StagedOp::Update { table: t, .. }
+            | StagedOp::Delete { table: t, .. }
+            | StagedOp::Truncate { table: t } => t == table,
+        })
+    }
+
+    fn replay_staged_rows(&self, table: &KitTable, rows: &mut Vec<Row>) {
+        for staged in &self.staged {
+            match staged {
+                StagedOp::Insert { table: t, values } if t == &table.name => {
+                    let pk = encoded_pk_for(table, values);
+                    rows.retain(|r| encoded_pk_for(table, &r.values) != pk);
+                    rows.push(Row {
+                        row_id: 0,
+                        values: values.clone(),
+                    });
+                }
+                StagedOp::Update {
+                    table: t,
+                    old_pk,
+                    row_id,
+                    values,
+                } if t == &table.name => {
+                    let new_pk = encoded_pk_for(table, values);
+                    rows.retain(|r| {
+                        let pk = encoded_pk_for(table, &r.values);
+                        pk != *old_pk && pk != new_pk
+                    });
+                    rows.push(Row {
+                        row_id: *row_id,
+                        values: values.clone(),
+                    });
+                }
+                StagedOp::Delete { table: t, pk } if t == &table.name => {
+                    rows.retain(|r| encoded_pk_for(table, &r.values) != *pk);
+                }
+                StagedOp::Truncate { table: t } if t == &table.name => {
+                    rows.clear();
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Remove unique + pk guards for a row that is being deleted.
@@ -1027,6 +1109,8 @@ impl<'a> Transaction<'a> {
         self.reserve_pk_guard(&child_table, &values, true)?;
         self.staged.push(StagedOp::Update {
             table: set_null.table.clone(),
+            old_pk: encoded_pk_for(&child_table, &child_row.values),
+            row_id: child_row.row_id,
             values: values.clone(),
         });
         Ok(())
@@ -1101,6 +1185,36 @@ impl<'a> Transaction<'a> {
 }
 
 // ── free helpers ───────────────────────────────────────────────────────────
+
+fn project_returning(row: &Row, columns: &[String]) -> Result<Value> {
+    let mut out = Map::new();
+    for c in columns {
+        out.insert(c.clone(), row.values.get(c).cloned().unwrap_or(Value::Null));
+    }
+    Ok(Value::Object(out))
+}
+
+fn pk_values_map(table: &KitTable, values: &Map<String, Value>) -> Map<String, Value> {
+    let mut out = Map::new();
+    for name in &table.primary_key {
+        out.insert(
+            name.clone(),
+            values.get(name).cloned().unwrap_or(Value::Null),
+        );
+    }
+    out
+}
+
+fn select_all(table: &str, filter: Option<Expr>) -> Select {
+    Select {
+        table: table.to_string(),
+        columns: vec![],
+        filter,
+        order_by: vec![],
+        limit: None,
+        offset: None,
+    }
+}
 
 fn pk_matches(values: &Map<String, Value>, pk_map: &Map<String, Value>, table: &KitTable) -> bool {
     for name in &table.primary_key {
@@ -1283,4 +1397,103 @@ fn component_to_value(component: &KeyComponent) -> Value {
         KeyComponent::Int(i) => Value::Number((*i).into()),
         KeyComponent::Text(s) => Value::String(s.clone()),
     }
+}
+
+fn row_matches_conditions(table: &KitTable, row: &Row, conditions: &[Condition]) -> bool {
+    conditions
+        .iter()
+        .all(|condition| row_matches_condition(table, row, condition))
+}
+
+fn row_matches_condition(table: &KitTable, row: &Row, condition: &Condition) -> bool {
+    match condition {
+        Condition::Pk(key) => {
+            let Some(pk_name) = table.primary_key.first() else {
+                return false;
+            };
+            let Some(col) = table.column(pk_name) else {
+                return false;
+            };
+            value_index_key(col, &row.values).as_deref() == Some(key.as_slice())
+        }
+        Condition::BitmapEq { column_id, value } => {
+            let Some(col) = column_by_id(table, *column_id) else {
+                return false;
+            };
+            value_index_key(col, &row.values).as_deref() == Some(value.as_slice())
+        }
+        Condition::BitmapIn { column_id, values } => {
+            let Some(col) = column_by_id(table, *column_id) else {
+                return false;
+            };
+            let Some(key) = value_index_key(col, &row.values) else {
+                return false;
+            };
+            values.iter().any(|value| value == &key)
+        }
+        Condition::Range { column_id, lo, hi } => {
+            let Some(col) = column_by_id(table, *column_id) else {
+                return false;
+            };
+            matches!(
+                json_to_core(
+                    row.values.get(&col.name).unwrap_or(&Value::Null),
+                    col.storage_type
+                ),
+                Ok(CoreValue::Int64(v)) if v >= *lo && v <= *hi
+            )
+        }
+        Condition::RangeF64 {
+            column_id,
+            lo,
+            lo_inclusive,
+            hi,
+            hi_inclusive,
+        } => {
+            let Some(col) = column_by_id(table, *column_id) else {
+                return false;
+            };
+            let Ok(CoreValue::Float64(v)) = json_to_core(
+                row.values.get(&col.name).unwrap_or(&Value::Null),
+                col.storage_type,
+            ) else {
+                return false;
+            };
+            let ge_lo = if *lo_inclusive { v >= *lo } else { v > *lo };
+            let le_hi = if *hi_inclusive { v <= *hi } else { v < *hi };
+            ge_lo && le_hi
+        }
+        Condition::FmContains { column_id, pattern } => {
+            let Some(col) = column_by_id(table, *column_id) else {
+                return false;
+            };
+            if pattern.is_empty() {
+                return true;
+            }
+            match json_to_core(
+                row.values.get(&col.name).unwrap_or(&Value::Null),
+                col.storage_type,
+            ) {
+                Ok(CoreValue::Bytes(bytes)) => bytes
+                    .windows(pattern.len())
+                    .any(|window| window == pattern.as_slice()),
+                _ => false,
+            }
+        }
+        Condition::Ann { .. } | Condition::SparseMatch { .. } => true,
+    }
+}
+
+fn column_by_id(table: &KitTable, column_id: u16) -> Option<&Column> {
+    table.columns.iter().find(|col| col.id as u16 == column_id)
+}
+
+fn value_index_key(col: &Column, values: &Map<String, Value>) -> Option<Vec<u8>> {
+    let value = values.get(&col.name).unwrap_or(&Value::Null);
+    if value.is_null() {
+        return None;
+    }
+    json_to_core(value, col.storage_type)
+        .ok()
+        .map(|value| value.encode_key())
 }

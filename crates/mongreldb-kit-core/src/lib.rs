@@ -23,7 +23,7 @@ pub use planner::{
 };
 pub use query::{
     AggFunc, Aggregate, AggregateQuery, Cte, Delete, Direction, Expr, Insert, Join, JoinKind,
-    JoinQuery, Literal, OrderBy, Query, Select, Update,
+    JoinQuery, Literal, OnConflict, OrderBy, Query, Select, Update, Upsert,
 };
 pub use schema::{
     CheckConstraint, Column, ColumnType, DefaultKind, ForeignKey, ForeignKeyAction, Index, Schema,

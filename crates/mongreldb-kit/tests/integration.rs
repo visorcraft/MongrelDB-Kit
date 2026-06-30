@@ -2,7 +2,8 @@ use mongreldb_core::schema::{ColumnFlags, TypeId};
 use mongreldb_kit::{
     AggFunc, Aggregate, AggregateQuery, Column, ColumnType, Cte, Database, Direction, Expr,
     ForeignKey, ForeignKeyAction, Index, Join, JoinKind, JoinQuery, KitError, Literal, Migration,
-    MigrationOp, OrderBy, Query, Row, Schema, Select, Table, Transaction, UniqueConstraint,
+    MigrationOp, OnConflict, OrderBy, Query, Row, Schema, Select, Table, Transaction,
+    UniqueConstraint,
 };
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
@@ -480,6 +481,225 @@ fn create_open_and_crud() {
     let txn = db.begin().unwrap();
     let row = txn.get_by_pk("users", &json!(1)).unwrap().unwrap();
     assert_eq!(row.values.get("name"), Some(&json!("Alice")));
+}
+
+#[test]
+fn insert_returning_projects_requested_columns() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
+
+    let mut row = Map::new();
+    row.insert("id".into(), json!(1));
+    row.insert("email".into(), json!("alice@example.com"));
+    row.insert("name".into(), json!("Alice"));
+
+    let mut txn = db.begin().unwrap();
+    let returned = txn
+        .insert_returning("users", row, vec!["id".into(), "name".into()])
+        .unwrap();
+    assert_eq!(returned, json!({"id": 1, "name": "Alice"}));
+    txn.commit().unwrap();
+}
+
+#[test]
+fn truncate_clears_rows_and_unique_guards() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "alice@example.com");
+    insert_user(&mut txn, 2, "bob@example.com");
+    txn.commit().unwrap();
+
+    let mut txn = db.begin().unwrap();
+    txn.truncate("users").unwrap();
+    let rows = txn
+        .select(&Query::Select(select_all("users", None)))
+        .unwrap();
+    assert!(rows.is_empty());
+    txn.commit().unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let rows = txn
+        .select(&Query::Select(select_all("users", None)))
+        .unwrap();
+    assert!(rows.is_empty());
+    insert_user(&mut txn, 3, "alice@example.com");
+    txn.commit().unwrap();
+
+    let txn = db.begin().unwrap();
+    let rows = txn
+        .select(&Query::Select(select_all("users", None)))
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].values.get("email"),
+        Some(&json!("alice@example.com"))
+    );
+}
+
+#[test]
+fn truncate_rejects_referenced_table() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let err = txn.truncate("users").unwrap_err();
+    assert!(matches!(err, KitError::Restrict(_)));
+}
+
+#[test]
+fn upsert_insert_do_nothing_and_do_update() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let mut row = Map::new();
+    row.insert("id".into(), json!(1));
+    row.insert("email".into(), json!("alice@example.com"));
+    row.insert("name".into(), json!("Alice"));
+    let inserted = txn
+        .upsert(
+            "users",
+            row,
+            OnConflict::DoNothing,
+            vec!["id".into(), "name".into()],
+        )
+        .unwrap();
+    assert_eq!(inserted, json!({"id": 1, "name": "Alice"}));
+    txn.commit().unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let mut duplicate = Map::new();
+    duplicate.insert("id".into(), json!(1));
+    duplicate.insert("email".into(), json!("changed@example.com"));
+    duplicate.insert("name".into(), json!("Ignored"));
+    let unchanged = txn
+        .upsert(
+            "users",
+            duplicate,
+            OnConflict::DoNothing,
+            vec!["email".into(), "name".into()],
+        )
+        .unwrap();
+    assert_eq!(
+        unchanged,
+        json!({"email": "alice@example.com", "name": "Alice"})
+    );
+    txn.commit().unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let mut incoming = Map::new();
+    incoming.insert("id".into(), json!(1));
+    incoming.insert("email".into(), json!("alice@example.com"));
+    incoming.insert("name".into(), json!("Incoming"));
+    let mut patch = Map::new();
+    patch.insert("name".into(), json!("Updated"));
+    let updated = txn
+        .upsert(
+            "users",
+            incoming,
+            OnConflict::DoUpdate(patch),
+            vec!["id".into(), "name".into()],
+        )
+        .unwrap();
+    assert_eq!(updated, json!({"id": 1, "name": "Updated"}));
+    txn.commit().unwrap();
+
+    let txn = db.begin().unwrap();
+    let row = txn.get_by_pk("users", &json!(1)).unwrap().unwrap();
+    assert_eq!(row.values.get("email"), Some(&json!("alice@example.com")));
+    assert_eq!(row.values.get("name"), Some(&json!("Updated")));
+}
+
+#[test]
+fn update_where_returns_post_images() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "alice@example.com");
+    insert_user(&mut txn, 2, "bob@example.com");
+    insert_user(&mut txn, 3, "carol@example.com");
+    txn.commit().unwrap();
+
+    let mut patch = Map::new();
+    patch.insert("name".into(), json!("Updated"));
+    let mut txn = db.begin().unwrap();
+    let mut returned = txn
+        .update_where(
+            "users",
+            Some(Expr::Gt(
+                Box::new(col("id")),
+                Box::new(Expr::Literal(Literal::Int(1))),
+            )),
+            patch,
+            vec!["id".into(), "name".into()],
+        )
+        .unwrap();
+    returned.sort_by_key(|v| v["id"].as_i64().unwrap());
+    assert_eq!(
+        returned,
+        vec![
+            json!({"id": 2, "name": "Updated"}),
+            json!({"id": 3, "name": "Updated"})
+        ]
+    );
+    txn.commit().unwrap();
+
+    let txn = db.begin().unwrap();
+    assert_eq!(
+        txn.get_by_pk("users", &json!(1))
+            .unwrap()
+            .unwrap()
+            .values
+            .get("name"),
+        Some(&Value::Null)
+    );
+    assert_eq!(
+        txn.get_by_pk("users", &json!(2))
+            .unwrap()
+            .unwrap()
+            .values
+            .get("name"),
+        Some(&json!("Updated"))
+    );
+}
+
+#[test]
+fn delete_where_returns_preimages_and_cascades() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "alice@example.com");
+    insert_order(&mut txn, 10, 1, 100.0);
+    insert_order(&mut txn, 11, 1, 25.0);
+    let mut item = Map::new();
+    item.insert("id".into(), json!(1));
+    item.insert("order_id".into(), json!(10));
+    item.insert("sku".into(), json!("ABC"));
+    txn.insert("items", item).unwrap();
+    txn.commit().unwrap();
+
+    let mut txn = db.begin().unwrap();
+    let returned = txn
+        .delete_where(
+            "orders",
+            Some(Expr::Eq(
+                Box::new(col("id")),
+                Box::new(Expr::Literal(Literal::Int(10))),
+            )),
+            vec!["id".into(), "total".into()],
+        )
+        .unwrap();
+    assert_eq!(returned, vec![json!({"id": 10, "total": 100.0})]);
+    txn.commit().unwrap();
+
+    let txn = db.begin().unwrap();
+    assert!(txn.get_by_pk("orders", &json!(10)).unwrap().is_none());
+    assert!(txn.get_by_pk("items", &json!(1)).unwrap().is_none());
+    assert!(txn.get_by_pk("orders", &json!(11)).unwrap().is_some());
 }
 
 #[test]
