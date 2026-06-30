@@ -205,6 +205,51 @@ fn count_star_native_delegation_matches_scan() {
     }
 }
 
+/// Kit Priority 7: SUM/MIN/MAX/AVG/COUNT(col) over a column must match the
+/// in-Rust result whether served natively (single sorted run) or by fall-back.
+#[test]
+fn column_aggregate_native_delegation_matches_scan() {
+    fn agg1(txn: &Transaction, func: AggFunc, col: &str) -> Value {
+        let q = AggregateQuery {
+            table: "orders".into(),
+            filter: None,
+            group_by: vec![],
+            aggregates: vec![Aggregate {
+                func,
+                column: Some(col.into()),
+                alias: "v".into(),
+            }],
+            having: None,
+        };
+        let rows = txn.aggregate(&q).unwrap();
+        assert_eq!(rows.len(), 1);
+        rows[0].values.get("v").cloned().unwrap()
+    }
+
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "a@example.com");
+    insert_order(&mut txn, 1, 1, 10.0);
+    insert_order(&mut txn, 2, 1, 30.0);
+    insert_order(&mut txn, 3, 1, 5.0);
+    // A null-total order (total is nullable) exercises COUNT(col) NULL exclusion.
+    {
+        let mut row = Map::new();
+        row.insert("id".into(), json!(4));
+        row.insert("user_id".into(), json!(1));
+        txn.insert("orders", row).unwrap();
+    }
+    txn.commit().unwrap();
+
+    let txn = db.begin().unwrap();
+    assert_eq!(agg1(&txn, AggFunc::Sum, "total"), json!(45.0));
+    assert_eq!(agg1(&txn, AggFunc::Min, "total"), json!(5.0));
+    assert_eq!(agg1(&txn, AggFunc::Max, "total"), json!(30.0));
+    assert_eq!(agg1(&txn, AggFunc::Avg, "total"), json!(15.0));
+    assert_eq!(agg1(&txn, AggFunc::Count, "total"), json!(3)); // null excluded
+}
+
 #[test]
 fn aggregates_group_by_and_having() {
     let dir = temp_dir();
