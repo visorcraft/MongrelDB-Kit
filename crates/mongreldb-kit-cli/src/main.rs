@@ -146,6 +146,8 @@ enum Command {
     Check { path: PathBuf },
     /// Open a database and run an integrity check.
     Doctor { path: PathBuf },
+    /// Remove all rows from a table.
+    Truncate { path: PathBuf, table: String },
     /// Schema commands.
     #[command(subcommand)]
     Schema(SchemaCmd),
@@ -214,6 +216,7 @@ fn main() -> Result<()> {
         Command::Init { path } => cmd_init(&path),
         Command::Check { path } => cmd_check(&path),
         Command::Doctor { path } => cmd_doctor(&path),
+        Command::Truncate { path, table } => cmd_truncate(&path, &table),
         Command::Schema(cmd) => match cmd {
             SchemaCmd::Print { path } => cmd_schema_print(&path),
             SchemaCmd::Validate { schema } => cmd_schema_validate(&schema),
@@ -276,6 +279,16 @@ fn cmd_doctor(path: &Path) -> Result<()> {
     } else {
         bail!("doctor found problems");
     }
+    Ok(())
+}
+
+fn cmd_truncate(path: &Path, table: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let mut txn = db.begin().context("failed to begin transaction")?;
+    txn.truncate(table)
+        .context(format!("failed to truncate {table}"))?;
+    txn.commit().context("failed to commit transaction")?;
+    println!("table {table} truncated");
     Ok(())
 }
 

@@ -1,5 +1,7 @@
 use assert_cmd::Command;
+use mongreldb_kit::{Database, Query, Schema, Select};
 use predicates::str::contains;
+use serde_json::{json, Map};
 use std::fs;
 
 fn bin() -> Command {
@@ -78,6 +80,42 @@ fn migrate_status_shows_no_pending_after_init() {
         .assert()
         .success()
         .stdout(contains("no migrations applied"));
+}
+
+#[test]
+fn truncate_removes_table_rows() {
+    let path = temp_db_path();
+    let schema: Schema = serde_json::from_str(USERS_SCHEMA).unwrap();
+    let db = Database::create(&path, schema).unwrap();
+
+    let mut row = Map::new();
+    row.insert("id".into(), json!(1));
+    row.insert("email".into(), json!("alice@example.com"));
+    let mut txn = db.begin().unwrap();
+    txn.insert("user_accounts", row).unwrap();
+    txn.commit().unwrap();
+
+    bin()
+        .arg("truncate")
+        .arg(&path)
+        .arg("user_accounts")
+        .assert()
+        .success()
+        .stdout(contains("table user_accounts truncated"));
+
+    let db = Database::open(&path).unwrap();
+    let txn = db.begin().unwrap();
+    let rows = txn
+        .select(&Query::Select(Select {
+            table: "user_accounts".into(),
+            columns: vec![],
+            filter: None,
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        }))
+        .unwrap();
+    assert!(rows.is_empty());
 }
 
 const USERS_SCHEMA: &str = r#"{
