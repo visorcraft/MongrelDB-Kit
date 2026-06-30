@@ -280,8 +280,13 @@ impl Database {
 
     /// Count visible rows matching `conditions` without materializing them
     /// (Kit Priority 7 pushdown). Returns `None` when the conditions cannot be
-    /// served by indexes (caller falls back to counting materialized rows).
-    #[allow(dead_code)] // Wired in a follow-up COUNT(*) fast path.
+    /// served by indexes, or when `snapshot` is not the latest committed epoch
+    /// (caller falls back to a snapshot-correct row scan).
+    ///
+    /// `count_conditions` counts the engine's latest committed index state, not
+    /// a snapshot-filtered scan, so it only matches a repeatable-read row count
+    /// when the read snapshot IS the latest epoch. We hold the table lock while
+    /// comparing, so no commit can interleave between the check and the count.
     pub(crate) fn count_core_rows_at(
         &self,
         table_name: &str,
@@ -290,6 +295,9 @@ impl Database {
     ) -> Result<Option<u64>> {
         let handle = self.inner.table(table_name).map_err(KitError::from)?;
         let mut guard = handle.lock();
+        if guard.snapshot().epoch != snapshot.epoch {
+            return Ok(None); // stale read snapshot ⇒ caller scans
+        }
         guard
             .count_conditions(conditions, snapshot)
             .map_err(KitError::from)

@@ -35,7 +35,9 @@ use mongreldb_kit_core::keys::{
     decode_pk, encode_pk, encode_row_guard_key, encode_unique_key, KeyComponent, KIT_KEY_VERSION,
 };
 use mongreldb_kit_core::planner::{plan_delete, DeletePlan};
-use mongreldb_kit_core::query::{AggregateQuery, Cte, Expr, JoinQuery, OnConflict, Query, Select};
+use mongreldb_kit_core::query::{
+    AggFunc, AggregateQuery, Cte, Expr, JoinQuery, OnConflict, Query, Select,
+};
 use mongreldb_kit_core::schema::{
     Column, ColumnType, DefaultKind, ForeignKey, Table as KitTable, UniqueConstraint,
 };
@@ -541,8 +543,51 @@ impl<'a> Transaction<'a> {
     /// (group-key columns plus the aggregate aliases); with no `group_by` the
     /// whole filtered table is a single group.
     pub fn aggregate(&self, query: &AggregateQuery) -> Result<Vec<Row>> {
+        if let Some(rows) = self.try_native_count(query)? {
+            return Ok(rows);
+        }
         let ctx = self.exec_ctx();
         run_aggregate(&ctx, query)
+    }
+
+    /// Kit Priority 7: serve an ungrouped `COUNT(*)` from the engine's survivor
+    /// cardinality (filtered) or `live_count` (unfiltered) — no row
+    /// materialization. Returns `None` (caller scans) unless the result is
+    /// provably identical to the row-scan path: no `GROUP BY`/`HAVING`, a single
+    /// bare `COUNT(*)`, no staged writes for the table, and a fully + exactly
+    /// translated (or absent) filter. `count_core_rows_at` additionally requires
+    /// the read snapshot to be the latest committed epoch.
+    fn try_native_count(&self, query: &AggregateQuery) -> Result<Option<Vec<Row>>> {
+        if !query.group_by.is_empty() || query.having.is_some() || query.aggregates.len() != 1 {
+            return Ok(None);
+        }
+        let agg = &query.aggregates[0];
+        if !matches!(agg.func, AggFunc::Count) || agg.column.is_some() {
+            return Ok(None); // only bare COUNT(*) is exact via survivor cardinality
+        }
+        if self.has_staged_for(&query.table) {
+            return Ok(None); // engine count omits this transaction's staged writes
+        }
+        let conditions: Vec<Condition> = match &query.filter {
+            None => Vec::new(),
+            Some(filter) => {
+                let t = self.require_table(&query.table)?;
+                match crate::pushdown::translate_predicate(t, filter) {
+                    // A residual / inexact filter would overcount ⇒ scan instead.
+                    Some(plan) if plan.can_push() && plan.fully_translated => plan.conditions,
+                    _ => return Ok(None),
+                }
+            }
+        };
+        let Some(n) =
+            self.db
+                .count_core_rows_at(&query.table, &conditions, self.core.read_snapshot())?
+        else {
+            return Ok(None);
+        };
+        let mut values = Map::new();
+        values.insert(agg.alias.clone(), Value::Number((n as i64).into()));
+        Ok(Some(vec![Row { row_id: 0, values }]))
     }
 
     /// Run a nested-loop join. Each result row is a map keyed by table alias; see

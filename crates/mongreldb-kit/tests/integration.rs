@@ -131,6 +131,80 @@ fn select_all(table: &str, filter: Option<Expr>) -> Select {
     }
 }
 
+/// Kit Priority 7: a bare `COUNT(*)` is served from the engine (survivor
+/// cardinality / live_count) and must match the row-scan result exactly across
+/// unfiltered, PK-filtered, post-delete, and staged-write (fall-back) cases.
+#[test]
+fn count_star_native_delegation_matches_scan() {
+    fn count_star(txn: &Transaction, table: &str, filter: Option<Expr>) -> i64 {
+        let q = AggregateQuery {
+            table: table.into(),
+            filter,
+            group_by: vec![],
+            aggregates: vec![Aggregate {
+                func: AggFunc::Count,
+                column: None,
+                alias: "n".into(),
+            }],
+            having: None,
+        };
+        let rows = txn.aggregate(&q).unwrap();
+        assert_eq!(rows.len(), 1);
+        rows[0].values.get("n").unwrap().as_i64().unwrap()
+    }
+
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "a@example.com");
+    insert_user(&mut txn, 2, "b@example.com");
+    insert_order(&mut txn, 1, 1, 10.0);
+    insert_order(&mut txn, 2, 1, 30.0);
+    insert_order(&mut txn, 3, 2, 5.0);
+    txn.commit().unwrap();
+
+    // Unfiltered: delegated (snapshot == latest, no staged) ⇒ 3.
+    {
+        let txn = db.begin().unwrap();
+        assert_eq!(count_star(&txn, "orders", None), 3);
+    }
+    // PK-filtered (exact, pushable) ⇒ 1 (delegated or scanned — must agree).
+    {
+        let txn = db.begin().unwrap();
+        let f = Expr::Eq(
+            Box::new(col("id")),
+            Box::new(Expr::Literal(Literal::Int(2))),
+        );
+        assert_eq!(count_star(&txn, "orders", Some(f)), 1);
+    }
+    // After deleting one order, the delegated COUNT(*) stays exact (validates the
+    // engine count under deletes, not just inserts).
+    {
+        let mut txn = db.begin().unwrap();
+        txn.execute(&Query::Delete(Delete {
+            table: "orders".into(),
+            filter: Some(Expr::Eq(
+                Box::new(col("id")),
+                Box::new(Expr::Literal(Literal::Int(3))),
+            )),
+            returning: vec![],
+            pk: None,
+        }))
+        .unwrap();
+        txn.commit().unwrap();
+        let txn = db.begin().unwrap();
+        assert_eq!(count_star(&txn, "orders", None), 2);
+    }
+    // Staged (uncommitted) write in the SAME txn ⇒ delegation must fall back to
+    // the row scan, which replays staged rows ⇒ 3 (2 committed + 1 staged).
+    {
+        let mut txn = db.begin().unwrap();
+        insert_order(&mut txn, 4, 1, 7.0);
+        assert_eq!(count_star(&txn, "orders", None), 3);
+        txn.rollback();
+    }
+}
+
 #[test]
 fn aggregates_group_by_and_having() {
     let dir = temp_dir();
