@@ -31,6 +31,7 @@ use mongreldb_core::memtable::{Row as CoreRow, Value as CoreValue};
 use mongreldb_core::query::Condition;
 use mongreldb_core::RowId;
 use mongreldb_core::UpsertAction;
+use mongreldb_core::{NativeAgg, NativeAggResult};
 use mongreldb_kit_core::keys::{
     decode_pk, encode_pk, encode_row_guard_key, encode_unique_key, KeyComponent, KIT_KEY_VERSION,
 };
@@ -543,50 +544,95 @@ impl<'a> Transaction<'a> {
     /// (group-key columns plus the aggregate aliases); with no `group_by` the
     /// whole filtered table is a single group.
     pub fn aggregate(&self, query: &AggregateQuery) -> Result<Vec<Row>> {
-        if let Some(rows) = self.try_native_count(query)? {
+        if let Some(rows) = self.try_native_aggregate(query)? {
             return Ok(rows);
         }
         let ctx = self.exec_ctx();
         run_aggregate(&ctx, query)
     }
 
-    /// Kit Priority 7: serve an ungrouped `COUNT(*)` from the engine's survivor
-    /// cardinality (filtered) or `live_count` (unfiltered) — no row
-    /// materialization. Returns `None` (caller scans) unless the result is
-    /// provably identical to the row-scan path: no `GROUP BY`/`HAVING`, a single
-    /// bare `COUNT(*)`, no staged writes for the table, and a fully + exactly
-    /// translated (or absent) filter. `count_core_rows_at` additionally requires
-    /// the read snapshot to be the latest committed epoch.
-    fn try_native_count(&self, query: &AggregateQuery) -> Result<Option<Vec<Row>>> {
+    /// Kit Priority 7: serve a single ungrouped aggregate from the engine
+    /// (survivor cardinality / page stats / vectorized cursor) with no row
+    /// materialization. Covers `COUNT(*)`, `COUNT(col)`, `SUM`, `MIN`, `MAX`,
+    /// `AVG`. Returns `None` (caller scans) unless the result is provably
+    /// identical to the row-scan path: no `GROUP BY`/`HAVING`, a single
+    /// aggregate, no staged writes for the table, and a fully + exactly
+    /// translated (or absent) filter. The engine reach methods additionally
+    /// require the read snapshot to be the latest committed epoch, and fall
+    /// back (`None`) for non-numeric columns or multi-run/overlay layouts.
+    fn try_native_aggregate(&self, query: &AggregateQuery) -> Result<Option<Vec<Row>>> {
         if !query.group_by.is_empty() || query.having.is_some() || query.aggregates.len() != 1 {
             return Ok(None);
         }
         let agg = &query.aggregates[0];
-        if !matches!(agg.func, AggFunc::Count) || agg.column.is_some() {
-            return Ok(None); // only bare COUNT(*) is exact via survivor cardinality
-        }
         if self.has_staged_for(&query.table) {
-            return Ok(None); // engine count omits this transaction's staged writes
+            return Ok(None); // engine aggregate omits this transaction's staged writes
         }
         let conditions: Vec<Condition> = match &query.filter {
             None => Vec::new(),
             Some(filter) => {
                 let t = self.require_table(&query.table)?;
                 match crate::pushdown::translate_predicate(t, filter) {
-                    // A residual / inexact filter would overcount ⇒ scan instead.
+                    // A residual / inexact filter would skew the result ⇒ scan.
                     Some(plan) if plan.can_push() && plan.fully_translated => plan.conditions,
                     _ => return Ok(None),
                 }
             }
         };
-        let Some(n) =
-            self.db
-                .count_core_rows_at(&query.table, &conditions, self.core.read_snapshot())?
-        else {
-            return Ok(None);
+        let snapshot = self.core.read_snapshot();
+
+        let value: Value = match (agg.func, &agg.column) {
+            // COUNT(*): survivor cardinality (filtered) / O(1) live_count.
+            (AggFunc::Count, None) => {
+                let Some(n) = self
+                    .db
+                    .count_core_rows_at(&query.table, &conditions, snapshot)?
+                else {
+                    return Ok(None);
+                };
+                Value::Number((n as i64).into())
+            }
+            // COUNT(col)/SUM/MIN/MAX/AVG over a column: engine page stats /
+            // vectorized cursor. SUM/MIN/MAX/AVG without a column is invalid.
+            (func, Some(col_name)) => {
+                let t = self.require_table(&query.table)?;
+                let Some(col) = t.columns.iter().find(|c| &c.name == col_name) else {
+                    return Ok(None);
+                };
+                let native = match func {
+                    AggFunc::Count => NativeAgg::Count,
+                    AggFunc::Sum => NativeAgg::Sum,
+                    AggFunc::Min => NativeAgg::Min,
+                    AggFunc::Max => NativeAgg::Max,
+                    AggFunc::Avg => NativeAgg::Avg,
+                };
+                let Some(result) = self.db.aggregate_core_at(
+                    &query.table,
+                    Some(col.id as u16),
+                    &conditions,
+                    native,
+                    snapshot,
+                )?
+                else {
+                    return Ok(None);
+                };
+                // Map the engine result to a JSON value matching the in-Rust
+                // path: COUNT/Int → integer, Float → float, no inputs → NULL.
+                match result {
+                    NativeAggResult::Count(n) => Value::Number((n as i64).into()),
+                    NativeAggResult::Int(x) => Value::Number(x.into()),
+                    NativeAggResult::Float(f) => serde_json::Number::from_f64(f)
+                        .map(Value::Number)
+                        .unwrap_or(Value::Null),
+                    NativeAggResult::Null => Value::Null,
+                }
+            }
+            // SUM/MIN/MAX/AVG with no column is not a valid shape here ⇒ scan.
+            _ => return Ok(None),
         };
+
         let mut values = Map::new();
-        values.insert(agg.alias.clone(), Value::Number((n as i64).into()));
+        values.insert(agg.alias.clone(), value);
         Ok(Some(vec![Row { row_id: 0, values }]))
     }
 

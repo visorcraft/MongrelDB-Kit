@@ -8,6 +8,7 @@ use mongreldb_core::memtable::Row as CoreRow;
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::Schema as CoreSchema;
 use mongreldb_core::Database as CoreDatabase;
+use mongreldb_core::{NativeAgg, NativeAggResult};
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
 use serde_json::Value;
@@ -300,6 +301,32 @@ impl Database {
         }
         guard
             .count_conditions(conditions, snapshot)
+            .map_err(KitError::from)
+    }
+
+    /// Compute `SUM`/`MIN`/`MAX`/`AVG`/`COUNT(col)` over a column without
+    /// materializing rows (Kit Priority 7), via the engine's native aggregate.
+    /// `column` is the engine column id. Returns `None` when the engine fast
+    /// path does not apply (multi-run / non-empty overlay / non-numeric column),
+    /// or when `snapshot` is not the latest committed epoch — the same
+    /// guarantee as [`count_core_rows_at`](Self::count_core_rows_at): the engine
+    /// aggregate matches a snapshot-consistent row scan only at the latest epoch,
+    /// and we compare under the table lock so no commit can interleave.
+    pub(crate) fn aggregate_core_at(
+        &self,
+        table_name: &str,
+        column: Option<u16>,
+        conditions: &[mongreldb_core::query::Condition],
+        agg: NativeAgg,
+        snapshot: Snapshot,
+    ) -> Result<Option<NativeAggResult>> {
+        let handle = self.inner.table(table_name).map_err(KitError::from)?;
+        let guard = handle.lock();
+        if guard.snapshot().epoch != snapshot.epoch {
+            return Ok(None); // stale read snapshot ⇒ caller scans
+        }
+        guard
+            .aggregate_native(snapshot, column, conditions, agg)
             .map_err(KitError::from)
     }
 
