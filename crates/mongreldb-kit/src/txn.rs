@@ -30,6 +30,7 @@ use crate::schema::{core_row_to_json, json_to_core, pk_to_map, row_to_core_cells
 use mongreldb_core::memtable::{Row as CoreRow, Value as CoreValue};
 use mongreldb_core::query::Condition;
 use mongreldb_core::RowId;
+use mongreldb_core::UpsertAction;
 use mongreldb_kit_core::keys::{
     decode_pk, encode_pk, encode_row_guard_key, encode_unique_key, KeyComponent, KIT_KEY_VERSION,
 };
@@ -232,15 +233,12 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    /// Delete the row in `table` identified by `pk`.
-    pub fn delete(&mut self, table: &str, pk: &Value) -> Result<()> {
+    /// Prepare a row (and its cascade/set-null children) for deletion. Returns
+    /// the engine row id of the target row; the caller is responsible for the
+    /// final engine delete so that bulk deletes can be batched.
+    fn delete_row(&mut self, table: &str, row: &Row) -> Result<u64> {
         let t = self.require_table(table)?.clone();
-        let pk_map = pk_to_map(pk, &t)?;
-        let row = self
-            .get_by_pk_internal(table, &pk_map)?
-            .ok_or_else(|| KitError::Integrity(format!("row not found in {table}")))?;
-
-        let (plan, row_cache) = self.plan_delete(table, &row)?;
+        let (plan, row_cache) = self.plan_delete(table, row)?;
         if !plan.restricted.is_empty() {
             let msg = format!(
                 "delete restricted by {}",
@@ -264,7 +262,7 @@ impl<'a> Transaction<'a> {
         }
         for del in &plan.delete {
             if del.table == table {
-                continue; // deleted at the end
+                continue; // deleted by the caller
             }
             let child_table = self.require_table(&del.table)?.clone();
             let key = format!("{}:{}", del.table, del.pk);
@@ -286,13 +284,24 @@ impl<'a> Transaction<'a> {
         // child insert by touching its row guard.
         self.delete_guards_for(&t, &row.values)?;
         self.touch_row_guard(table, &pk_components(&t, &row.values))?;
-        self.core
-            .delete(table, RowId(row.row_id))
-            .map_err(KitError::from)?;
         self.staged.push(StagedOp::Delete {
             table: table.to_string(),
             pk: encoded_pk_for(&t, &row.values),
         });
+        Ok(row.row_id)
+    }
+
+    /// Delete the row in `table` identified by `pk`.
+    pub fn delete(&mut self, table: &str, pk: &Value) -> Result<()> {
+        let t = self.require_table(table)?.clone();
+        let pk_map = pk_to_map(pk, &t)?;
+        let row = self
+            .get_by_pk_internal(table, &pk_map)?
+            .ok_or_else(|| KitError::Integrity(format!("row not found in {table}")))?;
+        let row_id = self.delete_row(table, &row)?;
+        self.core
+            .delete(table, RowId(row_id))
+            .map_err(KitError::from)?;
         Ok(())
     }
 
@@ -315,15 +324,8 @@ impl<'a> Transaction<'a> {
                 t.name
             )));
         }
-        let rows = self
-            .db
-            .visible_core_rows_at(table, self.core.read_snapshot())?;
         self.delete_all_guards_for_table(&t)?;
-        for row in rows {
-            self.core
-                .delete(table, row.row_id)
-                .map_err(KitError::from)?;
-        }
+        self.core.truncate(table).map_err(KitError::from)?;
         self.staged.push(StagedOp::Truncate { table: t.name });
         Ok(())
     }
@@ -347,12 +349,72 @@ impl<'a> Transaction<'a> {
         match (existing, on_conflict) {
             (Some(old), OnConflict::DoNothing) => project_returning(&old, &returning),
             (Some(old), OnConflict::DoUpdate(patch)) => {
-                let updated = self.update(table, &old.pk(&t).unwrap_or(Value::Null), patch)?;
-                project_returning(&updated, &returning)
+                let mut merged = values.clone();
+                let mut patch_keys = HashSet::new();
+                for (k, v) in patch {
+                    if t.column(&k).is_some() {
+                        merged.insert(k.clone(), v);
+                        patch_keys.insert(k);
+                    }
+                }
+                self.apply_update_defaults(&mut merged, &patch_keys, &t);
+                mongreldb_kit_core::validation::validate_row(&t, &merged)?;
+                self.check_unique_constraints(&t, &merged, Some(&old.values))?;
+                self.check_foreign_keys(&t, &merged)?;
+                self.reserve_unique_guards(&t, &merged, Some(&old.values))?;
+                self.touch_foreign_key_guards(&t, &merged)?;
+                self.delete_guards_for(&t, &old.values)?;
+
+                let insert_cells = row_to_core_cells(&merged, &t)?;
+                let mut patch_values = Map::new();
+                for k in &patch_keys {
+                    patch_values.insert(k.clone(), merged.get(k).cloned().unwrap_or(Value::Null));
+                }
+                let update_cells = patch_to_core_cells(&patch_values, &t)?;
+
+                self.core
+                    .upsert(table, insert_cells, UpsertAction::DoUpdate(update_cells))
+                    .map_err(KitError::from)?;
+                self.staged.push(StagedOp::Update {
+                    table: table.to_string(),
+                    old_pk: encoded_pk_for(&t, &old.values),
+                    row_id: old.row_id,
+                    values: merged.clone(),
+                });
+                project_returning(
+                    &Row {
+                        row_id: old.row_id,
+                        values: merged,
+                    },
+                    &returning,
+                )
             }
-            (None, _) => {
-                let inserted = self.insert(table, values)?;
-                project_returning(&inserted, &returning)
+            (None, on_conflict) => {
+                self.check_unique_constraints(&t, &values, None)?;
+                self.check_foreign_keys(&t, &values)?;
+                self.reserve_unique_guards(&t, &values, None)?;
+                let pk_explicit = pk_is_explicit(&t, &values);
+                self.reserve_pk_guard(&t, &values, pk_explicit)?;
+                self.touch_foreign_key_guards(&t, &values)?;
+                let cells = row_to_core_cells(&values, &t)?;
+                let action = match on_conflict {
+                    OnConflict::DoNothing => UpsertAction::DoNothing,
+                    OnConflict::DoUpdate(patch) => {
+                        UpsertAction::DoUpdate(patch_to_core_cells(&patch, &t)?)
+                    }
+                };
+                self.core.upsert(table, cells, action).map_err(KitError::from)?;
+                self.staged.push(StagedOp::Insert {
+                    table: table.to_string(),
+                    values: values.clone(),
+                });
+                project_returning(
+                    &Row {
+                        row_id: 0,
+                        values,
+                    },
+                    &returning,
+                )
             }
         }
     }
@@ -366,11 +428,43 @@ impl<'a> Transaction<'a> {
     ) -> Result<Vec<Value>> {
         let t = self.require_table(table)?.clone();
         let rows = self.select(&Query::Select(select_all(table, filter)))?;
+        let mut updates = Vec::with_capacity(rows.len());
         let mut out = Vec::with_capacity(rows.len());
+        let patch_keys: HashSet<String> = patch.keys().cloned().collect();
         for row in rows {
-            let pk = row.pk(&t).unwrap_or(Value::Null);
-            let updated = self.update(table, &pk, patch.clone())?;
-            out.push(project_returning(&updated, &returning)?);
+            let mut values = row.values.clone();
+            for (k, v) in &patch {
+                if t.column(k).is_some() {
+                    values.insert(k.clone(), v.clone());
+                }
+            }
+            self.apply_update_defaults(&mut values, &patch_keys, &t);
+            mongreldb_kit_core::validation::validate_row(&t, &values)?;
+            self.check_unique_constraints(&t, &values, Some(&row.values))?;
+            self.check_foreign_keys(&t, &values)?;
+            self.reserve_unique_guards(&t, &values, Some(&row.values))?;
+            self.touch_foreign_key_guards(&t, &values)?;
+
+            let cells = row_to_core_cells(&values, &t)?;
+            updates.push((RowId(row.row_id), cells));
+            self.staged.push(StagedOp::Update {
+                table: table.to_string(),
+                old_pk: encoded_pk_for(&t, &row.values),
+                row_id: row.row_id,
+                values: values.clone(),
+            });
+            out.push(project_returning(
+                &Row {
+                    row_id: row.row_id,
+                    values,
+                },
+                &returning,
+            )?);
+        }
+        if !updates.is_empty() {
+            self.core
+                .update_many(table, updates)
+                .map_err(KitError::from)?;
         }
         Ok(out)
     }
@@ -381,13 +475,18 @@ impl<'a> Transaction<'a> {
         filter: Option<Expr>,
         returning: Vec<String>,
     ) -> Result<Vec<Value>> {
-        let t = self.require_table(table)?.clone();
+        self.require_table(table)?;
         let rows = self.select(&Query::Select(select_all(table, filter)))?;
         let mut out = Vec::with_capacity(rows.len());
+        let mut ids = Vec::with_capacity(rows.len());
         for row in rows {
             out.push(project_returning(&row, &returning)?);
-            let pk = row.pk(&t).unwrap_or(Value::Null);
-            self.delete(table, &pk)?;
+            ids.push(self.delete_row(table, &row)?);
+        }
+        if !ids.is_empty() {
+            self.core
+                .delete_many(table, ids.into_iter().map(RowId).collect())
+                .map_err(KitError::from)?;
         }
         Ok(out)
     }
@@ -1203,6 +1302,23 @@ fn pk_values_map(table: &KitTable, values: &Map<String, Value>) -> Map<String, V
         );
     }
     out
+}
+
+/// Convert only the columns present in `patch` to core cells.
+/// Missing columns are intentionally omitted so an upsert DO UPDATE patch does
+/// not overwrite unchanged cells with NULL.
+fn patch_to_core_cells(
+    patch: &Map<String, Value>,
+    table: &KitTable,
+) -> Result<Vec<(u16, CoreValue)>> {
+    let mut cells = Vec::new();
+    for (name, value) in patch {
+        let Some(col) = table.column(name) else {
+            continue;
+        };
+        cells.push((col.id as u16, json_to_core(value, col.storage_type)?));
+    }
+    Ok(cells)
 }
 
 fn select_all(table: &str, filter: Option<Expr>) -> Select {
