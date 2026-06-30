@@ -307,7 +307,15 @@ impl<'a> Transaction<'a> {
 
     pub fn truncate(&mut self, table: &str) -> Result<()> {
         let t = self.require_table(table)?.clone();
-        if self.has_staged_for(table) {
+        // Repeating a truncate is harmless (the engine allows it); only block
+        // data writes that would be lost by the truncation.
+        let has_data_writes = self.staged.iter().any(|op| match op {
+            StagedOp::Insert { table: t, .. }
+            | StagedOp::Update { table: t, .. }
+            | StagedOp::Delete { table: t, .. } => t == table,
+            StagedOp::Truncate { .. } => false,
+        });
+        if has_data_writes {
             return Err(KitError::Validation(format!(
                 "truncate cannot be combined with prior writes on {table}"
             )));

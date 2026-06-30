@@ -551,6 +551,28 @@ fn truncate_rejects_referenced_table() {
 }
 
 #[test]
+fn truncate_allows_repeat_in_same_transaction() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    txn.truncate("users").unwrap();
+    txn.truncate("users").unwrap(); // prior truncate is allowed
+    txn.commit().unwrap();
+}
+
+#[test]
+fn truncate_rejects_prior_data_write_in_same_transaction() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
+
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "a@example.com");
+    let err = txn.truncate("users").unwrap_err();
+    assert!(matches!(err, KitError::Validation(_)));
+}
+
+#[test]
 fn upsert_insert_do_nothing_and_do_update() {
     let dir = temp_dir();
     let db = Database::create(&dir, Schema::new(vec![users_table()]).unwrap()).unwrap();
