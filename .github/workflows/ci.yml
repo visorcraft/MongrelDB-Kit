@@ -64,7 +64,7 @@ jobs:
       - name: TypeScript typecheck
         working-directory: MongrelDB-Kit/packages/kit
         run: |
-          npm install --no-save
+          npm install --no-save --ignore-scripts
           npm run check
 
       - name: Python facade import

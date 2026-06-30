@@ -1480,45 +1480,9 @@ fn row_matches_condition(table: &KitTable, row: &Row, condition: &Condition) -> 
                 _ => false,
             }
         }
-        Condition::FmContainsAll {
-            column_id,
-            patterns,
-        } => {
-            let Some(col) = column_by_id(table, *column_id) else {
-                return false;
-            };
-            let Ok(CoreValue::Bytes(bytes)) = json_to_core(
-                row.values.get(&col.name).unwrap_or(&Value::Null),
-                col.storage_type,
-            ) else {
-                return false;
-            };
-            patterns.iter().all(|pattern| {
-                pattern.is_empty()
-                    || bytes
-                        .windows(pattern.len())
-                        .any(|window| window == pattern.as_slice())
-            })
-        }
-        Condition::IsNull { column_id } => {
-            let Some(col) = column_by_id(table, *column_id) else {
-                return false;
-            };
-            matches!(
-                row.values.get(&col.name).unwrap_or(&Value::Null),
-                Value::Null
-            )
-        }
-        Condition::IsNotNull { column_id } => {
-            let Some(col) = column_by_id(table, *column_id) else {
-                return false;
-            };
-            !matches!(
-                row.values.get(&col.name).unwrap_or(&Value::Null),
-                Value::Null
-            )
-        }
-        Condition::Ann { .. } | Condition::SparseMatch { .. } => true,
+        // Conditions the Kit never emits (Ann, SparseMatch, FmContainsAll,
+        // IsNull, IsNotNull) — assume the index already resolved them.
+        _ => true,
     }
 }
 
