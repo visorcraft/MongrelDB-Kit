@@ -6,6 +6,9 @@ use mongreldb_kit::{
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
+mod remote;
+pub use remote::run_remote;
+
 #[derive(Debug, serde::Deserialize)]
 struct Scenario {
     name: String,

@@ -55,5 +55,9 @@ fn main() {
         eprintln!("migration failure conformance failed: {}", e);
         std::process::exit(1);
     }
+    if let Err(e) = conformance_runner::run_remote() {
+        eprintln!("remote conformance failed: {}", e);
+        std::process::exit(1);
+    }
     println!("conformance suite passed");
 }

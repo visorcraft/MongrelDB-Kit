@@ -17,3 +17,8 @@ fn migration_failure() {
 fn phase1_dml() {
     conformance_runner::run_phase1_dml().expect("phase 1 DML conformance failed");
 }
+
+#[test]
+fn remote_typed_client() {
+    conformance_runner::run_remote().expect("remote conformance failed");
+}

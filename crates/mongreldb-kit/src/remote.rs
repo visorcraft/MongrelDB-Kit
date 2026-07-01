@@ -192,7 +192,7 @@ pub struct RemoteTransaction<'a> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
+#[serde(rename_all = "snake_case")]
 enum TxnOp {
     Put {
         table: String,
@@ -272,6 +272,16 @@ pub enum RemoteOpResult {
     NotFound,
 }
 
+impl RemoteOpResult {
+    /// The committed post-image row, when `returning` was requested.
+    pub fn row_ref(&self) -> Option<&Map<String, Value>> {
+        match self {
+            RemoteOpResult::Put { row, .. } | RemoteOpResult::Upsert { row, .. } => row.as_ref(),
+            _ => None,
+        }
+    }
+}
+
 impl<'a> RemoteTransaction<'a> {
     pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
         self.idempotency_key = Some(key.into());
@@ -279,7 +289,7 @@ impl<'a> RemoteTransaction<'a> {
     }
 
     /// Stage an insert (a `put`).
-    pub fn insert(&mut self, table: &str, row: Map<String, Value>) -> Result<&mut Self> {
+    pub fn insert(mut self, table: &str, row: Map<String, Value>) -> Result<Self> {
         let cells = self.db.cells(table, &row)?;
         self.ops.push(TxnOp::Put {
             table: table.to_string(),
@@ -290,7 +300,7 @@ impl<'a> RemoteTransaction<'a> {
     }
 
     /// Stage an insert that returns the committed post-image row.
-    pub fn insert_returning(&mut self, table: &str, row: Map<String, Value>) -> Result<&mut Self> {
+    pub fn insert_returning(mut self, table: &str, row: Map<String, Value>) -> Result<Self> {
         let cells = self.db.cells(table, &row)?;
         self.ops.push(TxnOp::Put {
             table: table.to_string(),
@@ -302,11 +312,11 @@ impl<'a> RemoteTransaction<'a> {
 
     /// Stage an upsert (DO NOTHING unless `update` cells are supplied).
     pub fn upsert(
-        &mut self,
+        mut self,
         table: &str,
         row: Map<String, Value>,
         update: Option<Map<String, Value>>,
-    ) -> Result<&mut Self> {
+    ) -> Result<Self> {
         let cells = self.db.cells(table, &row)?;
         let update_cells = match update {
             Some(u) => Some(self.db.cells(table, &u)?),
@@ -322,7 +332,7 @@ impl<'a> RemoteTransaction<'a> {
     }
 
     /// Stage a delete of the row with the given primary-key scalar value.
-    pub fn delete_by_pk(&mut self, table: &str, pk: Value) -> Result<&mut Self> {
+    pub fn delete_by_pk(mut self, table: &str, pk: Value) -> Result<Self> {
         let t = self.db.require_table(table)?;
         if t.primary_key.is_none() {
             return Err(KitError::Validation(format!(
