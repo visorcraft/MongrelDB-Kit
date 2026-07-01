@@ -24,6 +24,9 @@ import {
 	isNull,
 	and,
 	or,
+	inSubquery,
+	exists,
+	notExists,
 	asc,
 	desc,
 	KitError,
@@ -494,6 +497,32 @@ function sortJoinRows(rows: Record<string, any>[], order: string[]): void {
 	});
 }
 
+/** Build a subquery SelectBuilder from a `{ table, filter?, columns? }` spec. */
+function subqueryBuilder(kit: any, schema: Schema, spec: any): any {
+	const tspec = schema.table(spec.table);
+	let builder: any = kit.selectFrom(tspec);
+	if (spec.filter) builder = builder.where(buildPredicate(tspec, spec.filter));
+	if (spec.columns) {
+		builder = builder.select(
+			spec.columns.map((n: string) => tspec.columns.find((c) => c.name === n)!)
+		);
+	}
+	return builder;
+}
+
+/** Translate the single-key friendly subquery filter into a TS predicate. */
+function buildSubqueryPredicate(kit: any, schema: Schema, outer: TableSpec, filter: any): any {
+	const [key, val] = Object.entries(filter)[0] as [string, any];
+	if (key === 'exists') return exists(subqueryBuilder(kit, schema, val));
+	if (key === 'not_exists') return notExists(subqueryBuilder(kit, schema, val));
+	const [op, spec] = Object.entries(val)[0] as [string, any];
+	if (op === 'in_subquery') {
+		const col = outer.columns.find((c) => c.name === key)!;
+		return inSubquery(col, subqueryBuilder(kit, schema, spec));
+	}
+	throw new Error(`unsupported subquery filter: ${key}.${op}`);
+}
+
 describe('mongreldb-kit conformance', () => {
 	it('encodes keys byte-identically to the shared vectors', () => {
 		const fixture = loadJson('keys.json');
@@ -699,6 +728,40 @@ describe('mongreldb-kit conformance', () => {
 					sortAggRows(exp, scenario.order);
 				}
 				expect(rows, `cte ${scenario.name}`).toEqual(exp);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs subquery scenarios against the TypeScript kit', () => {
+		const raw = loadJson('subqueries.json');
+		const expected = loadJson('expected/subqueries.json');
+		const schema = schemaFromFixture(raw.schema);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-subq-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const [tableName, rows] of Object.entries(raw.seed)) {
+				const tspec = schema.table(tableName);
+				for (const row of rows as any[]) {
+					kit.insertInto(tspec).values(normalizeRowForTs(tspec, row)).executeSync();
+				}
+			}
+			for (const scenario of raw.scenarios) {
+				const outer = schema.table(scenario.table);
+				const predicate = buildSubqueryPredicate(kit, schema, outer, scenario.filter);
+				const actual = (kit.selectFrom(outer).where(predicate).executeSync() as any[]).map((r) =>
+					normalizeRowForCompare(outer, r)
+				);
+				const exp = (expected[scenario.name].rows as any[]).map((r) =>
+					normalizeRowForCompare(outer, r)
+				);
+				if (scenario.order) {
+					sortAggRows(actual, scenario.order);
+					sortAggRows(exp, scenario.order);
+				}
+				expect(actual, `subquery ${scenario.name}`).toEqual(exp);
 			}
 		} finally {
 			kit.close();

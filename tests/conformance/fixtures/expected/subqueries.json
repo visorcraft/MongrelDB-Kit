@@ -1,0 +1,28 @@
+{
+  "in_subquery": {
+    "rows": [
+      { "id": 1, "name": "alice" },
+      { "id": 2, "name": "bob" }
+    ]
+  },
+  "in_subquery_filtered": {
+    "rows": [{ "id": 1, "name": "alice" }]
+  },
+  "exists_true": {
+    "rows": [
+      { "id": 1, "name": "alice" },
+      { "id": 2, "name": "bob" },
+      { "id": 3, "name": "carol" }
+    ]
+  },
+  "exists_false": {
+    "rows": []
+  },
+  "not_exists_true": {
+    "rows": [
+      { "id": 1, "name": "alice" },
+      { "id": 2, "name": "bob" },
+      { "id": 3, "name": "carol" }
+    ]
+  }
+}

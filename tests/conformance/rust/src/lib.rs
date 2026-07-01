@@ -840,6 +840,136 @@ pub fn run_ctes() -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Subquery conformance (uncorrelated IN-subquery / EXISTS / NOT EXISTS)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct SubqueryScenario {
+    name: String,
+    table: String,
+    filter: Map<String, Value>,
+    #[serde(default)]
+    order: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SubqueryFixture {
+    schema: Schema,
+    seed: Map<String, Value>,
+    scenarios: Vec<SubqueryScenario>,
+}
+
+/// Build a kit `Select` from a `{ table, filter?, columns? }` subselect spec,
+/// mirroring the Python facade's `parse_subselect`.
+fn subselect_to_select(spec: &Value) -> Result<Select, String> {
+    let obj = spec.as_object().ok_or("subselect must be an object")?;
+    let table = obj
+        .get("table")
+        .and_then(|v| v.as_str())
+        .ok_or("subselect requires a table")?
+        .to_string();
+    let filter = match obj.get("filter") {
+        Some(Value::Object(m)) => Some(object_filter_to_expr(m)?),
+        _ => None,
+    };
+    let columns = obj
+        .get("columns")
+        .and_then(|v| v.as_array())
+        .map(|cs| {
+            cs.iter()
+                .filter_map(|c| c.as_str())
+                .map(|c| Expr::Column(c.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Select {
+        table,
+        columns,
+        filter,
+        order_by: Vec::new(),
+        limit: None,
+        offset: None,
+    })
+}
+
+/// Translate the single-key friendly subquery filter into a kit `Expr`:
+/// `{ exists: sub }`, `{ not_exists: sub }`, or `{ col: { in_subquery: sub } }`.
+fn subquery_filter_to_expr(map: &Map<String, Value>) -> Result<Expr, String> {
+    let (key, val) = map.iter().next().ok_or("empty subquery filter")?;
+    match key.as_str() {
+        "exists" => Ok(Expr::Exists(Box::new(subselect_to_select(val)?))),
+        "not_exists" => Ok(Expr::NotExists(Box::new(subselect_to_select(val)?))),
+        column => {
+            let (op, operand) = val
+                .as_object()
+                .and_then(|m| m.iter().next())
+                .ok_or("column subquery predicate must be { in_subquery: ... }")?;
+            if op == "in_subquery" {
+                Ok(Expr::InSubquery(
+                    Box::new(Expr::Column(column.to_string())),
+                    Box::new(subselect_to_select(operand)?),
+                ))
+            } else {
+                Err(format!("unsupported subquery operator {op}"))
+            }
+        }
+    }
+}
+
+pub fn run_subqueries() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: SubqueryFixture = load_json(&fixtures.join("subqueries.json"))?;
+    let expected: Map<String, Value> = load_json(&fixtures.join("expected/subqueries.json"))?;
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+
+    for (table, rows) in &fixture.seed {
+        let rows = rows
+            .as_array()
+            .ok_or(format!("seed for {table} is not an array"))?;
+        for row in rows {
+            let row = row
+                .as_object()
+                .ok_or(format!("seed row for {table} is not an object"))?
+                .clone();
+            let mut txn = db.begin().map_err(|e| e.to_string())?;
+            txn.insert(table, row).map_err(|e| e.to_string())?;
+            txn.commit().map_err(|e| e.to_string())?;
+        }
+    }
+
+    for scenario in &fixture.scenarios {
+        let body = Select {
+            table: scenario.table.clone(),
+            columns: Vec::new(),
+            filter: Some(subquery_filter_to_expr(&scenario.filter)?),
+            order_by: Vec::new(),
+            limit: None,
+            offset: None,
+        };
+        let txn = db.begin().map_err(|e| e.to_string())?;
+        let mut rows: Vec<Map<String, Value>> = txn
+            .select(&Query::Select(body))
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|r| r.values)
+            .collect();
+        txn.commit().map_err(|e| e.to_string())?;
+        if let Some(order) = &scenario.order {
+            sort_flat_rows(&mut rows, order);
+        }
+        let actual = Value::Array(rows.into_iter().map(Value::Object).collect());
+        let exp = expected
+            .get(&scenario.name)
+            .and_then(|e| e.get("rows"))
+            .ok_or(format!("missing expected rows for {}", scenario.name))?;
+        assert_eq_json(&scenario.name, &actual, exp)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Phase 1 DML conformance
 // ---------------------------------------------------------------------------
 

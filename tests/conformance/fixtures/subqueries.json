@@ -1,0 +1,125 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "users",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "name",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      },
+      {
+        "id": 2,
+        "name": "orders",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "user_id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          },
+          {
+            "id": 3,
+            "name": "amount",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "seed": {
+    "users": [
+      { "id": 1, "name": "alice" },
+      { "id": 2, "name": "bob" },
+      { "id": 3, "name": "carol" }
+    ],
+    "orders": [
+      { "id": 10, "user_id": 1, "amount": 100 },
+      { "id": 11, "user_id": 1, "amount": 200 },
+      { "id": 12, "user_id": 2, "amount": 50 }
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "in_subquery",
+      "table": "users",
+      "order": "+id",
+      "filter": { "id": { "in_subquery": { "table": "orders", "columns": ["user_id"] } } }
+    },
+    {
+      "name": "in_subquery_filtered",
+      "table": "users",
+      "order": "+id",
+      "filter": {
+        "id": {
+          "in_subquery": {
+            "table": "orders",
+            "columns": ["user_id"],
+            "filter": { "amount": { "gte": 150 } }
+          }
+        }
+      }
+    },
+    {
+      "name": "exists_true",
+      "table": "users",
+      "order": "+id",
+      "filter": { "exists": { "table": "orders", "filter": { "amount": { "gte": 150 } } } }
+    },
+    {
+      "name": "exists_false",
+      "table": "users",
+      "order": "+id",
+      "filter": { "exists": { "table": "orders", "filter": { "amount": { "gte": 1000 } } } }
+    },
+    {
+      "name": "not_exists_true",
+      "table": "users",
+      "order": "+id",
+      "filter": { "not_exists": { "table": "orders", "filter": { "amount": { "gte": 1000 } } } }
+    }
+  ]
+}
