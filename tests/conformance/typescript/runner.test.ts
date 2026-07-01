@@ -27,6 +27,7 @@ import {
 	inSubquery,
 	exists,
 	notExists,
+	joinEq,
 	asc,
 	desc,
 	KitError,
@@ -37,7 +38,13 @@ import {
 	encodeUniqueKey,
 	encodeRowGuardKey
 } from '../../../packages/kit/src/index.js';
-import type { TableSpec, ColumnSpec, DefaultValue, Migration } from '../../../packages/kit/src/index.js';
+import type {
+	TableSpec,
+	ColumnSpec,
+	DefaultValue,
+	Migration,
+	JoinPredicate
+} from '../../../packages/kit/src/index.js';
 
 const FIXTURES_DIR = new URL('../fixtures', import.meta.url).pathname;
 
@@ -475,10 +482,17 @@ function joinValueAt(row: Record<string, any>, qualified: string): unknown {
 }
 
 /** Turn the fixture's declarative `{ eq: [{column}, {column}] }` predicate into
- * the JS closure the TypeScript join builder expects. */
-function makeJoinOn(on: any): (row: Record<string, any>) => boolean {
-	const [left, right] = on.eq;
-	return (row) => valuesEqual(joinValueAt(row, left.column), joinValueAt(row, right.column));
+ * a `joinEq` predicate so the builder takes its indexed FK-probe fast path. */
+function makeJoinOn(schema: Schema, rightTable: TableSpec, on: any): JoinPredicate {
+	const parse = (qualified: string): [TableSpec, ColumnSpec] => {
+		const [t, col] = qualified.split('.');
+		const tspec = schema.table(t);
+		return [tspec, tspec.columns.find((c) => c.name === col)!];
+	};
+	const [t1, c1] = parse(on.eq[0].column);
+	const [t2, c2] = parse(on.eq[1].column);
+	// The right side is the table being joined; the other side is the left.
+	return t1.name === rightTable.name ? joinEq(t2, c2, t1, c1) : joinEq(t1, c1, t2, c2);
 }
 
 /** Sort join result rows by qualified `table.column` keys for a deterministic
@@ -677,9 +691,9 @@ describe('mongreldb-kit conformance', () => {
 					if (clause.kind === 'cross') {
 						builder = builder.crossJoin(joined);
 					} else if (clause.kind === 'left') {
-						builder = builder.leftJoin(joined, makeJoinOn(clause.on));
+						builder = builder.leftJoin(joined, makeJoinOn(schema, joined, clause.on));
 					} else {
-						builder = builder.innerJoin(joined, makeJoinOn(clause.on));
+						builder = builder.innerJoin(joined, makeJoinOn(schema, joined, clause.on));
 					}
 				}
 				const order: string[] = scenario.order ?? [];

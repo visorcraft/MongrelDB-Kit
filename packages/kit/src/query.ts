@@ -104,6 +104,48 @@ export type JoinRow = Record<string, Record<string, unknown> | null>;
 /** Join condition / post-join filter evaluated in JS over a {@link JoinRow}. */
 export type JoinPredicate = (row: JoinRow) => boolean;
 
+/** The column-equality a {@link joinEq} predicate carries so the join builder
+ * can probe the right table by index instead of full-scanning it. */
+export interface JoinEqKey {
+	leftTable: string;
+	leftColumn: ColumnSpec;
+	rightTable: string;
+	rightColumn: ColumnSpec;
+}
+
+function joinValuesEqual(a: unknown, b: unknown): boolean {
+	if (a === null || a === undefined || b === null || b === undefined) return a === b;
+	if (typeof a === 'bigint' || typeof b === 'bigint') return BigInt(a as never) === BigInt(b as never);
+	return a === b;
+}
+
+/**
+ * A declarative join predicate equating `leftTable.leftColumn` with
+ * `rightTable.rightColumn`. Behaves like the closure form, but the builder can
+ * introspect the equality to fetch the right table by an index probe over the
+ * distinct left keys instead of a full scan. Prefer this over a hand-written
+ * closure for FK joins.
+ */
+export function joinEq(
+	leftTable: TableSpec,
+	leftColumn: ColumnSpec,
+	rightTable: TableSpec,
+	rightColumn: ColumnSpec
+): JoinPredicate {
+	const pred: JoinPredicate & { __eqKey?: JoinEqKey } = (row) =>
+		joinValuesEqual(
+			(row[leftTable.name] as Record<string, unknown> | null)?.[leftColumn.name],
+			(row[rightTable.name] as Record<string, unknown> | null)?.[rightColumn.name]
+		);
+	pred.__eqKey = {
+		leftTable: leftTable.name,
+		leftColumn,
+		rightTable: rightTable.name,
+		rightColumn
+	};
+	return pred;
+}
+
 /** A single column aggregate used inside `GroupBuilder.aggregate`. `distinct`
  * de-duplicates the column's values (e.g. `COUNT(DISTINCT col)`); it requires a
  * `column` and is a no-op for `min`/`max`. */
@@ -451,6 +493,56 @@ function queryNativeRows(
 		.table(table.name)
 		.query(conditions)
 		.map((rowJs) => ({ rowId: rowJs.rowId, row: rowFromRowJs(table, rowJs) }));
+}
+
+/**
+ * Fetch the right-side rows for a join clause. For an FK-equality clause built
+ * with {@link joinEq} whose right column is probe-able, fetch only the rows
+ * matching the distinct left keys — one indexed query per key, unioned — instead
+ * of scanning the whole table. Falls back to a full scan otherwise. The clause
+ * predicate is still re-checked per combined row, so the result is identical.
+ */
+function joinRightRows(
+	db: NativeDatabase,
+	clause: { table: TableSpec; kind: 'inner' | 'left' | 'cross'; on?: JoinPredicate },
+	leftRows: JoinRow[]
+): Record<string, unknown>[] {
+	const key =
+		clause.kind !== 'cross'
+			? (clause.on as (JoinPredicate & { __eqKey?: JoinEqKey }) | undefined)?.__eqKey
+			: undefined;
+	if (key && key.rightTable === clause.table.name) {
+		const seen = new Set<string>();
+		const values: unknown[] = [];
+		for (const combo of leftRows) {
+			const v = (combo[key.leftTable] as Record<string, unknown> | null)?.[key.leftColumn.name];
+			if (v !== null && v !== undefined) {
+				const k = String(v);
+				if (!seen.has(k)) {
+					seen.add(k);
+					values.push(v);
+				}
+			}
+		}
+		const rows: Record<string, unknown>[] = [];
+		const rowSeen = new Set<bigint>();
+		let probed = true;
+		for (const v of values) {
+			const cond = makeEqCondition(clause.table, key.rightColumn, v);
+			if (!cond) {
+				probed = false;
+				break;
+			}
+			for (const m of queryNativeRows(db, clause.table, [cond])) {
+				if (!rowSeen.has(m.rowId)) {
+					rowSeen.add(m.rowId);
+					rows.push(m.row);
+				}
+			}
+		}
+		if (probed) return rows;
+	}
+	return fullScanRows(db, clause.table).map((m) => m.row);
 }
 
 function andResidual(predicates: Predicate[]): Predicate | undefined {
@@ -1201,9 +1293,10 @@ export class JoinBuilder {
 		let combos: JoinRow[] = baseRows.map((m) => ({ [this.baseTable.name]: m.row }));
 
 		for (const clause of this.clauses) {
-			// ponytail: nested-loop join with no predicate pushdown — the joined
-			// table is fully scanned in JS once and re-evaluated per combination.
-			const joinRows = fullScanRows(db, clause.table).map((m) => m.row);
+			// FK-equality clauses (joinEq) probe the right table by index over the
+			// distinct left keys; other clauses full-scan. Either way the predicate
+			// below re-checks each combination, so results are identical.
+			const joinRows = joinRightRows(db, clause, combos);
 			const next: JoinRow[] = [];
 			for (const combo of combos) {
 				if (clause.kind === 'cross') {
