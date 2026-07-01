@@ -33,6 +33,10 @@ export interface ColumnSpec<
 	generated: TGenerated;
 	/** Vector dimension for an `embedding` column (required for ANN). */
 	embeddingDim?: number;
+	/** Encrypt this column at rest (requires an encrypted database). */
+	encrypted?: boolean;
+	/** Encrypt but keep queryable via deterministic tokens. */
+	encryptedIndexable?: boolean;
 	enumValues?: string[];
 	check?: (value: unknown) => boolean | string;
 	min?: number;

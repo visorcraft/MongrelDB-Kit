@@ -74,6 +74,12 @@ pub(crate) fn to_core_flags(table: &KitTable, column: &Column) -> ColumnFlags {
     if table.primary_key.contains(&column.name) || column.primary_key {
         flags = flags.with(ColumnFlags::PRIMARY_KEY);
     }
+    if column.encrypted {
+        flags = flags.with(ColumnFlags::ENCRYPTED);
+    }
+    if column.encrypted_indexable {
+        flags = flags.with(ColumnFlags::ENCRYPTED_INDEXABLE);
+    }
     flags
 }
 

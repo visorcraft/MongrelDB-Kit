@@ -24,6 +24,9 @@ type MongrelColumnSpec = {
 	primaryKey: boolean;
 	nullable: boolean;
 	autoIncrement?: boolean;
+	embeddingDim?: number;
+	encrypted?: boolean;
+	encryptedIndexable?: boolean;
 };
 
 type MongrelDatabase = NativeDatabase & {
@@ -146,7 +149,9 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			// AUTO_INCREMENT allocator (a per-table WAL-durable counter) instead
 			// of the legacy __kit_sequences hot row.
 			autoIncrement: col.default?.kind === 'sequence',
-			embeddingDim: col.embeddingDim
+			embeddingDim: col.embeddingDim,
+			encrypted: col.encrypted,
+			encryptedIndexable: col.encryptedIndexable
 		})),
 		indexes
 	};

@@ -90,6 +90,13 @@ pub struct Column {
     /// Vector dimension for an `Embedding` column (required for ANN).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_dim: Option<u32>,
+    /// Encrypt this column's page payload at rest (requires an encrypted db).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub encrypted: bool,
+    /// Encrypt the column but keep it queryable via deterministic equality
+    /// tokens / order-preserving encoding (requires an encrypted db).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub encrypted_indexable: bool,
 }
 
 impl Column {
@@ -112,6 +119,8 @@ impl Column {
             regex: None,
             check_expr: None,
             embedding_dim: None,
+            encrypted: false,
+            encrypted_indexable: false,
         }
     }
 }

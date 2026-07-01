@@ -1,0 +1,56 @@
+{
+  "passphrase": "conformance-pass-1",
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "secrets",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "code",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false,
+            "encrypted_indexable": true
+          },
+          {
+            "id": 3,
+            "name": "note",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false,
+            "encrypted": true
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [{ "name": "idx_secrets_code", "columns": ["code"], "unique": false }],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "code": "alpha", "note": "first secret" },
+    { "id": 2, "code": "beta", "note": "second secret" },
+    { "id": 3, "code": "gamma", "note": "third secret" }
+  ],
+  "scenarios": [
+    { "name": "eq_code", "table": "secrets", "order": "+id", "filter": { "code": "beta" } },
+    { "name": "readback", "table": "secrets", "order": "+id", "filter": { "id": 1 } }
+  ]
+}

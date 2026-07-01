@@ -48,6 +48,38 @@ impl Database {
         })
     }
 
+    /// Open an existing page-encrypted kit database with its passphrase.
+    pub fn open_encrypted(path: &Path, passphrase: &str) -> Result<Self> {
+        let inner = CoreDatabase::open_encrypted(path, passphrase)?;
+        let schema = load_schema(path)?;
+        ensure_internal_tables(&inner)?;
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+        })
+    }
+
+    /// Create a fresh page-encrypted kit database (AES-256-GCM; the passphrase
+    /// derives the key hierarchy). Columns flagged `encrypted` /
+    /// `encrypted_indexable` are encrypted at rest.
+    pub fn create_encrypted(path: &Path, schema: KitSchema, passphrase: &str) -> Result<Self> {
+        std::fs::create_dir_all(path)?;
+        let inner = CoreDatabase::create_encrypted(path, passphrase)?;
+        ensure_internal_tables(&inner)?;
+        store_schema(path, &schema)?;
+        for table in &schema.tables {
+            create_core_table(&inner, &table.name, to_core_schema(table))?;
+        }
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+        })
+    }
+
     /// Create a fresh kit database with the given schema.
     pub fn create(path: &Path, schema: KitSchema) -> Result<Self> {
         std::fs::create_dir_all(path)?;

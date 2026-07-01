@@ -1,0 +1,8 @@
+{
+  "eq_code": {
+    "rows": [{ "id": 2, "code": "beta", "note": "second secret" }]
+  },
+  "readback": {
+    "rows": [{ "id": 1, "code": "alpha", "note": "first secret" }]
+  }
+}

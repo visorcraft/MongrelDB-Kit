@@ -135,6 +135,24 @@ impl PyDatabase {
     }
 
     #[staticmethod]
+    fn open_encrypted(path: &str, passphrase: &str) -> PyResult<Self> {
+        let db = Database::open_encrypted(Path::new(path), passphrase).map_err(map_err)?;
+        Ok(Self {
+            db: Some(Rc::new(db)),
+        })
+    }
+
+    #[staticmethod]
+    fn create_encrypted(path: &str, schema_json: &str, passphrase: &str) -> PyResult<Self> {
+        let schema: KitSchema = serde_json::from_str(schema_json).map_err(py_json_err)?;
+        let db =
+            Database::create_encrypted(Path::new(path), schema, passphrase).map_err(map_err)?;
+        Ok(Self {
+            db: Some(Rc::new(db)),
+        })
+    }
+
+    #[staticmethod]
     fn create(path: &str, schema_json: &str) -> PyResult<Self> {
         let schema: KitSchema = serde_json::from_str(schema_json).map_err(py_json_err)?;
         let db = Database::create(Path::new(path), schema).map_err(map_err)?;

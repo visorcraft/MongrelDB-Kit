@@ -79,6 +79,8 @@ function columnFromJson(col: any): ColumnSpec {
 	if (col.min_length !== undefined) opts.minLength = col.min_length;
 	if (col.max_length !== undefined) opts.maxLength = col.max_length;
 	if (col.regex !== undefined) opts.regex = new RegExp(col.regex);
+	if (col.encrypted !== undefined) opts.encrypted = col.encrypted;
+	if (col.encrypted_indexable !== undefined) opts.encryptedIndexable = col.encrypted_indexable;
 	const c = column(col.name, col.storage_type, opts) as ColumnSpec;
 	c.id = col.id;
 	if (col.embedding_dim !== undefined) c.embeddingDim = col.embedding_dim;
@@ -880,6 +882,39 @@ describe('mongreldb-kit conformance', () => {
 				const ids = rows.map((r) => Number(r.id)).sort((a, b) => a - b);
 				const want = [...(scenario.expect_ids as number[])].sort((a, b) => a - b);
 				expect(ids, `sparse ${scenario.name}`).toEqual(want);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs encrypted-column scenarios against the TypeScript kit', () => {
+		const raw = loadJson('encrypted.json');
+		const expected = loadJson('expected/encrypted.json');
+		const schema = schemaFromFixture(raw.schema);
+		const baseTable = schema.table(raw.schema.tables[0].name);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-enc-'));
+		const kit = KitDatabase.openSync(tmpDir, schema, {
+			encryption: { passphrase: raw.passphrase }
+		});
+		try {
+			for (const row of raw.rows) {
+				kit.insertInto(baseTable).values(normalizeRowForTs(baseTable, row)).executeSync();
+			}
+			for (const scenario of raw.scenarios) {
+				const tspec = schema.table(scenario.table);
+				const rows = (
+					kit.selectFrom(tspec).where(buildPredicate(tspec, scenario.filter)).executeSync() as any[]
+				).map((r) => normalizeRowForCompare(tspec, r));
+				const exp = (expected[scenario.name].rows as any[]).map((r) =>
+					normalizeRowForCompare(tspec, r)
+				);
+				if (scenario.order) {
+					sortAggRows(rows, scenario.order);
+					sortAggRows(exp, scenario.order);
+				}
+				expect(rows, `encrypted ${scenario.name}`).toEqual(exp);
 			}
 		} finally {
 			kit.close();

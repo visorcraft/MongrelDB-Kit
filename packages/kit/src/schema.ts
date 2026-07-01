@@ -22,6 +22,10 @@ export type ColumnOptions = {
 	minLength?: number;
 	maxLength?: number;
 	regex?: RegExp;
+	/** Encrypt this column's payload at rest (requires an encrypted database). */
+	encrypted?: boolean;
+	/** Encrypt but keep queryable via deterministic tokens (encrypted database). */
+	encryptedIndexable?: boolean;
 };
 
 type OptsNull<TOpts extends ColumnOptions> = TOpts extends { nullable: true } ? true : false;
@@ -56,7 +60,9 @@ export function column<
 		max: opts?.max,
 		minLength: opts?.minLength,
 		maxLength: opts?.maxLength,
-		regex: opts?.regex
+		regex: opts?.regex,
+		encrypted: opts?.encrypted,
+		encryptedIndexable: opts?.encryptedIndexable
 	};
 }
 

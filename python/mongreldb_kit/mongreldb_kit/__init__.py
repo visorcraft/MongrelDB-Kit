@@ -85,6 +85,18 @@ class Database:
         schema_json = schema if isinstance(schema, str) else json.dumps(schema)
         return Database(_Database.create(path, schema_json))
 
+    @staticmethod
+    def open_encrypted(path: str, passphrase: str) -> "Database":
+        """Open a page-encrypted database with its passphrase."""
+        return Database(_Database.open_encrypted(path, passphrase))
+
+    @staticmethod
+    def create_encrypted(path: str, schema: Any, passphrase: str) -> "Database":
+        """Create a page-encrypted database (AES-256-GCM). Columns flagged
+        ``encrypted`` / ``encrypted_indexable`` in the schema are encrypted."""
+        schema_json = schema if isinstance(schema, str) else json.dumps(schema)
+        return Database(_Database.create_encrypted(path, schema_json, passphrase))
+
     def begin(self) -> "Transaction":
         return Transaction(self._handle.begin())
 
