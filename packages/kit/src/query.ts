@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { tableFromIPC, type Table as ArrowTable } from 'apache-arrow';
 import { ConditionKind } from 'mongreldb/native.js';
 import type { Database as NativeDatabase, ConditionSpec, Transaction } from 'mongreldb/native.js';
 import { KitDatabase, runSyncTxn } from './db.js';
@@ -1336,6 +1337,57 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> implements S
 
 	async execute(): Promise<TResult> {
 		return this.executeSync();
+	}
+
+	/**
+	 * Execute against the native engine and return the matching rows as an Arrow
+	 * (columnar) table — zero-copy from the engine. TypeScript-only: the
+	 * Rust/Python kit returns row maps.
+	 *
+	 * The native Arrow path is index-driven and needs at least one pushed-down
+	 * condition, so a `where`/`annSearch`/`sparseMatch` clause is required. It
+	 * applies only the pushed-down predicate (exact for `=`/range/`in`, a
+	 * superset for `contains`/`like`) and returns every column — `orderBy`,
+	 * `limit`, `offset`, and column projection are NOT applied. Use
+	 * {@link executeSync} for full query semantics.
+	 */
+	executeArrow(): ArrowTable {
+		if (this._source) {
+			throw new KitError('executeArrow is not supported for joined/CTE sources');
+		}
+		const db = this.kit.nativeDb;
+		let conditions: ConditionSpec[];
+		if (this._ann) {
+			conditions = [
+				{
+					kind: ConditionKind.Ann,
+					columnId: this._ann.column.id,
+					embedding: this._ann.vector,
+					k: this._ann.k
+				}
+			];
+		} else if (this._sparse) {
+			conditions = [
+				{
+					kind: ConditionKind.SparseMatch,
+					columnId: this._sparse.column.id,
+					sparseTokens: this._sparse.query.map((p) => p[0]),
+					sparseWeights: this._sparse.query.map((p) => p[1]),
+					k: this._sparse.k
+				}
+			];
+		} else if (this._where) {
+			const plan = compilePredicate(this.table, this._where);
+			if (plan.alwaysFalse || plan.conditions.length === 0) {
+				throw new KitError(
+					'executeArrow requires a pushed-down condition; this predicate has none — use executeSync'
+				);
+			}
+			conditions = plan.conditions;
+		} else {
+			throw new KitError('executeArrow requires a where/annSearch/sparseMatch clause');
+		}
+		return tableFromIPC(db.table(this.table.name).queryArrow(conditions));
 	}
 }
 

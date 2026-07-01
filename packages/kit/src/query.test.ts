@@ -858,3 +858,21 @@ describe('DML returning and upsert', () => {
 		});
 	});
 });
+
+describe('executeArrow (columnar output)', () => {
+	it('returns pushed-down rows as an Arrow table; rejects a residual-only predicate', () => {
+		withDbSync((db) => {
+			db.insertInto(orders).values({ id: 1n, userId: 1n, status: 'paid', amount: 10n, total: 10 }).executeSync();
+			db.insertInto(orders).values({ id: 2n, userId: 1n, status: 'open', amount: 5n, total: 5 }).executeSync();
+			db.insertInto(orders).values({ id: 3n, userId: 2n, status: 'paid', amount: 7n, total: 7 }).executeSync();
+
+			// amount > 6 pushes a RangeInt condition (ids 1 and 3).
+			const arrow = db.selectFrom(orders).where(gt(orders.amount, 6n)).executeArrow();
+			expect(arrow.numRows).toBe(2);
+			expect([...(arrow.getChild('id')?.toArray() ?? [])].map(Number).sort()).toEqual([1, 3]);
+
+			// No where clause at all is rejected (the Arrow path needs a condition).
+			expect(() => db.selectFrom(orders).executeArrow()).toThrow();
+		});
+	});
+});
