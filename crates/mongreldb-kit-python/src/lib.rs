@@ -325,6 +325,30 @@ impl PyDatabase {
         res.map_err(map_err)
     }
 
+    /// Rank rows by Jaccard set-similarity between `query` and the string set in
+    /// `column`, returning the top `k` as `{row, similarity}` dicts.
+    fn set_similarity(
+        &self,
+        py: Python<'_>,
+        table: &str,
+        column: &str,
+        query: Vec<String>,
+        k: usize,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let hits = self
+            .require_db()?
+            .set_similarity(table, column, &query, k)
+            .map_err(map_err)?;
+        hits.iter()
+            .map(|h| {
+                let dict = PyDict::new(py);
+                dict.set_item("row", json_map_to_pydict(py, &h.row.values)?)?;
+                dict.set_item("similarity", h.similarity)?;
+                dict.into_py_any(py)
+            })
+            .collect()
+    }
+
     /// Explain how `filter` (the friendly filter object) would push down against
     /// `table`. Returns a JSON object; does not run the query.
     fn explain(&self, py: Python<'_>, table: &str, filter: Py<PyAny>) -> PyResult<String> {

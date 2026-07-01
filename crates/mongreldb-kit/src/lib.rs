@@ -13,7 +13,7 @@ pub mod schema;
 pub mod tsv;
 pub mod txn;
 
-pub use db::{ApproxAggKind, ApproxAggregate, Database, ExplainPlan};
+pub use db::{ApproxAggKind, ApproxAggregate, Database, ExplainPlan, SimilarRow};
 pub use error::{KitError, Result};
 pub use migrate::migrate;
 pub use query::JoinRow;

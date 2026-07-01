@@ -460,6 +460,31 @@ def test_scan_batched_streams_all_rows():
     db.close()
 
 
+def test_set_similarity():
+    schema = {
+        "tables": [
+            table(
+                name="docs",
+                id=1,
+                columns=[int("id", 1, primary_key=True), text("tags", 2, nullable=True)],
+                primary_key="id",
+            )
+        ]
+    }
+    db = Database.create(tmp_db(), schema)
+    with db.begin() as txn:
+        txn.insert("docs", {"id": 1, "tags": json.dumps(["a", "b", "c"])})
+        txn.insert("docs", {"id": 2, "tags": json.dumps(["a", "b", "x", "y"])})
+        txn.insert("docs", {"id": 3, "tags": json.dumps(["z"])})
+        txn.commit()
+    hits = db.set_similarity("docs", "tags", ["a", "b", "c"], 10)
+    assert [h["row"]["id"] for h in hits] == [1, 2]
+    assert abs(hits[0]["similarity"] - 1.0) < 1e-9
+    assert abs(hits[1]["similarity"] - 0.4) < 1e-9
+    assert len(db.set_similarity("docs", "tags", ["a", "b", "c"], 1)) == 1
+    db.close()
+
+
 def test_explain_reports_pushdown():
     db = Database.create(tmp_db(), users_orders_schema())
     # id is the primary key → equality pushes down exactly.

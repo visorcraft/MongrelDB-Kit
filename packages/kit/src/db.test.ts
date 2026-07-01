@@ -152,6 +152,31 @@ describe('KitDatabase', () => {
 		}
 	});
 
+	it('setSimilarity ranks rows by Jaccard set-similarity', () => {
+		const t = table('t', {
+			columns: [int('id', { primaryKey: true }), json('tags')],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([t]));
+		try {
+			db.insertInto(t).values({ id: 1n, tags: JSON.stringify(['a', 'b', 'c']) }).executeSync();
+			db.insertInto(t).values({ id: 2n, tags: JSON.stringify(['a', 'b', 'x', 'y']) }).executeSync();
+			db.insertInto(t).values({ id: 3n, tags: JSON.stringify(['z']) }).executeSync();
+
+			const hits = db.setSimilarity('t', 'tags', ['a', 'b', 'c'], 10);
+			expect(hits.map((h) => Number(h.row.id))).toEqual([1, 2]); // row 3 excluded
+			expect(hits[0].similarity).toBeCloseTo(1.0, 9);
+			expect(hits[1].similarity).toBeCloseTo(0.4, 9); // |{a,b}| / |{a,b,c,x,y}|
+
+			expect(db.setSimilarity('t', 'tags', ['a', 'b', 'c'], 1)).toHaveLength(1);
+			expect(() => db.setSimilarity('t', 'missing', ['a'], 1)).toThrow();
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	describe('encrypted databases', () => {
 		const makeSchema = () => {
 			const secrets = table('secrets', {

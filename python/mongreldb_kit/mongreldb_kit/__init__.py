@@ -172,6 +172,20 @@ class Database:
         """
         self._handle.scan_batched(table, batch_size, callback)
 
+    def set_similarity(
+        self,
+        table: str,
+        column: str,
+        query: "Iterable[str]",
+        k: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Rank rows by Jaccard set-similarity to ``query`` over ``column``.
+
+        ``column`` holds a JSON array of strings. Returns up to ``k``
+        ``{"row": {...}, "similarity": float}`` dicts, highest similarity first.
+        """
+        return self._handle.set_similarity(table, column, list(query), k)
+
     def explain(self, table: str, filter: dict[str, Any]) -> dict[str, Any]:
         """Explain how ``filter`` pushes down against ``table`` (diagnostic only).
 

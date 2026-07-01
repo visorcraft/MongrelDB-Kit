@@ -19,6 +19,26 @@ import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
 import { isReferencedTable, deleteGuardsForTable, type ConstraintKit } from './constraints.js';
 import { KitError, isRetryableConflict } from './errors.js';
 
+/** Members of a set-valued cell: a JSON array, or a JSON string of one. */
+function parseStringSet(value: unknown): Set<string> {
+	let arr: unknown = value;
+	if (typeof value === 'string') {
+		try {
+			arr = JSON.parse(value);
+		} catch {
+			arr = null;
+		}
+	}
+	const out = new Set<string>();
+	if (Array.isArray(arr)) {
+		for (const v of arr) {
+			if (typeof v === 'string') out.add(v);
+			else if (typeof v === 'number' || typeof v === 'boolean') out.add(String(v));
+		}
+	}
+	return out;
+}
+
 /** A reservoir-sampled approximate aggregate with a confidence interval. */
 export interface ApproxAggregate {
 	point: number;
@@ -443,6 +463,38 @@ export class KitDatabase {
 			if (rows.length < size) break;
 			offset += rows.length;
 		}
+	}
+
+	/**
+	 * Rank rows of `table` by Jaccard set-similarity between `query` and the
+	 * string set stored (as a JSON array) in `column`, returning the top `k`
+	 * with similarity `> 0`, highest first. The set-similarity / dedup-join
+	 * primitive the `MinHash` index kind is meant to serve; an exact linear scan
+	 * (a sub-linear MinHash/LSH index remains engine future-work).
+	 */
+	setSimilarity(
+		table: string,
+		column: string,
+		query: string[],
+		k: number
+	): { row: Record<string, unknown>; similarity: number }[] {
+		const spec = this.schema.table(table);
+		if (!spec.columns.some((c) => c.name === column)) {
+			throw new KitError(`unknown column '${column}' on table '${table}'`);
+		}
+		const q = new Set(query);
+		const rows = this.selectFrom(spec).executeSync() as Record<string, unknown>[];
+		const scored: { row: Record<string, unknown>; similarity: number }[] = [];
+		for (const row of rows) {
+			const set = parseStringSet(row[column]);
+			let inter = 0;
+			for (const x of set) if (q.has(x)) inter++;
+			const union = set.size + q.size - inter;
+			const sim = union === 0 ? 0 : inter / union;
+			if (sim > 0) scored.push({ row, similarity: sim });
+		}
+		scored.sort((a, b) => b.similarity - a.similarity);
+		return scored.slice(0, Math.max(0, k));
 	}
 
 	/** Import a TSV document into `table`; returns the number of rows inserted. */

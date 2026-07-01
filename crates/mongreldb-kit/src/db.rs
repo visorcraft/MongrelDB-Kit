@@ -34,6 +34,35 @@ pub struct ExplainPlan {
     pub pushed_conditions: Vec<String>,
 }
 
+/// A row paired with its Jaccard set-similarity to a query set (`0.0..=1.0`).
+#[derive(Debug, Clone)]
+pub struct SimilarRow {
+    pub row: crate::schema::Row,
+    pub similarity: f64,
+}
+
+/// Collect the string members of a set-valued column cell. Accepts either a
+/// JSON array value or a JSON string holding an array (how the Kit stores
+/// `json`/`text` set columns); anything else yields the empty set.
+fn parse_string_set(value: Option<&Value>) -> std::collections::HashSet<String> {
+    let arr = match value {
+        Some(Value::Array(a)) => Some(a.clone()),
+        Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+            .ok()
+            .and_then(|v| v.as_array().cloned()),
+        _ => None,
+    };
+    arr.into_iter()
+        .flatten()
+        .filter_map(|v| match v {
+            Value::String(s) => Some(s),
+            Value::Number(n) => Some(n.to_string()),
+            Value::Bool(b) => Some(b.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Which approximate aggregate to estimate from the reservoir sample.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApproxAggKind {
@@ -555,6 +584,59 @@ impl Database {
                 Ok(())
             }
         }
+    }
+
+    /// Rank rows of `table` by Jaccard set-similarity between `query` and the
+    /// string set stored (as a JSON array) in `column`, returning the top `k`
+    /// with similarity `> 0`, highest first. This is the set-similarity /
+    /// dedup-join primitive the `MinHash` index kind is meant to serve; it runs
+    /// as an exact linear scan (a persistent MinHash/LSH index for sub-linear
+    /// candidate generation remains engine future-work).
+    pub fn set_similarity(
+        &self,
+        table: &str,
+        column: &str,
+        query: &[String],
+        k: usize,
+    ) -> Result<Vec<SimilarRow>> {
+        let t = self
+            .schema
+            .tables
+            .iter()
+            .find(|t| t.name == table)
+            .ok_or_else(|| KitError::Validation(format!("unknown table '{table}'")))?;
+        if !t.columns.iter().any(|c| c.name == column) {
+            return Err(KitError::Validation(format!(
+                "unknown column '{column}' on table '{table}'"
+            )));
+        }
+        let query_set: std::collections::HashSet<String> = query.iter().cloned().collect();
+        let tx = self.begin()?;
+        let rows = tx.all_rows(table)?;
+        let mut scored: Vec<SimilarRow> = Vec::new();
+        for row in rows {
+            let set = parse_string_set(row.values.get(column));
+            let inter = set.iter().filter(|x| query_set.contains(*x)).count();
+            let union = set.len() + query_set.len() - inter;
+            let sim = if union == 0 {
+                0.0
+            } else {
+                inter as f64 / union as f64
+            };
+            if sim > 0.0 {
+                scored.push(SimilarRow {
+                    row,
+                    similarity: sim,
+                });
+            }
+        }
+        scored.sort_by(|a, b| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        scored.truncate(k);
+        Ok(scored)
     }
 
     /// Return the migrations already recorded in `__kit_schema_migrations`.
