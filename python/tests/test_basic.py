@@ -410,6 +410,56 @@ def test_tsv_export_import_round_trip():
     dst.close()
 
 
+def test_rows_at_epoch_time_travel():
+    db = Database.create(tmp_db(), users_orders_schema())
+    with db.begin() as txn:
+        insert_user(txn, 1, "a@example.com", "orig")
+        txn.commit()
+    e1 = db.snapshot_epoch()
+    with db.begin() as txn:
+        txn.update_where("users", filter={"id": 1}, set={"name": "updated"})
+        txn.commit()
+    past = db.rows_at_epoch("users", e1)
+    assert len(past) == 1 and past[0]["name"] == "orig"
+    now = db.rows_at_epoch("users", db.snapshot_epoch())
+    assert now[0]["name"] == "updated"
+    db.close()
+
+
+def test_approx_aggregate():
+    db = Database.create(tmp_db(), users_orders_schema())
+    with db.begin() as txn:
+        for i in range(1, 201):
+            insert_user(txn, i, f"u{i}@example.com")
+        txn.commit()
+    res = db.approx_aggregate("users", "count")
+    assert res is not None
+    assert res["n_population"] == 200
+    assert abs(res["point"] - 200) < 1e-6
+    db.close()
+
+
+def test_scan_batched_streams_all_rows():
+    db = Database.create(tmp_db(), users_orders_schema())
+    with db.begin() as txn:
+        for i in range(1, 401):
+            insert_user(txn, i, f"u{i}@example.com")
+        txn.commit()
+    seen = []
+    max_batch = 0
+
+    def on_batch(rows):
+        nonlocal max_batch
+        max_batch = max(max_batch, len(rows))
+        seen.extend(r["id"] for r in rows)
+
+    db.scan_batched("users", 150, on_batch)
+    assert len(seen) == 400
+    assert max_batch <= 150
+    assert sorted(seen) == list(range(1, 401))
+    db.close()
+
+
 def test_explain_reports_pushdown():
     db = Database.create(tmp_db(), users_orders_schema())
     # id is the primary key → equality pushes down exactly.

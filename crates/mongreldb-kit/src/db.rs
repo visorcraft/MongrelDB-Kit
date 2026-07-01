@@ -8,7 +8,7 @@ use mongreldb_core::memtable::Row as CoreRow;
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::Schema as CoreSchema;
 use mongreldb_core::Database as CoreDatabase;
-use mongreldb_core::{NativeAgg, NativeAggResult};
+use mongreldb_core::{ApproxAgg, NativeAgg, NativeAggResult};
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
 use serde_json::Value;
@@ -32,6 +32,27 @@ pub struct ExplainPlan {
     pub exact: bool,
     /// The kind of each pushed condition (e.g. `BitmapEq`, `RangeInt`, `Ann`).
     pub pushed_conditions: Vec<String>,
+}
+
+/// Which approximate aggregate to estimate from the reservoir sample.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApproxAggKind {
+    Count,
+    Sum,
+    Avg,
+}
+
+/// A reservoir-sampled approximate aggregate with a normal-theory confidence
+/// interval. `ci_low`/`ci_high` bracket `point` at the requested z-score; the
+/// interval collapses to zero width when the sample covers the whole table.
+#[derive(Debug, Clone)]
+pub struct ApproxAggregate {
+    pub point: f64,
+    pub ci_low: f64,
+    pub ci_high: f64,
+    pub n_population: u64,
+    pub n_sample_live: usize,
+    pub n_passing: usize,
 }
 
 /// Short kind label for a core `Condition` (the variant name), decoupled from
@@ -380,6 +401,160 @@ impl Database {
                 pushed_conditions: Vec::new(),
             },
         })
+    }
+
+    /// Read every row of `table` visible at commit `epoch` — a point-in-time
+    /// (MVCC time-travel) read. `epoch` must not exceed the current snapshot
+    /// epoch. Rows reclaimed by GC/compaction for retired snapshots may no
+    /// longer be reconstructable; this reads whatever the engine still retains
+    /// at that epoch.
+    pub fn rows_at_epoch(&self, table: &str, epoch: u64) -> Result<Vec<crate::schema::Row>> {
+        let t = self
+            .schema
+            .tables
+            .iter()
+            .find(|t| t.name == table)
+            .ok_or_else(|| KitError::Validation(format!("unknown table '{table}'")))?;
+        let current = self.snapshot_epoch();
+        if epoch > current {
+            return Err(KitError::Validation(format!(
+                "epoch {epoch} is in the future (current committed epoch is {current})"
+            )));
+        }
+        let snap = Snapshot::at(mongreldb_core::epoch::Epoch(epoch));
+        let rows = self.visible_core_rows_at(table, snap)?;
+        rows.iter()
+            .map(|r| crate::schema::core_row_to_json(r, t))
+            .collect()
+    }
+
+    /// Estimate an aggregate over `table` from the engine's reservoir sample,
+    /// returning a point estimate and a `z`-score confidence interval (e.g.
+    /// `z = 1.96` for ~95%). `column` is required for `Sum`/`Avg` and ignored
+    /// for `Count`. Returns `None` when the reservoir is empty (no sampled rows
+    /// yet). Fast and O(sample) — trades exactness for speed on large tables.
+    pub fn approx_aggregate(
+        &self,
+        table: &str,
+        column: Option<&str>,
+        agg: ApproxAggKind,
+        z: f64,
+    ) -> Result<Option<ApproxAggregate>> {
+        let t = self
+            .schema
+            .tables
+            .iter()
+            .find(|t| t.name == table)
+            .ok_or_else(|| KitError::Validation(format!("unknown table '{table}'")))?;
+        if matches!(agg, ApproxAggKind::Sum | ApproxAggKind::Avg) && column.is_none() {
+            return Err(KitError::Validation(
+                "approx sum/avg requires a column".into(),
+            ));
+        }
+        let cid = match column {
+            Some(name) => Some(
+                t.columns
+                    .iter()
+                    .find(|c| c.name == name)
+                    .ok_or_else(|| KitError::Validation(format!("unknown column '{name}'")))?
+                    .id as u16,
+            ),
+            None => None,
+        };
+        let core_agg = match agg {
+            ApproxAggKind::Count => ApproxAgg::Count,
+            ApproxAggKind::Sum => ApproxAgg::Sum,
+            ApproxAggKind::Avg => ApproxAgg::Avg,
+        };
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let guard = handle.lock();
+        let res = guard
+            .approx_aggregate(&[], cid, core_agg, z)
+            .map_err(KitError::from)?;
+        Ok(res.map(|r| ApproxAggregate {
+            point: r.point,
+            ci_low: r.ci_low,
+            ci_high: r.ci_high,
+            n_population: r.n_population,
+            n_sample_live: r.n_sample_live,
+            n_passing: r.n_passing,
+        }))
+    }
+
+    /// Stream `table` in row batches without materializing the whole table at
+    /// once. `f` receives successive chunks of at most `batch_size` value-maps,
+    /// all from one snapshot. Backed by the engine's native scan cursor when the
+    /// table has a sorted run; for an overlay-only table (no run yet) it falls
+    /// back to a single in-memory pass, still chunked to `batch_size`.
+    pub fn scan_batched<F>(&self, table: &str, batch_size: usize, mut f: F) -> Result<()>
+    where
+        F: FnMut(&[serde_json::Map<String, Value>]) -> Result<()>,
+    {
+        let kit_t = self
+            .schema
+            .tables
+            .iter()
+            .find(|t| t.name == table)
+            .ok_or_else(|| KitError::Validation(format!("unknown table '{table}'")))?;
+        let batch_size = batch_size.max(1);
+        // Keep the pin guard alive for the whole scan so GC can't reclaim the
+        // snapshot's versions mid-stream.
+        let (snapshot, _pin) = self.inner.snapshot();
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let guard = handle.lock();
+
+        // Projection + per-column (name, kit type), index-aligned, in core order.
+        let mut projection: Vec<(u16, mongreldb_core::schema::TypeId)> = Vec::new();
+        let mut meta: Vec<(String, mongreldb_kit_core::schema::ColumnType)> = Vec::new();
+        for c in &guard.schema().columns {
+            if let Some(kc) = kit_t.columns.iter().find(|kc| kc.id as u16 == c.id) {
+                projection.push((c.id, c.ty));
+                meta.push((kc.name.clone(), kc.storage_type));
+            }
+        }
+
+        match guard
+            .scan_cursor(snapshot, projection, &[])
+            .map_err(KitError::from)?
+        {
+            Some(mut cursor) => {
+                let mut buf: Vec<serde_json::Map<String, Value>> = Vec::with_capacity(batch_size);
+                while let Some(batch) = cursor.next_batch().map_err(KitError::from)? {
+                    let nrows = batch.first().map(|c| c.len()).unwrap_or(0);
+                    for j in 0..nrows {
+                        let mut m = serde_json::Map::new();
+                        for (ci, (name, ty)) in meta.iter().enumerate() {
+                            let cv = batch
+                                .get(ci)
+                                .and_then(|col| col.value_at(j))
+                                .unwrap_or(CoreValue::Null);
+                            m.insert(name.clone(), crate::schema::core_to_json(&cv, *ty)?);
+                        }
+                        buf.push(m);
+                        if buf.len() >= batch_size {
+                            f(&buf)?;
+                            buf.clear();
+                        }
+                    }
+                }
+                if !buf.is_empty() {
+                    f(&buf)?;
+                }
+                Ok(())
+            }
+            None => {
+                drop(guard);
+                let rows = self.visible_core_rows_at(table, snapshot)?;
+                let maps: Vec<serde_json::Map<String, Value>> = rows
+                    .iter()
+                    .map(|r| crate::schema::core_row_to_json(r, kit_t).map(|row| row.values))
+                    .collect::<Result<Vec<_>>>()?;
+                for chunk in maps.chunks(batch_size) {
+                    f(chunk)?;
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Return the migrations already recorded in `__kit_schema_migrations`.

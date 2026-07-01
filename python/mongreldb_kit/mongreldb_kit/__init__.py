@@ -140,6 +140,38 @@ class Database:
         """Import a TSV document into ``table``; return the rows inserted."""
         return self._handle.import_tsv(table, text)
 
+    def rows_at_epoch(self, table: str, epoch: int) -> list[dict[str, Any]]:
+        """Read every row of ``table`` visible at commit ``epoch`` (time-travel)."""
+        return self._handle.rows_at_epoch(table, epoch)
+
+    def approx_aggregate(
+        self,
+        table: str,
+        agg: str,
+        column: str | None = None,
+        z: float = 1.96,
+    ) -> dict[str, Any] | None:
+        """Approximate ``count``/``sum``/``avg`` from the reservoir sample.
+
+        Returns ``{point, ci_low, ci_high, n_population, n_sample_live,
+        n_passing}`` with a ``z``-score confidence interval, or ``None`` when the
+        reservoir is empty. ``column`` is required for ``sum``/``avg``.
+        """
+        raw = self._handle.approx_aggregate(table, agg, column, z)
+        return None if raw is None else json.loads(raw)
+
+    def scan_batched(
+        self,
+        table: str,
+        batch_size: int,
+        callback: "Callable[[list[dict[str, Any]]], None]",
+    ) -> None:
+        """Stream ``table`` in batches of at most ``batch_size`` rows.
+
+        ``callback`` is invoked once per batch with a list of dict rows.
+        """
+        self._handle.scan_batched(table, batch_size, callback)
+
     def explain(self, table: str, filter: dict[str, Any]) -> dict[str, Any]:
         """Explain how ``filter`` pushes down against ``table`` (diagnostic only).
 

@@ -3,7 +3,7 @@
 //! Exposes a small Python API over `mongreldb-kit`: database open/create,
 //! transactions with CRUD, migrations, and stable error categories.
 
-use mongreldb_kit::{Database, KitError, Transaction};
+use mongreldb_kit::{ApproxAggKind, Database, KitError, Transaction};
 use mongreldb_kit_core::keys::{
     encode_pk as core_encode_pk, encode_row_guard_key as core_encode_row_guard_key,
     encode_unique_key as core_encode_unique_key, KeyComponent,
@@ -244,6 +244,85 @@ impl PyDatabase {
     /// Import a TSV document into `table`; returns the number of rows inserted.
     fn import_tsv(&self, table: &str, text: &str) -> PyResult<usize> {
         self.require_db()?.import_tsv(table, text).map_err(map_err)
+    }
+
+    /// Read every row of `table` visible at commit `epoch` (MVCC time-travel).
+    fn rows_at_epoch(&self, py: Python<'_>, table: &str, epoch: u64) -> PyResult<Vec<Py<PyAny>>> {
+        let rows = self
+            .require_db()?
+            .rows_at_epoch(table, epoch)
+            .map_err(map_err)?;
+        rows.iter().map(|row| row_to_py(py, row)).collect()
+    }
+
+    /// Approximate aggregate (`count`/`sum`/`avg`) from the reservoir sample with
+    /// a `z`-score confidence interval. Returns a JSON object, or `None` when the
+    /// reservoir is empty.
+    fn approx_aggregate(
+        &self,
+        table: &str,
+        agg: &str,
+        column: Option<&str>,
+        z: f64,
+    ) -> PyResult<Option<String>> {
+        let kind = match agg {
+            "count" => ApproxAggKind::Count,
+            "sum" => ApproxAggKind::Sum,
+            "avg" => ApproxAggKind::Avg,
+            other => {
+                return Err(ValidationError::new_err(format!(
+                    "unknown approx aggregate '{other}'"
+                )))
+            }
+        };
+        let res = self
+            .require_db()?
+            .approx_aggregate(table, column, kind, z)
+            .map_err(map_err)?;
+        Ok(res.map(|r| {
+            serde_json::json!({
+                "point": r.point,
+                "ci_low": r.ci_low,
+                "ci_high": r.ci_high,
+                "n_population": r.n_population,
+                "n_sample_live": r.n_sample_live,
+                "n_passing": r.n_passing,
+            })
+            .to_string()
+        }))
+    }
+
+    /// Stream `table` in batches of at most `batch_size` rows; `callback` is
+    /// invoked once per batch with a list of dict rows.
+    fn scan_batched(
+        &self,
+        py: Python<'_>,
+        table: &str,
+        batch_size: usize,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        let db = self.require_db()?;
+        let mut cb_err: Option<PyErr> = None;
+        let res = db.scan_batched(table, batch_size, |batch| {
+            let list = PyList::empty(py);
+            for m in batch {
+                let d =
+                    json_map_to_pydict(py, m).map_err(|e| KitError::Validation(e.to_string()))?;
+                list.append(d)
+                    .map_err(|e| KitError::Validation(e.to_string()))?;
+            }
+            match callback.call1(py, (list,)) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    cb_err = Some(e);
+                    Err(KitError::Validation("scan_batched callback raised".into()))
+                }
+            }
+        });
+        if let Some(e) = cb_err {
+            return Err(e);
+        }
+        res.map_err(map_err)
     }
 
     /// Explain how `filter` (the friendly filter object) would push down against
