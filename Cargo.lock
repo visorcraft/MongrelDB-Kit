@@ -553,8 +553,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.15.0"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.15.0#ae1266a8e6130c32f722aacdbb565a0a669edf0d"
+version = "0.16.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.16.0#79c301065640a7f610531473efa52e7ae0c00b06"
 dependencies = [
  "arc-swap",
  "bincode",
@@ -577,7 +577,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "mongreldb-core",
  "mongreldb-kit-core",
@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "hex",
  "insta",
@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-python"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "mongreldb-kit",
  "mongreldb-kit-core",

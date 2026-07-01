@@ -330,6 +330,30 @@ impl Database {
             .map_err(KitError::from)
     }
 
+    /// `COUNT(DISTINCT col)` from the bitmap index's partition cardinality (Kit
+    /// Priority 7) — the number of distinct indexed values, no scan. Returns
+    /// `None` without a bitmap index on the column, when the table is not
+    /// insert-only, or when `snapshot` is not the latest committed epoch. The
+    /// engine method reads the latest committed index state (no snapshot
+    /// parameter), so — as with [`count_core_rows_at`](Self::count_core_rows_at)
+    /// — it only matches a repeatable-read scan at the latest epoch; we compare
+    /// under the table lock so no commit can interleave.
+    pub(crate) fn count_distinct_core_at(
+        &self,
+        table_name: &str,
+        column_id: u16,
+        snapshot: Snapshot,
+    ) -> Result<Option<u64>> {
+        let handle = self.inner.table(table_name).map_err(KitError::from)?;
+        let guard = handle.lock();
+        if guard.snapshot().epoch != snapshot.epoch {
+            return Ok(None); // stale read snapshot ⇒ caller scans
+        }
+        guard
+            .count_distinct_from_bitmap(column_id)
+            .map_err(KitError::from)
+    }
+
     /// Materialize a single row by storage row id.
     #[allow(dead_code)]
     pub(crate) fn get_core_row(&self, table_name: &str, row_id: u64) -> Result<Option<CoreRow>> {

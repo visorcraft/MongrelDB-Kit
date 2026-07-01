@@ -568,6 +568,35 @@ impl<'a> Transaction<'a> {
         if self.has_staged_for(&query.table) {
             return Ok(None); // engine aggregate omits this transaction's staged writes
         }
+
+        // COUNT(DISTINCT col), unfiltered, over a bitmap-indexed column ⇒ the
+        // bitmap's partition cardinality (no scan). `count_distinct_from_bitmap`
+        // is whole-column, so it applies only without a filter; other DISTINCT
+        // shapes (filtered, non-indexed, or DISTINCT SUM/MIN/MAX/AVG) fall back.
+        if agg.distinct {
+            if !matches!(agg.func, AggFunc::Count) || query.filter.is_some() {
+                return Ok(None);
+            }
+            let Some(col_name) = &agg.column else {
+                return Ok(None);
+            };
+            let t = self.require_table(&query.table)?;
+            let Some(col) = t.columns.iter().find(|c| &c.name == col_name) else {
+                return Ok(None);
+            };
+            let Some(n) = self.db.count_distinct_core_at(
+                &query.table,
+                col.id as u16,
+                self.core.read_snapshot(),
+            )?
+            else {
+                return Ok(None);
+            };
+            let mut values = Map::new();
+            values.insert(agg.alias.clone(), Value::Number((n as i64).into()));
+            return Ok(Some(vec![Row { row_id: 0, values }]));
+        }
+
         let conditions: Vec<Condition> = match &query.filter {
             None => Vec::new(),
             Some(filter) => {

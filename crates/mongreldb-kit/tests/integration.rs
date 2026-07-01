@@ -145,6 +145,7 @@ fn count_star_native_delegation_matches_scan() {
                 func: AggFunc::Count,
                 column: None,
                 alias: "n".into(),
+                distinct: false,
             }],
             having: None,
         };
@@ -218,6 +219,7 @@ fn column_aggregate_native_delegation_matches_scan() {
                 func,
                 column: Some(col.into()),
                 alias: "v".into(),
+                distinct: false,
             }],
             having: None,
         };
@@ -250,6 +252,58 @@ fn column_aggregate_native_delegation_matches_scan() {
     assert_eq!(agg1(&txn, AggFunc::Count, "total"), json!(3)); // null excluded
 }
 
+/// Kit Priority 7: COUNT(DISTINCT col) — the unique non-null count — matches the
+/// scan result, unfiltered and filtered. (Delegates to the engine's bitmap
+/// cardinality for a single-sorted-run, bitmap-indexed column; otherwise served
+/// in-Rust, which this exercises.)
+#[test]
+fn count_distinct_matches_scan() {
+    fn cdistinct(txn: &Transaction, col: &str, filter: Option<Expr>) -> i64 {
+        let q = AggregateQuery {
+            table: "orders".into(),
+            filter,
+            group_by: vec![],
+            aggregates: vec![Aggregate {
+                func: AggFunc::Count,
+                column: Some(col.into()),
+                alias: "d".into(),
+                distinct: true,
+            }],
+            having: None,
+        };
+        txn.aggregate(&q).unwrap()[0]
+            .values
+            .get("d")
+            .unwrap()
+            .as_i64()
+            .unwrap()
+    }
+
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+    let mut txn = db.begin().unwrap();
+    for id in 1..=3i64 {
+        insert_user(&mut txn, id, &format!("u{id}@x.com"));
+    }
+    insert_order(&mut txn, 1, 1, 10.0);
+    insert_order(&mut txn, 2, 1, 20.0); // user 1 again
+    insert_order(&mut txn, 3, 2, 30.0);
+    insert_order(&mut txn, 4, 2, 30.0); // user 2, total 30 again
+    insert_order(&mut txn, 5, 3, 40.0);
+    txn.commit().unwrap();
+
+    let txn = db.begin().unwrap();
+    // distinct user_id {1,2,3} = 3; distinct total {10,20,30,40} = 4.
+    assert_eq!(cdistinct(&txn, "user_id", None), 3);
+    assert_eq!(cdistinct(&txn, "total", None), 4);
+    // Filtered: user_id >= 2 ⇒ orders 3,4,5 ⇒ distinct user_id {2,3} = 2.
+    let f = Expr::Gte(
+        Box::new(col("user_id")),
+        Box::new(Expr::Literal(Literal::Int(2))),
+    );
+    assert_eq!(cdistinct(&txn, "user_id", Some(f)), 2);
+}
+
 #[test]
 fn aggregates_group_by_and_having() {
     let dir = temp_dir();
@@ -275,26 +329,31 @@ fn aggregates_group_by_and_having() {
                 func: AggFunc::Count,
                 column: None,
                 alias: "n".into(),
+                distinct: false,
             },
             Aggregate {
                 func: AggFunc::Sum,
                 column: Some("total".into()),
                 alias: "s".into(),
+                distinct: false,
             },
             Aggregate {
                 func: AggFunc::Min,
                 column: Some("total".into()),
                 alias: "mn".into(),
+                distinct: false,
             },
             Aggregate {
                 func: AggFunc::Max,
                 column: Some("total".into()),
                 alias: "mx".into(),
+                distinct: false,
             },
             Aggregate {
                 func: AggFunc::Avg,
                 column: Some("total".into()),
                 alias: "av".into(),
+                distinct: false,
             },
         ],
         having: None,
@@ -317,11 +376,13 @@ fn aggregates_group_by_and_having() {
                 func: AggFunc::Count,
                 column: None,
                 alias: "n".into(),
+                distinct: false,
             },
             Aggregate {
                 func: AggFunc::Sum,
                 column: Some("total".into()),
                 alias: "s".into(),
+                distinct: false,
             },
         ],
         having: Some(Expr::Gt(

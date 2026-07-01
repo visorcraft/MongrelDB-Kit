@@ -314,9 +314,13 @@ pub(crate) fn run_aggregate(ctx: &ExecCtx, query: &AggregateQuery) -> Result<Vec
 fn compute_aggregate(agg: &Aggregate, rows: &[Row]) -> Result<Value> {
     match agg.func {
         AggFunc::Count => {
-            let n = match &agg.column {
-                None => rows.len(),
-                Some(col) => rows
+            let n = match (&agg.column, agg.distinct) {
+                // COUNT(*) — DISTINCT is meaningless without a column.
+                (None, _) => rows.len(),
+                // COUNT(DISTINCT col): unique non-null values.
+                (Some(col), true) => distinct_non_null(rows, col).len(),
+                // COUNT(col): non-null values.
+                (Some(col), false) => rows
                     .iter()
                     .filter(|r| !r.values.get(col).map(Value::is_null).unwrap_or(true))
                     .count(),
@@ -325,7 +329,19 @@ fn compute_aggregate(agg: &Aggregate, rows: &[Row]) -> Result<Value> {
         }
         AggFunc::Sum | AggFunc::Avg => {
             let col = require_agg_column(agg)?;
-            let nums = numeric_values(rows, col);
+            // DISTINCT ⇒ aggregate over the distinct non-null values.
+            let (nums, all_int): (Vec<f64>, bool) = if agg.distinct {
+                let vals = distinct_non_null(rows, col);
+                let all_int = vals.iter().all(|v| v.as_i64().is_some());
+                (vals.iter().filter_map(|&v| num_of(v)).collect(), all_int)
+            } else {
+                let all_int = rows
+                    .iter()
+                    .filter_map(|r| r.values.get(col))
+                    .filter(|v| !v.is_null())
+                    .all(|v| v.as_i64().is_some());
+                (numeric_values(rows, col), all_int)
+            };
             if nums.is_empty() {
                 return Ok(Value::Null);
             }
@@ -334,12 +350,7 @@ fn compute_aggregate(agg: &Aggregate, rows: &[Row]) -> Result<Value> {
                 return Ok(number_value(sum / nums.len() as f64));
             }
             // Preserve integer-ness when every summand was an integer.
-            if rows
-                .iter()
-                .filter_map(|r| r.values.get(col))
-                .filter(|v| !v.is_null())
-                .all(|v| v.as_i64().is_some())
-            {
+            if all_int {
                 Ok(Value::Number((sum as i64).into()))
             } else {
                 Ok(number_value(sum))
@@ -398,6 +409,25 @@ fn number_value(f: f64) -> Value {
     serde_json::Number::from_f64(f)
         .map(Value::Number)
         .unwrap_or(Value::Null)
+}
+
+/// Distinct non-null values of `col` across `rows`, deduplicated by their
+/// canonical JSON form — the same value identity GROUP BY keys use. Backs the
+/// `DISTINCT` aggregates (`COUNT`/`SUM`/`AVG`).
+fn distinct_non_null<'a>(rows: &'a [Row], col: &str) -> Vec<&'a Value> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for r in rows {
+        if let Some(v) = r.values.get(col) {
+            if v.is_null() {
+                continue;
+            }
+            if seen.insert(serde_json::to_string(v).unwrap_or_default()) {
+                out.push(v);
+            }
+        }
+    }
+    out
 }
 
 // ── joins ───────────────────────────────────────────────────────────────────

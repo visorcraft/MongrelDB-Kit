@@ -187,6 +187,11 @@ pub struct Aggregate {
     pub column: Option<String>,
     /// Output column name in each result row.
     pub alias: String,
+    /// `DISTINCT` modifier, e.g. `COUNT(DISTINCT col)`. Requires a `column`; it
+    /// is a no-op for `MIN`/`MAX`. Defaults to `false` so existing serialized
+    /// queries deserialize unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub distinct: bool,
 }
 
 /// A grouped/aggregated query. Rows are scanned, optionally filtered, grouped by
@@ -347,11 +352,13 @@ mod tests {
                     func: AggFunc::Count,
                     column: None,
                     alias: "n".into(),
+                    distinct: false,
                 },
                 Aggregate {
                     func: AggFunc::Sum,
                     column: Some("total".into()),
                     alias: "total_sum".into(),
+                    distinct: false,
                 },
             ],
             having: Some(Expr::Gt(
