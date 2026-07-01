@@ -79,6 +79,7 @@ function columnFromJson(col: any): ColumnSpec {
 	if (col.regex !== undefined) opts.regex = new RegExp(col.regex);
 	const c = column(col.name, col.storage_type, opts) as ColumnSpec;
 	c.id = col.id;
+	if (col.embedding_dim !== undefined) c.embeddingDim = col.embedding_dim;
 	return c;
 }
 
@@ -86,7 +87,12 @@ function schemaFromFixture(raw: any): Schema {
 	const tables = raw.tables.map((t: any) => {
 		const cols = t.columns.map(columnFromJson);
 		const idxs = (t.indexes ?? []).map((i: any) =>
-			index(i.columns, { name: i.name, unique: i.unique, fm: i.kind === 'fm' })
+			index(i.columns, {
+				name: i.name,
+				unique: i.unique,
+				fm: i.kind === 'fm',
+				ann: i.kind === 'ann'
+			})
 		);
 		const uqs = (t.unique_constraints ?? []).map((u: any) => unique(u.columns, { name: u.name }));
 		const fks = (t.foreign_keys ?? []).map((fk: any) => {
@@ -777,6 +783,33 @@ describe('mongreldb-kit conformance', () => {
 					sortAggRows(exp, scenario.order);
 				}
 				expect(rows, `contains ${scenario.name}`).toEqual(exp);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs ANN scenarios against the TypeScript kit', () => {
+		const raw = loadJson('ann.json');
+		const schema = schemaFromFixture(raw.schema);
+		const baseTable = schema.table(raw.schema.tables[0].name);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-ann-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const row of raw.rows) {
+				kit.insertInto(baseTable).values(normalizeRowForTs(baseTable, row)).executeSync();
+			}
+			for (const scenario of raw.scenarios) {
+				const tspec = schema.table(scenario.table);
+				const col = tspec.columns.find((c) => c.name === scenario.column)!;
+				const rows = kit
+					.selectFrom(tspec)
+					.annSearch(col, scenario.query, scenario.k)
+					.executeSync() as any[];
+				const ids = rows.map((r) => Number(r.id)).sort((a, b) => a - b);
+				const want = [...(scenario.expect_ids as number[])].sort((a, b) => a - b);
+				expect(ids, `ann ${scenario.name}`).toEqual(want);
 			}
 		} finally {
 			kit.close();

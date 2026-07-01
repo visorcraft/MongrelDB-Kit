@@ -67,6 +67,8 @@ export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] 
 				return { columnId: col.id, text: value as string };
 			case 'bytes':
 				return { columnId: col.id, bytes: Buffer.from(value as Uint8Array) };
+			case 'embedding':
+				return { columnId: col.id, embedding: (value as number[]).map(Number) };
 			default: {
 				const _exhaustive: never = col.storageType;
 				throw new Error(`Unsupported storage type for cell conversion: ${_exhaustive}`);

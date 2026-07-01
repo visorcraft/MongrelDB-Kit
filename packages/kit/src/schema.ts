@@ -116,11 +116,24 @@ export function blob<const TName extends string, const TOpts extends ColumnOptio
 	return column(name, 'bytes', opts);
 }
 
+/** A dense float-vector column of dimension `dim` for ANN (`annSearch`). */
+export function embedding<const TName extends string, const TOpts extends ColumnOptions = {}>(
+	name: TName,
+	dim: number,
+	opts?: TOpts
+): ColumnSpec<TName, 'embedding', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
+	const col = column(name, 'embedding', opts);
+	col.embeddingDim = dim;
+	return col;
+}
+
 export interface IndexOptions {
 	name?: string;
 	unique?: boolean;
 	/** Create an FM substring index so `contains()` pushes down to the engine. */
 	fm?: boolean;
+	/** Create an ANN (HNSW) index on an embedding column for `annSearch()`. */
+	ann?: boolean;
 }
 
 export interface UniqueOptions {
@@ -142,7 +155,7 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 		name: opts.name ?? `idx_${columns.join('_')}`,
 		columns,
 		unique: opts.unique ?? false,
-		kind: opts.fm ? 'fm' : 'bitmap'
+		kind: opts.fm ? 'fm' : opts.ann ? 'ann' : 'bitmap'
 	};
 }
 

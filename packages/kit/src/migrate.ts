@@ -126,6 +126,7 @@ type MongrelColumnSpec = {
 	primaryKey: boolean;
 	nullable: boolean;
 	autoIncrement?: boolean;
+	embeddingDim?: number;
 };
 
 type NativeAlterColumnDatabase = NativeDatabase & {
@@ -159,6 +160,8 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'bytes':
 		case 'json':
 			return ColumnType.Bytes;
+		case 'embedding':
+			return ColumnType.Embedding;
 	}
 }
 
@@ -169,7 +172,8 @@ function toMongrelColumnSpec(column: ColumnSpec): MongrelColumnSpec {
 		ty: toMongrelColumnType(column.storageType),
 		primaryKey: column.primaryKey,
 		nullable: column.nullable,
-		autoIncrement: column.default?.kind === 'sequence'
+		autoIncrement: column.default?.kind === 'sequence',
+		embeddingDim: column.embeddingDim
 	};
 }
 

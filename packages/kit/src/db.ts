@@ -73,6 +73,8 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'bytes':
 		case 'json':
 			return addon.ColumnType.Bytes;
+		case 'embedding':
+			return addon.ColumnType.Embedding;
 	}
 }
 
@@ -86,7 +88,12 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			return {
 				name: `${idx.name}_${colName}`,
 				columnId: col.id,
-				kind: idx.kind === 'fm' ? addon.IndexKindSpec.FmIndex : addon.IndexKindSpec.Bitmap
+				kind:
+					idx.kind === 'fm'
+						? addon.IndexKindSpec.FmIndex
+						: idx.kind === 'ann'
+							? addon.IndexKindSpec.Ann
+							: addon.IndexKindSpec.Bitmap
 			};
 		})
 	);
@@ -132,7 +139,8 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			// A Kit sequence-default column maps to the engine's native
 			// AUTO_INCREMENT allocator (a per-table WAL-durable counter) instead
 			// of the legacy __kit_sequences hot row.
-			autoIncrement: col.default?.kind === 'sequence'
+			autoIncrement: col.default?.kind === 'sequence',
+			embeddingDim: col.embeddingDim
 		})),
 		indexes
 	};

@@ -319,6 +319,19 @@ class Transaction:
         rows = self._handle.join(_to_json(query))
         return [json.loads(r) for r in rows]
 
+    def ann_search(
+        self,
+        table: str,
+        column: str,
+        query: Iterable[float],
+        k: int,
+    ) -> list[dict[str, Any]]:
+        """Approximate nearest-neighbour search: return the ``k`` rows whose
+        ``column`` (an embedding) is closest to ``query``, resolved by the
+        column's ANN index. Results are the top-``k`` set (no distance ranking)."""
+        rows = self._handle.ann_search(table, column, [float(x) for x in query], k)
+        return [json.loads(r) for r in rows]
+
     def commit(self) -> None:
         if not self._closed:
             self._handle.commit()

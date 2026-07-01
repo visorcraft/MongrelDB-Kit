@@ -59,7 +59,7 @@ type ApplicationTypeMap = {
 
 export type ColumnValue<T extends ColumnSpec> = T['applicationType'] extends keyof ApplicationTypeMap
 	? ApplicationTypeMap[T['applicationType']]
-	: never;
+	: unknown;
 
 /**
  * Minimal contract a {@link SelectBuilder} satisfies so it can supply the value
@@ -1049,6 +1049,7 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> implements S
 	private _count = false;
 	private _distinct = false;
 	private _aggregate?: { kind: ScalarAggKind; column: ColumnSpec };
+	private _ann?: { column: ColumnSpec; vector: number[]; k: number };
 	/** Internal: in-memory rows backing a CTE source instead of a native table. */
 	_source?: MatchedRow[];
 
@@ -1199,8 +1200,29 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> implements S
 		return this.resolveMatched().length > 0;
 	}
 
+	/**
+	 * Approximate nearest-neighbour search: return the `k` rows whose `column`
+	 * (an `embedding`) is closest to `vector`, resolved by the column's ANN
+	 * index. Terminal — call `executeSync()`/`execute()` next.
+	 */
+	annSearch(column: ColumnSpec, vector: number[], k: number): SelectBuilder<T, Row<T>[]> {
+		const next = this as unknown as SelectBuilder<T, Row<T>[]>;
+		next._ann = { column, vector, k };
+		return next;
+	}
+
 	executeSync(): TResult {
 		const db = this.kit.nativeDb;
+
+		if (this._ann) {
+			const cond: ConditionSpec = {
+				kind: ConditionKind.Ann,
+				columnId: this._ann.column.id,
+				embedding: this._ann.vector,
+				k: this._ann.k
+			};
+			return queryNativeRows(db, this.table, [cond]).map((m) => m.row) as TResult;
+		}
 
 		if (this._aggregate) {
 			return computeAggregate(

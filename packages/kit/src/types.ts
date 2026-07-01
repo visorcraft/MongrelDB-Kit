@@ -8,7 +8,8 @@ export type ColumnStorageType =
 	| 'date'
 	| 'text'
 	| 'bytes'
-	| 'json';
+	| 'json'
+	| 'embedding';
 
 export type PkValue = string | bigint | (string | bigint | null)[];
 
@@ -29,6 +30,8 @@ export interface ColumnSpec<
 	primaryKey: boolean;
 	default: TDefault;
 	generated: TGenerated;
+	/** Vector dimension for an `embedding` column (required for ANN). */
+	embeddingDim?: number;
 	enumValues?: string[];
 	check?: (value: unknown) => boolean | string;
 	min?: number;
@@ -44,7 +47,7 @@ export interface IndexSpec {
 	unique: boolean;
 	/** Index kind; defaults to `bitmap`. `fm` enables FM substring search so
 	 * `contains(col, needle)` pushes down to the engine instead of scanning. */
-	kind?: 'bitmap' | 'fm';
+	kind?: 'bitmap' | 'fm' | 'ann';
 }
 
 export interface ForeignKeySpec {
@@ -91,6 +94,7 @@ type ApplicationTypeMap = {
 	text: string;
 	bytes: unknown;
 	json: unknown;
+	embedding: number[];
 };
 
 type ApplicationType<T extends ColumnApplicationType> = ApplicationTypeMap[T];

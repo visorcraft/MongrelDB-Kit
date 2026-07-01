@@ -614,6 +614,23 @@ impl PyTransaction {
             .collect()
     }
 
+    /// Approximate nearest-neighbour search over an `Embedding` column's ANN
+    /// index; returns the top-`k` rows (as JSON strings).
+    fn ann_search(
+        &self,
+        table: &str,
+        column: &str,
+        query: Vec<f32>,
+        k: usize,
+    ) -> PyResult<Vec<String>> {
+        let txn = self
+            .txn
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))?;
+        let rows = txn.ann_search(table, column, query, k).map_err(map_err)?;
+        rows.iter().map(row_to_json).collect()
+    }
+
     fn commit(&mut self) -> PyResult<()> {
         if let Some(txn) = self.txn.take() {
             let result = txn.commit().map_err(map_err);

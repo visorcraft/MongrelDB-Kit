@@ -113,6 +113,10 @@ export function packRows(table: TableSpec, rows: Record<string, unknown>[]): Buf
 					w.u8(4);
 					w.text(value as string);
 					break;
+				case 'embedding':
+					// The compact bulk format has no vector tag; embedding columns
+					// use the per-row insert path (toCells) instead.
+					throw new Error('embedding columns are not supported in bulk insert');
 				default: {
 					const _exhaustive: never = col.storageType;
 					throw new Error(`Unsupported storage type for packing: ${_exhaustive}`);
