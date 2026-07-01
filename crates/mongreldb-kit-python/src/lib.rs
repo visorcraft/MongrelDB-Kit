@@ -20,6 +20,7 @@ use pyo3::types::{PyDict, PyList, PyTuple};
 use pyo3::IntoPyObjectExt;
 use serde_json::{Map, Number, Value};
 use std::path::Path;
+use std::rc::Rc;
 
 // ---------------------------------------------------------------------------
 // Python-visible exception hierarchy. Each class gets a stable `code` attribute
@@ -98,20 +99,28 @@ fn set_code(m: &Bound<'_, PyModule>, name: &str, code: &str) -> PyResult<()> {
 
 #[pyclass(name = "Database", unsendable)]
 pub struct PyDatabase {
-    db: Option<Database>,
+    // Held behind `Rc` so an open transaction can pin the engine alive: a
+    // `PyTransaction` keeps a clone of this `Rc`, so closing the handle (or
+    // finalizing it during interpreter shutdown) never frees the `Database`
+    // out from under a live transaction that still borrows it.
+    db: Option<Rc<Database>>,
 }
 
 impl PyDatabase {
     fn require_db(&self) -> PyResult<&Database> {
         self.db
-            .as_ref()
+            .as_deref()
             .ok_or_else(|| PyRuntimeError::new_err("database already closed"))
     }
 
     fn require_db_mut(&mut self) -> PyResult<&mut Database> {
-        self.db
+        let db = self
+            .db
             .as_mut()
-            .ok_or_else(|| PyRuntimeError::new_err("database already closed"))
+            .ok_or_else(|| PyRuntimeError::new_err("database already closed"))?;
+        Rc::get_mut(db).ok_or_else(|| {
+            PyRuntimeError::new_err("cannot mutate the database while a transaction is open")
+        })
     }
 }
 
@@ -120,29 +129,40 @@ impl PyDatabase {
     #[staticmethod]
     fn open(path: &str) -> PyResult<Self> {
         let db = Database::open(Path::new(path)).map_err(map_err)?;
-        Ok(Self { db: Some(db) })
+        Ok(Self {
+            db: Some(Rc::new(db)),
+        })
     }
 
     #[staticmethod]
     fn create(path: &str, schema_json: &str) -> PyResult<Self> {
         let schema: KitSchema = serde_json::from_str(schema_json).map_err(py_json_err)?;
         let db = Database::create(Path::new(path), schema).map_err(map_err)?;
-        Ok(Self { db: Some(db) })
+        Ok(Self {
+            db: Some(Rc::new(db)),
+        })
     }
 
     fn begin<'py>(
         slf: &Bound<'py, PyDatabase>,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyTransaction>> {
-        let this = slf.borrow();
-        let txn = this.require_db()?.begin().map_err(map_err)?;
-        // Safety: the transaction borrows the Database. We keep the Python
-        // Database object alive by storing a cloned `Py<PyDatabase>` handle,
-        // so the reference remains valid for the transaction's lifetime.
+        let db = {
+            let this = slf.borrow();
+            this.db
+                .clone()
+                .ok_or_else(|| PyRuntimeError::new_err("database already closed"))?
+        };
+        let txn = db.begin().map_err(map_err)?;
+        // Safety: `txn` borrows the `Database` inside `db`. `db` (an `Rc` clone)
+        // is moved into the `PyTransaction` as `_db_owner`, which is declared
+        // *after* `txn` and so drops *after* it — the borrow can never outlive
+        // the allocation, even if the owning handle is closed first.
         let txn: Transaction<'static> = unsafe { std::mem::transmute(txn) };
         let py_txn = PyTransaction {
-            _db: slf.clone().unbind(),
             txn: Some(txn),
+            _db_owner: Some(db),
+            _db: slf.clone().unbind(),
         };
         Bound::new(py, py_txn)
     }
@@ -185,9 +205,24 @@ impl PyDatabase {
 
 #[pyclass(name = "Transaction", unsendable)]
 pub struct PyTransaction {
-    // Keep the owning Database alive while the transaction exists.
-    _db: Py<PyDatabase>,
+    // Field order is load-bearing: `txn` borrows the `Database` and MUST drop
+    // before `_db_owner` (the `Rc` that keeps that `Database` alive). Rust drops
+    // fields top-to-bottom, so this ordering guarantees the borrow is released
+    // before the allocation can be freed. `_db_owner` is cleared eagerly once the
+    // transaction commits/rolls back, so a finished (but not-yet-collected) txn
+    // object no longer pins the engine.
     txn: Option<Transaction<'static>>,
+    _db_owner: Option<Rc<Database>>,
+    // Keep the owning Python Database object alive while the transaction exists.
+    _db: Py<PyDatabase>,
+}
+
+impl PyTransaction {
+    /// Release the read side of the transaction: the borrow is already gone (the
+    /// caller has taken and finished `txn`), so the engine pin can drop too.
+    fn release_pin(&mut self) {
+        self._db_owner = None;
+    }
 }
 
 impl Drop for PyTransaction {
@@ -195,6 +230,7 @@ impl Drop for PyTransaction {
         if let Some(txn) = self.txn.take() {
             txn.rollback();
         }
+        self.release_pin();
     }
 }
 
@@ -580,7 +616,9 @@ impl PyTransaction {
 
     fn commit(&mut self) -> PyResult<()> {
         if let Some(txn) = self.txn.take() {
-            txn.commit().map_err(map_err)
+            let result = txn.commit().map_err(map_err);
+            self.release_pin();
+            result
         } else {
             Err(PyRuntimeError::new_err("transaction already closed"))
         }
@@ -590,6 +628,7 @@ impl PyTransaction {
         if let Some(txn) = self.txn.take() {
             txn.rollback();
         }
+        self.release_pin();
         Ok(())
     }
 }

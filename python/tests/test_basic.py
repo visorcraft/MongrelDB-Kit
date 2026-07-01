@@ -1,6 +1,9 @@
 import json
 import os
+import subprocess
+import sys
 import tempfile
+import textwrap
 
 import pytest
 
@@ -290,3 +293,70 @@ def test_transaction_helper_commits():
     with db.begin() as txn:
         row = txn.get_by_pk("users", 1)
         assert row["email"] == "alice@example.com"
+
+
+def test_open_transaction_pins_database_and_never_hangs():
+    """A transaction keeps the engine alive while it is open.
+
+    Regression: `Transaction` borrows `Database` behind a lifetime-erasing
+    transmute, so closing the handle (or finalizing it during interpreter
+    shutdown) used to free the engine out from under a live transaction — a
+    use-after-free that hung the process. The scenario runs in a subprocess so a
+    regression fails fast on timeout instead of hanging the whole suite.
+    """
+    script = textwrap.dedent(
+        """
+        import os, tempfile
+        from mongreldb_kit import Database, table, int as kint, text
+
+        schema = {"tables": [table(
+            name="t", id=1,
+            columns=[kint("id", 1, primary_key=True), text("v", 2)],
+            primary_key="id",
+        )]}
+        tmp = tempfile.mkdtemp()
+
+        # (1) Close the handle while a read transaction is still open: the txn
+        # must keep the engine alive and stay usable, then close cleanly.
+        db = Database.create(os.path.join(tmp, "a"), schema)
+        with db.begin() as w:
+            w.insert("t", {"id": 1, "v": "a"}); w.commit()
+        rtxn = db.begin()
+        assert rtxn.select("t") == [{"id": 1, "v": "a"}]
+        db.close()
+        assert rtxn.select("t") == [{"id": 1, "v": "a"}]
+        rtxn.rollback()
+
+        # (2) Leave a transaction open and let interpreter shutdown finalize it.
+        db2 = Database.create(os.path.join(tmp, "b"), schema)
+        with db2.begin() as w:
+            w.insert("t", {"id": 1, "v": "b"}); w.commit()
+        dangling = db2.begin()
+        dangling.select("t")
+        db2.close()  # dangling intentionally left open across process exit
+        print("ok")
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        timeout=60,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert proc.stdout.strip().endswith("ok"), proc.stdout
+
+
+def test_set_schema_blocked_while_transaction_open():
+    """`set_schema` needs exclusive access to the engine, so it must reject a
+    database that an open transaction still borrows rather than mutating state
+    out from under it. Committing/rolling back the transaction releases that pin
+    immediately, so exclusive access returns without waiting for GC."""
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+    txn = db.begin()
+    with pytest.raises(RuntimeError, match="transaction is open"):
+        db.set_schema(users_orders_schema())
+    txn.rollback()
+    # The (still-referenced) txn object no longer pins the engine after rollback.
+    db.set_schema(users_orders_schema())
