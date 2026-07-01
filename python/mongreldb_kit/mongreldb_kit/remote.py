@@ -80,10 +80,52 @@ class RemoteDatabase:
         """Run a SQL read; return raw Arrow IPC bytes (decode with pyarrow)."""
         return self._post_bytes("/sql", {"sql": sql})
 
+    def query(
+        self,
+        table: str,
+        conditions: Optional[List[Dict[str, Any]]] = None,
+        projection: Optional[List[int]] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Native typed query (``POST /kit/query``).
+
+        Returns rows as ``{"row_id": str, "values": {col_name: value}}`` dicts —
+        the row-id-returning counterpart to SQL reads. ``conditions`` is a list
+        of condition objects mirroring the daemon's variants, e.g.
+        ``{"pk": {"value": 2}}`` or
+        ``{"range": {"column_id": 2, "lo": 0, "hi": 100}}``.
+        """
+        payload: Dict[str, Any] = {"table": table}
+        if conditions is not None:
+            payload["conditions"] = conditions
+        if projection is not None:
+            payload["projection"] = projection
+        if limit is not None:
+            payload["limit"] = limit
+        env = self._post_json("/kit/query", payload)
+        info = self._schemas.get(table)
+        rows = []
+        for r in env.get("rows", []) or []:
+            values = _decode_cells(r.get("cells", []), info)
+            rows.append({"row_id": r.get("row_id"), "values": values})
+        return rows
+
     # ── writes ────────────────────────────────────────────────────────────
 
     def begin(self) -> "RemoteTransaction":
         return RemoteTransaction(self)
+
+    def create_table(self, body: Dict[str, Any]) -> int:
+        """Create a constraint-bearing table over HTTP (``POST /kit/create_table``)
+        and refresh the local schema cache.
+
+        ``body`` is the full request: ``{"name": ..., "columns": [...],
+        "constraints": {"uniques": [...], "foreign_keys": [...],
+        "checks": [...]}}``. Returns the assigned table id.
+        """
+        env = self._post_json("/kit/create_table", body)
+        self.refresh()
+        return int(env.get("table_id", 0))
 
     # ── HTTP plumbing ─────────────────────────────────────────────────────
 
@@ -218,13 +260,17 @@ def _table_for_op(ops: List[Dict[str, Any]], index: int) -> str:
 
 def _decode_row(db: RemoteDatabase, table: str, row: List[Any]) -> Dict[str, Any]:
     info = db.table(table)
+    return _decode_cells(row, info)
+
+
+def _decode_cells(cells: List[Any], info: Dict[str, Any]) -> Dict[str, Any]:
     id_to_name = info["id_to_name"]
     out: Dict[str, Any] = {}
     i = 0
-    while i + 1 < len(row):
-        cid = row[i]
+    while i + 1 < len(cells):
+        cid = cells[i]
         name = id_to_name.get(cid)
         if name is not None:
-            out[name] = row[i + 1]
+            out[name] = cells[i + 1]
         i += 2
     return out

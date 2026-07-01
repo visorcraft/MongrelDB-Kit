@@ -37,6 +37,8 @@ class Stub:
 
     def __init__(self):
         self.kit_txn_responses = []  # list of (status, body)
+        # Per-path canned POST responses: path → list of (status, body).
+        self.canned = {}
         self.requests = []
         outer = self
 
@@ -68,6 +70,10 @@ class Stub:
                         status, resp = outer.kit_txn_responses.pop(0)
                     else:
                         status, resp = 200, {"status": "committed", "epoch": 7, "results": []}
+                    self._send(status, json.dumps(resp).encode())
+                elif self.path in outer.canned:
+                    queue = outer.canned[self.path]
+                    status, resp = queue.pop(0) if queue else (200, {})
                     self._send(status, json.dumps(resp).encode())
                 else:
                     self._send(404, b"not found")
@@ -180,3 +186,47 @@ def test_idempotency_key_forwarded(stub):
     db.begin().with_idempotency_key("k1").insert("users", {"age": 1}).commit()
     posted = stub.requests[-1][2]
     assert posted["idempotency_key"] == "k1"
+
+
+def test_query_decodes_rows(stub):
+    stub.canned["/kit/query"] = [
+        (
+            200,
+            {
+                "rows": [
+                    {"row_id": "42", "cells": [0, 1, 1, "a@x", 2, 30]},
+                ],
+                "truncated": False,
+            },
+        )
+    ]
+    db = RemoteDatabase(stub.url())
+    rows = db.query("users", [{"pk": {"value": 1}}], projection=[0, 2])
+    # The stub returns the full row (projection is honored server-side), so all
+    # three columns decode.
+    assert rows == [{"row_id": "42", "values": {"id": 1, "email": "a@x", "age": 30}}]
+    posted = stub.requests[-1][2]
+    assert posted["projection"] == [0, 2]
+    assert posted["conditions"] == [{"pk": {"value": 1}}]
+
+
+def test_create_table_forwards_body_and_returns_id(stub):
+    stub.canned["/kit/create_table"] = [(200, {"table_id": 7})]
+    db = RemoteDatabase(stub.url())
+    tid = db.create_table(
+        {
+            "name": "accounts",
+            "columns": [{"id": 0, "name": "id", "ty": "int64", "primary_key": True}],
+            "constraints": {"uniques": []},
+        }
+    )
+    assert tid == 7
+    # The create POST is followed by a refresh GET; locate the POST explicitly.
+    create_req = next(
+        r for r in stub.requests if r[0] == "POST" and r[1] == "/kit/create_table"
+    )
+    posted = create_req[2]
+    assert posted["name"] == "accounts"
+    assert posted["columns"][0]["primary_key"] is True
+    # After create the facade refreshes /kit/schema (a GET).
+    assert any(r[0] == "GET" and r[1] == "/kit/schema" for r in stub.requests)

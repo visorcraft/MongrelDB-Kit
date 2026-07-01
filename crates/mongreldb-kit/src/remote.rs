@@ -122,6 +122,24 @@ impl RemoteDatabase {
         Ok(())
     }
 
+    /// Create a constraint-bearing table over HTTP (`POST /kit/create_table`)
+    /// and refresh the local schema cache. `body` is the full request JSON —
+    /// `{name, columns:[{id,name,ty,primary_key,nullable,auto_increment,…}],
+    /// constraints:{uniques,…,foreign_keys,…,checks:[{id,name,expr}]}}`.
+    /// Returns the assigned table id.
+    pub fn create_table(&mut self, body: &Value) -> Result<u64> {
+        let resp = self
+            .client
+            .post(self.url("/kit/create_table"))
+            .json(body)
+            .send()
+            .map_err(ioe)?;
+        let v: Value = decode(resp)?;
+        let table_id = v.get("table_id").and_then(|t| t.as_u64()).unwrap_or(0);
+        self.refresh()?;
+        Ok(table_id)
+    }
+
     pub fn table_names(&self) -> Vec<String> {
         self.schemas.keys().cloned().collect()
     }

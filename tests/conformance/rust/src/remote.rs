@@ -156,6 +156,11 @@ fn row(pairs: &[(&str, JVal)]) -> Map<String, JVal> {
     m
 }
 
+/// Alias used in later scenarios (kept for readability alongside `row`).
+fn row_pairs(pairs: &[(&str, JVal)]) -> Map<String, JVal> {
+    row(pairs)
+}
+
 /// Run the remote conformance scenarios. Returns `Err(message)` on the first
 /// mismatch so `main.rs` / the `#[test]` can report it.
 pub fn run_remote() -> Result<(), String> {
@@ -164,7 +169,7 @@ pub fn run_remote() -> Result<(), String> {
 
 fn inner() -> KitResult<()> {
     let srv = boot_server().map_err(KitError::Storage)?;
-    let db = RemoteDatabase::connect(&srv.base_url)?;
+    let mut db = RemoteDatabase::connect(&srv.base_url)?;
 
     // Schema loaded from the daemon.
     let names = db.table_names();
@@ -299,6 +304,44 @@ fn inner() -> KitResult<()> {
             "query row email mismatch: {:?}",
             rows[0].values.get("email")
         )));
+    }
+
+    // 9. remote DDL: provision a constraint-bearing table entirely over HTTP,
+    //    then exercise its unique constraint through /kit/txn.
+    let body = json!({
+        "name": "tags",
+        "columns": [
+            {"id": 0, "name": "id", "ty": "int64", "primary_key": true, "auto_increment": true},
+            {"id": 1, "name": "label", "ty": "bytes", "nullable": true},
+        ],
+        "constraints": {
+            "uniques": [{"id": 5, "name": "tag_label_unique", "columns": [1]}]
+        }
+    });
+    let tid = db.create_table(&body)?;
+    if tid == 0 {
+        return Err(KitError::Storage("create_table returned table_id 0".into()));
+    }
+    if !db.table_names().contains(&"tags".to_string()) {
+        return Err(KitError::Storage(
+            "create_table did not refresh schema cache".into(),
+        ));
+    }
+    db.begin()
+        .insert("tags", row_pairs(&[("label", json!("alpha"))]))?
+        .commit()?;
+    // Duplicate label on the remotely-created table → DuplicateError.
+    match db
+        .begin()
+        .insert("tags", row_pairs(&[("label", json!("alpha"))]))?
+        .commit()
+    {
+        Err(KitError::Duplicate(msg)) if msg.contains("tag_label_unique") => {}
+        other => {
+            return Err(KitError::Storage(format!(
+                "expected DuplicateError on remote-created table, got {other:?}"
+            )));
+        }
     }
 
     Ok(())
