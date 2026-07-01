@@ -432,6 +432,60 @@ fn distinct_non_null<'a>(rows: &'a [Row], col: &str) -> Vec<&'a Value> {
 
 // ── joins ───────────────────────────────────────────────────────────────────
 
+/// When a join `ON` is `right.col = left.col` (column = column) and the right
+/// column has a declared bitmap index, build a `BitmapIn` over the distinct
+/// left-side key values so the right table is fetched by an index probe instead
+/// of a full scan. `eval_pred` still re-checks the predicate for every combined
+/// row, so this only shrinks the candidate set — the result is identical.
+/// Returns `None` (→ full scan) for any non-FK-equality shape, a right column
+/// without a bitmap index, or an empty probe set.
+fn fk_join_condition(
+    right_table: &KitTable,
+    right_alias: &str,
+    on: &Expr,
+    left_rows: &[JoinRow],
+) -> Option<Condition> {
+    let Expr::Eq(a, b) = on else { return None };
+    let (Expr::Column(ca), Expr::Column(cb)) = (a.as_ref(), b.as_ref()) else {
+        return None;
+    };
+    let prefix = format!("{right_alias}.");
+    // Exactly one side must reference the right (joined) alias.
+    let (right_qual, left_qual) = match (ca.starts_with(&prefix), cb.starts_with(&prefix)) {
+        (true, false) => (ca.as_str(), cb.as_str()),
+        (false, true) => (cb.as_str(), ca.as_str()),
+        _ => return None,
+    };
+    let right_col = right_qual.strip_prefix(&prefix)?;
+    if !crate::pushdown::has_declared_bitmap_index(right_table, right_col) {
+        return None;
+    }
+    let col = right_table.column(right_col)?;
+    let (left_alias, left_col) = left_qual.split_once('.')?;
+
+    let mut seen = std::collections::HashSet::new();
+    let mut values = Vec::new();
+    for row in left_rows {
+        let key = row
+            .get(left_alias)
+            .and_then(|t| t.as_object())
+            .and_then(|o| o.get(left_col))
+            .and_then(|v| crate::pushdown::value_index_key(v, col.storage_type));
+        if let Some(key) = key {
+            if seen.insert(key.clone()) {
+                values.push(key);
+            }
+        }
+    }
+    if values.is_empty() {
+        return None;
+    }
+    Some(Condition::BitmapIn {
+        column_id: col.id as u16,
+        values,
+    })
+}
+
 pub(crate) fn run_join(ctx: &ExecCtx, query: &JoinQuery) -> Result<Vec<JoinRow>> {
     let base_alias = query.alias.clone().unwrap_or_else(|| query.table.clone());
     let mut acc: Vec<JoinRow> = ctx
@@ -446,7 +500,19 @@ pub(crate) fn run_join(ctx: &ExecCtx, query: &JoinQuery) -> Result<Vec<JoinRow>>
 
     for join in &query.joins {
         let right_alias = join.alias.clone().unwrap_or_else(|| join.table.clone());
-        let right_rows = ctx.table_rows(&join.table)?;
+        // For an FK-equality ON with a bitmap-indexed right column, probe the
+        // right table by `BitmapIn` over the accumulated left keys instead of a
+        // full scan; otherwise fall back to the full scan.
+        let right_rows = match (join.kind, join.on.as_ref()) {
+            (JoinKind::Cross, _) | (_, None) => ctx.table_rows(&join.table)?,
+            (_, Some(on)) => match ctx
+                .table_def(&join.table)
+                .and_then(|t| fk_join_condition(t, &right_alias, on, &acc))
+            {
+                Some(cond) => ctx.table_rows_filtered(&join.table, &[cond])?,
+                None => ctx.table_rows(&join.table)?,
+            },
+        };
         let mut next = Vec::new();
         for left in acc {
             let mut matched = false;

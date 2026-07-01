@@ -257,6 +257,38 @@ fn has_bitmap_index(table: &KitTable, col_name: &str) -> bool {
         || table.primary_key.contains(&col_name.to_string())
 }
 
+/// A column backed by a real **bitmap** index (declared index or unique
+/// constraint) — unlike [`has_bitmap_index`], excludes the primary key, which
+/// gets a HOT (not bitmap) index in `to_core_schema`. `BitmapIn` on a column
+/// without a bitmap index returns an empty set (not a superset), so the FK-join
+/// probe must only build one when this is true.
+pub(crate) fn has_declared_bitmap_index(table: &KitTable, col_name: &str) -> bool {
+    table
+        .indexes
+        .iter()
+        .any(|idx| idx.columns.iter().any(|c| c == col_name))
+        || table
+            .unique_constraints
+            .iter()
+            .any(|uq| uq.columns.iter().any(|c| c == col_name))
+}
+
+/// Encode a JSON value into the bitmap-index key bytes for column type `ty`,
+/// matching [`literal_to_index_key`]. Returns `None` for nulls / unencodable
+/// values (which then simply don't contribute a probe key).
+pub(crate) fn value_index_key(v: &Value, ty: ColumnType) -> Option<Vec<u8>> {
+    let lit = match v {
+        Value::Bool(b) => Literal::Bool(*b),
+        Value::Number(n) => n
+            .as_i64()
+            .map(Literal::Int)
+            .or_else(|| n.as_f64().map(Literal::Float))?,
+        Value::String(s) => Literal::Text(s.clone()),
+        _ => return None,
+    };
+    literal_to_index_key(&lit, ty)
+}
+
 fn is_int_type(ty: ColumnType) -> bool {
     matches!(
         ty,

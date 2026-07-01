@@ -63,7 +63,7 @@
           }
         ],
         "primary_key": ["id"],
-        "indexes": [],
+        "indexes": [{ "name": "idx_orders_user_id", "columns": ["user_id"], "unique": false }],
         "unique_constraints": [],
         "foreign_keys": [],
         "check_constraints": []
