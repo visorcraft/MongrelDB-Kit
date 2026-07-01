@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import mongreldb from 'mongreldb';
+import mongreldb from '@visorcraft/mongreldb';
 import type {
 	Database as NativeDatabase,
 	Transaction,
