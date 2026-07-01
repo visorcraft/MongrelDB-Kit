@@ -27,11 +27,12 @@
 //! | `Lt/Lte/Gt/Gte(Column, Literal)` int | `Range` | int-typed column |
 //! | `Lt/Lte/Gt/Gte(Column, Literal)` float | `RangeF64` | float-typed column |
 //! | `Contains(Column, needle)` | `FmContains` | FM-indexed column (residual re-check) |
+//! | `IsNull` / `IsNotNull(Column)` | `IsNull` / `IsNotNull` | page-stat-aware (residual re-check) |
 //! | `And([sub-exprs])` | recurse each | each part translated independently |
 //!
-//! Unsupported (`Or`, `Not`, `Ne`, `NotIn`, `IsNull`, `Like`, `InSubquery`,
-//! `Exists`, cross-column comparisons) are left as residual Rust evaluation —
-//! the caller falls back to a full scan for those branches.
+//! Unsupported (`Or`, `Not`, `Ne`, `NotIn`, `Like`, `InSubquery`, `Exists`,
+//! cross-column comparisons) are left as residual Rust evaluation — the caller
+//! falls back to a full scan for those branches.
 
 use mongreldb_core::query::Condition;
 use mongreldb_kit_core::query::{Expr, Literal};
@@ -98,10 +99,36 @@ fn collect_conditions(table: &KitTable, expr: &Expr, out: &mut Vec<Condition>) -
             }
             false
         }
-        // Unsupported: Or, Not, Ne, NotIn, IsNull, IsNotNull, Like, InSubquery,
-        // Exists, NotExists → leave as residual Rust evaluation.
+        Expr::IsNull(a) => {
+            if let Some(c) = try_translate_null(table, a, true) {
+                out.push(c);
+            }
+            false
+        }
+        Expr::IsNotNull(a) => {
+            if let Some(c) = try_translate_null(table, a, false) {
+                out.push(c);
+            }
+            false
+        }
+        // Unsupported: Or, Not, Ne, NotIn, Like, InSubquery, Exists, NotExists →
+        // leave as residual Rust evaluation.
         _ => false,
     }
+}
+
+/// Translate `IsNull(Column)` / `IsNotNull(Column)` into the engine's page-stat-
+/// aware null conditions. Kept as a residual (the engine returns a superset).
+fn try_translate_null(table: &KitTable, a: &Expr, is_null: bool) -> Option<Condition> {
+    let Expr::Column(col_name) = a else {
+        return None;
+    };
+    let column_id = table.column(col_name)?.id as u16;
+    Some(if is_null {
+        Condition::IsNull { column_id }
+    } else {
+        Condition::IsNotNull { column_id }
+    })
 }
 
 /// Push `opt` into `out` if `Some`, returning whether it was pushed.

@@ -1,0 +1,14 @@
+{
+  "is_null": {
+    "rows": [
+      { "id": 2, "nickname": null },
+      { "id": 4, "nickname": null }
+    ]
+  },
+  "is_not_null": {
+    "rows": [
+      { "id": 1, "nickname": "al" },
+      { "id": 3, "nickname": "cy" }
+    ]
+  }
+}

@@ -105,6 +105,8 @@ fn object_filter_to_expr(map: &Map<String, Value>) -> Result<Expr, String> {
                     "gte" => Expr::Gte(Box::new(col_expr), Box::new(Expr::Literal(operand_lit))),
                     "lt" => Expr::Lt(Box::new(col_expr), Box::new(Expr::Literal(operand_lit))),
                     "lte" => Expr::Lte(Box::new(col_expr), Box::new(Expr::Literal(operand_lit))),
+                    "is_null" => Expr::IsNull(Box::new(col_expr)),
+                    "is_not_null" => Expr::IsNotNull(Box::new(col_expr)),
                     other => return Err(format!("unknown operator {}", other)),
                 };
                 parts.push(expr);
@@ -1109,6 +1111,77 @@ pub fn run_ann() -> Result<(), String> {
                 scenario.name, ids, expect
             ));
         }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// IS NULL / IS NOT NULL pushdown conformance
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct NullScenario {
+    name: String,
+    table: String,
+    filter: Map<String, Value>,
+    #[serde(default)]
+    order: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct NullFixture {
+    schema: Schema,
+    rows: Vec<Map<String, Value>>,
+    scenarios: Vec<NullScenario>,
+}
+
+pub fn run_null_filter() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: NullFixture = load_json(&fixtures.join("null_filter.json"))?;
+    let expected: Map<String, Value> = load_json(&fixtures.join("expected/null_filter.json"))?;
+
+    let table = fixture
+        .schema
+        .tables
+        .first()
+        .ok_or("null_filter fixture has no table")?
+        .name
+        .clone();
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+    for row in &fixture.rows {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        txn.insert(&table, row.clone()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    for scenario in &fixture.scenarios {
+        let select = Select {
+            table: scenario.table.clone(),
+            columns: Vec::new(),
+            filter: Some(object_filter_to_expr(&scenario.filter)?),
+            order_by: Vec::new(),
+            limit: None,
+            offset: None,
+        };
+        let txn = db.begin().map_err(|e| e.to_string())?;
+        let mut rows: Vec<Map<String, Value>> = txn
+            .select(&Query::Select(select))
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|r| r.values)
+            .collect();
+        txn.commit().map_err(|e| e.to_string())?;
+        if let Some(order) = &scenario.order {
+            sort_flat_rows(&mut rows, order);
+        }
+        let actual = Value::Array(rows.into_iter().map(Value::Object).collect());
+        let exp = expected
+            .get(&scenario.name)
+            .and_then(|e| e.get("rows"))
+            .ok_or(format!("missing expected rows for {}", scenario.name))?;
+        assert_eq_json(&scenario.name, &actual, exp)?;
     }
     Ok(())
 }

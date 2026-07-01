@@ -1,0 +1,45 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "people",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "nickname",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": true,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "nickname": "al" },
+    { "id": 2, "nickname": null },
+    { "id": 3, "nickname": "cy" },
+    { "id": 4, "nickname": null }
+  ],
+  "scenarios": [
+    { "name": "is_null", "table": "people", "order": "+id", "filter": { "nickname": { "is_null": true } } },
+    { "name": "is_not_null", "table": "people", "order": "+id", "filter": { "nickname": { "is_not_null": true } } }
+  ]
+}

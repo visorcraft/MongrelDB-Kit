@@ -633,6 +633,15 @@ function compilePredicate(table: TableSpec, predicate: Predicate): PredicatePlan
 			const condition = makeContainsCondition(table, predicate.column, predicate.substr);
 			return condition ? { conditions: [condition], residual: predicate } : residualPlan(predicate);
 		}
+		case 'null': {
+			// Push the engine's page-stat-aware IsNull / IsNotNull; keep the null
+			// check as a residual (the engine returns a superset).
+			const cond: ConditionSpec = {
+				kind: predicate.not ? ConditionKind.IsNotNull : ConditionKind.IsNull,
+				columnId: predicate.column.id
+			};
+			return { conditions: [cond], residual: predicate };
+		}
 		default:
 			return residualPlan(predicate);
 	}
