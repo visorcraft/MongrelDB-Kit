@@ -256,15 +256,16 @@ impl PyDatabase {
     }
 
     /// Approximate aggregate (`count`/`sum`/`avg`) from the reservoir sample with
-    /// a `z`-score confidence interval. Returns a JSON object, or `None` when the
-    /// reservoir is empty.
+    /// a `z`-score confidence interval. Returns a dict, or `None` when the
+    /// reservoir is empty. (Native conversion — no JSON round-trip.)
     fn approx_aggregate(
         &self,
+        py: Python<'_>,
         table: &str,
         agg: &str,
         column: Option<&str>,
         z: f64,
-    ) -> PyResult<Option<String>> {
+    ) -> PyResult<Option<Py<PyAny>>> {
         let kind = match agg {
             "count" => ApproxAggKind::Count,
             "sum" => ApproxAggKind::Sum,
@@ -280,15 +281,14 @@ impl PyDatabase {
             .approx_aggregate(table, column, kind, z)
             .map_err(map_err)?;
         Ok(res.map(|r| {
-            serde_json::json!({
-                "point": r.point,
-                "ci_low": r.ci_low,
-                "ci_high": r.ci_high,
-                "n_population": r.n_population,
-                "n_sample_live": r.n_sample_live,
-                "n_passing": r.n_passing,
-            })
-            .to_string()
+            let dict = PyDict::new(py);
+            let _ = dict.set_item("point", r.point);
+            let _ = dict.set_item("ci_low", r.ci_low);
+            let _ = dict.set_item("ci_high", r.ci_high);
+            let _ = dict.set_item("n_population", r.n_population);
+            let _ = dict.set_item("n_sample_live", r.n_sample_live);
+            let _ = dict.set_item("n_passing", r.n_passing);
+            dict.into_py_any(py).unwrap()
         }))
     }
 
@@ -357,8 +357,9 @@ impl PyDatabase {
 
     /// Incrementally-maintained aggregate (`count`/`sum`/`min`/`max`/`avg`) over
     /// `table`, optionally filtered by the friendly `filter` object (which must
-    /// translate exactly to index conditions). Returns a JSON object
-    /// `{value, incremental, delta_rows}`; the value is always exact.
+    /// translate exactly to index conditions). Returns a dict
+    /// `{value, incremental, delta_rows}`; the value is always exact. (Native
+    /// conversion — no JSON round-trip.)
     fn incremental_aggregate(
         &self,
         py: Python<'_>,
@@ -366,7 +367,7 @@ impl PyDatabase {
         agg: &str,
         column: Option<&str>,
         filter: Option<Py<PyAny>>,
-    ) -> PyResult<String> {
+    ) -> PyResult<Py<PyAny>> {
         let kind = match agg {
             "count" => IncrementalAggKind::Count,
             "sum" => IncrementalAggKind::Sum,
@@ -393,29 +394,32 @@ impl PyDatabase {
             .require_db()?
             .incremental_aggregate(table, column, kind, expr.as_ref())
             .map_err(map_err)?;
-        let json = serde_json::json!({
-            "value": res.value,
-            "incremental": res.incremental,
-            "delta_rows": res.delta_rows,
-        });
-        Ok(json.to_string())
+        let dict = PyDict::new(py);
+        let _ = dict.set_item("value", value_to_py(py, &res.value)?);
+        let _ = dict.set_item("incremental", res.incremental);
+        let _ = dict.set_item("delta_rows", res.delta_rows);
+        dict.into_py_any(py)
     }
 
     /// Explain how `filter` (the friendly filter object) would push down against
-    /// `table`. Returns a JSON object; does not run the query.
-    fn explain(&self, py: Python<'_>, table: &str, filter: Py<PyAny>) -> PyResult<String> {
+    /// `table`. Returns a dict; does not run the query. (Native conversion.)
+    fn explain(&self, py: Python<'_>, table: &str, filter: Py<PyAny>) -> PyResult<Py<PyAny>> {
         let value = py_to_value(filter.bind(py))?;
         let map = value
             .as_object()
             .ok_or_else(|| ValidationError::new_err("filter must be an object"))?;
         let expr = parse_filter(map).map_err(map_err)?;
         let plan = self.require_db()?.explain(table, &expr).map_err(map_err)?;
-        let json = serde_json::json!({
-            "index_accelerated": plan.index_accelerated,
-            "exact": plan.exact,
-            "pushed_conditions": plan.pushed_conditions,
-        });
-        Ok(json.to_string())
+        let dict = PyDict::new(py);
+        let _ = dict.set_item("index_accelerated", plan.index_accelerated);
+        let _ = dict.set_item("exact", plan.exact);
+        let conditions: Vec<Py<PyAny>> = plan
+            .pushed_conditions
+            .iter()
+            .map(|s| s.into_py_any(py))
+            .collect::<PyResult<_>>()?;
+        let _ = dict.set_item("pushed_conditions", conditions);
+        dict.into_py_any(py)
     }
 
     fn close(&mut self) {

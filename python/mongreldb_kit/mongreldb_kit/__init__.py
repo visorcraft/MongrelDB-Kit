@@ -161,7 +161,7 @@ class Database:
         reservoir is empty. ``column`` is required for ``sum``/``avg``.
         """
         raw = self._handle.approx_aggregate(table, agg, column, z)
-        return None if raw is None else json.loads(raw)
+        return None if raw is None else raw
 
     def scan_batched(
         self,
@@ -206,16 +206,14 @@ class Database:
         ``column`` is required for sum/min/max/avg. An optional ``filter`` must
         translate exactly to index conditions.
         """
-        return json.loads(
-            self._handle.incremental_aggregate(table, agg, column, filter)
-        )
+        return self._handle.incremental_aggregate(table, agg, column, filter)
 
     def explain(self, table: str, filter: dict[str, Any]) -> dict[str, Any]:
         """Explain how ``filter`` pushes down against ``table`` (diagnostic only).
 
         Returns ``{index_accelerated, exact, pushed_conditions}``.
         """
-        return json.loads(self._handle.explain(table, filter))
+        return self._handle.explain(table, filter)
 
     def close(self) -> None:
         """Close the database handle and release underlying resources."""

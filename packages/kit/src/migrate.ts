@@ -4,6 +4,7 @@ import { ColumnType, IndexKindSpec, ConditionKind } from '@visorcraft/mongreldb/
 import { tableFromIPC } from 'apache-arrow';
 import { KitDatabase } from './db.js';
 import { table, int, text, type Schema } from './schema.js';
+import { rowFromRowJs } from './rows.js';
 import type { TableSpec, ColumnSpec, IndexSpec, UniqueSpec, ForeignKeySpec, ColumnStorageType, PkValue } from './types.js';
 import { toCells, pkValueFromRow, parentExists, type ConstraintKit } from './constraints.js';
 import { validateRow } from './validation.js';
@@ -229,25 +230,6 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 		columns: table.columns.map(toMongrelColumnSpec),
 		indexes
 	};
-}
-
-function cellValue(cell: Cell | undefined): unknown {
-	if (!cell) return null;
-	if (cell.text !== undefined) return cell.text;
-	if (cell.int64 !== undefined) return cell.int64;
-	if (cell.boolean !== undefined) return cell.boolean;
-	if (cell.float64 !== undefined) return cell.float64;
-	if (cell.bytes !== undefined) return cell.bytes;
-	return null;
-}
-
-function rowFromRowJs(table: TableSpec, rowJs: RowJs): Record<string, unknown> {
-	const row: Record<string, unknown> = {};
-	for (const col of table.columns) {
-		const cell = rowJs.cells.find((c) => c.columnId === col.id);
-		row[col.name] = cellValue(cell);
-	}
-	return row;
 }
 
 function fullScanCondition(table: TableSpec) {
