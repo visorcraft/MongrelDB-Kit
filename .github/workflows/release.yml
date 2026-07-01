@@ -1,0 +1,45 @@
+# Publishes @visorcraft/mongreldb-kit to npm on a version tag.
+#
+# Order matters: publish the engine (@visorcraft/mongreldb) FIRST, because this
+# job installs it from npm to satisfy the peer dependency and typecheck/build.
+# Cut a kit release by pushing a tag, e.g. `git tag v0.7.0 && git push --tags`.
+#
+# Requires repo secret NPM_TOKEN: a granular npm access token with
+# write access to the @visorcraft scope.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/kit
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          scope: '@visorcraft'
+
+      # npm 7+ auto-installs the @visorcraft/mongreldb peer from npm, which
+      # provides the types tsc needs and the native addon the tests load.
+      - run: npm install
+
+      - run: npm run build
+
+      - run: npm test
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
