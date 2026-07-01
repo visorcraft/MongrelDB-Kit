@@ -1,0 +1,67 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "sales",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "region",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          },
+          {
+            "id": 3,
+            "name": "amount",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": true,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "region": "east", "amount": 100 },
+    { "id": 2, "region": "east", "amount": 200 },
+    { "id": 3, "region": "west", "amount": 100 },
+    { "id": 4, "region": "west", "amount": null },
+    { "id": 5, "region": "east", "amount": 100 }
+  ],
+  "scenarios": [
+    {
+      "name": "grouped_by_region",
+      "table": "sales",
+      "group_by": ["region"],
+      "order": "+region",
+      "aggregates": [
+        { "func": "count", "alias": "n" },
+        { "func": "count", "column": "amount", "alias": "cnt_amt" },
+        { "func": "count", "column": "amount", "alias": "distinct_amt", "distinct": true },
+        { "func": "sum", "column": "amount", "alias": "sum_amt" },
+        { "func": "min", "column": "amount", "alias": "min_amt" },
+        { "func": "max", "column": "amount", "alias": "max_amt" }
+      ]
+    }
+  ]
+}

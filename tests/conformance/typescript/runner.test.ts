@@ -442,6 +442,27 @@ function keyComponent(c: any): string | bigint | null {
 	throw new Error(`invalid key component: ${JSON.stringify(c)}`);
 }
 
+/** Aggregate results carry bigints for int64 count/sum/min/max; the shared
+ * expected JSON uses plain numbers, so normalize for comparison. */
+function normalizeAggRow(row: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(row)) out[k] = typeof v === 'bigint' ? Number(v) : v;
+	return out;
+}
+
+/** Sort aggregate result rows by a `+col`/`-col` order key for a deterministic
+ * comparison independent of group iteration order. */
+function sortAggRows(rows: Record<string, unknown>[], order: string): void {
+	const desc = order.startsWith('-');
+	const col = order.replace(/^[+-]/, '');
+	rows.sort((a, b) => {
+		const av = a[col] as any;
+		const bv = b[col] as any;
+		const cmp = av === bv ? 0 : av < bv ? -1 : 1;
+		return desc ? -cmp : cmp;
+	});
+}
+
 describe('mongreldb-kit conformance', () => {
 	it('encodes keys byte-identically to the shared vectors', () => {
 		const fixture = loadJson('keys.json');
@@ -530,6 +551,42 @@ describe('mongreldb-kit conformance', () => {
 			}
 			for (const scenario of queries) {
 				await runScenario(scenario, expected.queries[scenario.name], kit, schema);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs aggregate scenarios against the TypeScript kit', () => {
+		const raw = loadJson('aggregates.json');
+		const expected = loadJson('expected/aggregates.json');
+		const schema = schemaFromFixture(raw.schema);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-agg-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			const seedTable = schema.table(raw.schema.tables[0].name);
+			for (const row of raw.rows) {
+				kit.insertInto(seedTable).values(normalizeRowForTs(seedTable, row)).executeSync();
+			}
+			for (const scenario of raw.scenarios) {
+				const tspec = schema.table(scenario.table);
+				const groupCols = (scenario.group_by ?? []).map((n: string) =>
+					tspec.columns.find((c) => c.name === n)!
+				);
+				const specs: Record<string, any> = {};
+				for (const a of scenario.aggregates) {
+					const column = a.column ? tspec.columns.find((c) => c.name === a.column) : undefined;
+					specs[a.alias] = { fn: a.func, column, distinct: !!a.distinct };
+				}
+				const rows = kit
+					.selectFrom(tspec)
+					.groupBy(...groupCols)
+					.aggregate(specs)
+					.executeSync()
+					.map(normalizeAggRow);
+				if (scenario.order) sortAggRows(rows, scenario.order);
+				expect({ rows }, `aggregate ${scenario.name}`).toEqual(expected[scenario.name]);
 			}
 		} finally {
 			kit.close();

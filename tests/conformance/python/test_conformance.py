@@ -243,6 +243,39 @@ def test_conformance():
         db.close()
 
 
+def test_aggregates():
+    raw = load_json("aggregates.json")
+    expected = load_json("expected/aggregates.json")
+    table = raw["schema"]["tables"][0]["name"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = kit.Database.create(tmp, raw["schema"])
+        for row in raw["rows"]:
+            txn = db.begin()
+            txn.insert(table, row)
+            txn.commit()
+
+        for scenario in raw["scenarios"]:
+            txn = db.begin()
+            rows = txn.aggregate(
+                scenario["table"],
+                scenario["aggregates"],
+                group_by=scenario.get("group_by"),
+            )
+            order = scenario.get("order")
+            if order:
+                desc = order.startswith("-")
+                col = order.lstrip("+-")
+                rows = sorted(
+                    rows,
+                    key=lambda r: (r.get(col) is None, r.get(col)),
+                    reverse=desc,
+                )
+            exp = expected[scenario["name"]]["rows"]
+            assert rows == exp, f"{scenario['name']}: {rows} != {exp}"
+        db.close()
+
+
 def run_phase1_dml_with_db(db):
     """Run the Phase 1 DML fixture against an already-open, migrated database."""
     fixture = load_json("phase1_dml.json")

@@ -1,6 +1,7 @@
 use mongreldb_kit::{
-    encode_pk, encode_row_guard_key, encode_unique_key, Database, Direction, Expr, KeyComponent,
-    KitError, Literal, Migration, OnConflict, OrderBy, Query, Row, Schema, Select,
+    encode_pk, encode_row_guard_key, encode_unique_key, Aggregate, AggregateQuery, Database,
+    Direction, Expr, KeyComponent, KitError, Literal, Migration, OnConflict, OrderBy, Query, Row,
+    Schema, Select,
 };
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -523,6 +524,100 @@ pub fn run_conformance() -> Result<(), String> {
         run_query(&mut db, scenario, expected_queries.get(&scenario.name))?;
     }
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate conformance (COUNT / COUNT(col) / COUNT(DISTINCT) / SUM/MIN/MAX/AVG)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct AggScenario {
+    name: String,
+    table: String,
+    #[serde(default)]
+    group_by: Vec<String>,
+    #[serde(default)]
+    order: Option<String>,
+    aggregates: Vec<Aggregate>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AggFixture {
+    schema: Schema,
+    rows: Vec<Map<String, Value>>,
+    scenarios: Vec<AggScenario>,
+}
+
+/// Compare two JSON values for aggregate-result ordering (text/number/null).
+fn cmp_json(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Some(Value::String(x)), Some(Value::String(y))) => x.cmp(y),
+        (Some(Value::Number(x)), Some(Value::Number(y))) => x
+            .as_f64()
+            .partial_cmp(&y.as_f64())
+            .unwrap_or(Ordering::Equal),
+        (None | Some(Value::Null), None | Some(Value::Null)) => Ordering::Equal,
+        (None | Some(Value::Null), _) => Ordering::Less,
+        (_, None | Some(Value::Null)) => Ordering::Greater,
+        _ => Ordering::Equal,
+    }
+}
+
+pub fn run_aggregates() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: AggFixture = load_json(&fixtures.join("aggregates.json"))?;
+    let expected: Map<String, Value> = load_json(&fixtures.join("expected/aggregates.json"))?;
+
+    let table = fixture
+        .schema
+        .tables
+        .first()
+        .ok_or("aggregates fixture has no table")?
+        .name
+        .clone();
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let mut db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+
+    for row in &fixture.rows {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        txn.insert(&table, row.clone()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    for scenario in &fixture.scenarios {
+        let query = AggregateQuery {
+            table: scenario.table.clone(),
+            filter: None,
+            group_by: scenario.group_by.clone(),
+            aggregates: scenario.aggregates.clone(),
+            having: None,
+        };
+        let txn = db.begin().map_err(|e| e.to_string())?;
+        let mut rows = txn.aggregate(&query).map_err(|e| e.to_string())?;
+        if let Some(order) = &scenario.order {
+            let (desc, col) = match order.strip_prefix('-') {
+                Some(c) => (true, c.to_string()),
+                None => (false, order.strip_prefix('+').unwrap_or(order).to_string()),
+            };
+            rows.sort_by(|a, b| {
+                let ord = cmp_json(a.values.get(&col), b.values.get(&col));
+                if desc {
+                    ord.reverse()
+                } else {
+                    ord
+                }
+            });
+        }
+        let actual = Value::Array(rows.iter().map(row_to_value).collect());
+        let exp = expected
+            .get(&scenario.name)
+            .and_then(|e| e.get("rows"))
+            .ok_or(format!("missing expected rows for {}", scenario.name))?;
+        assert_eq_json(&scenario.name, &actual, exp)?;
+    }
     Ok(())
 }
 

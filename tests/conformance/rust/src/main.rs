@@ -7,6 +7,10 @@ fn main() {
         eprintln!("phase 1 DML conformance failed: {}", e);
         std::process::exit(1);
     }
+    if let Err(e) = conformance_runner::run_aggregates() {
+        eprintln!("aggregate conformance failed: {}", e);
+        std::process::exit(1);
+    }
     if let Err(e) = conformance_runner::run_key_encoding() {
         eprintln!("key encoding conformance failed: {}", e);
         std::process::exit(1);
