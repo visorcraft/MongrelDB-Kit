@@ -35,6 +35,7 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
             KitIndexKind::Fm => IndexKind::FmIndex,
             KitIndexKind::Ann => IndexKind::Ann,
             KitIndexKind::Sparse => IndexKind::Sparse,
+            KitIndexKind::MinHash => IndexKind::MinHash,
         };
         for col_name in &idx.columns {
             if let Some(col) = table.column(col_name) {

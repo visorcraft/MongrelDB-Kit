@@ -138,6 +138,9 @@ pub enum IndexKind {
     Ann,
     /// SPLADE-style learned-sparse retrieval index for `Sparse` columns.
     Sparse,
+    /// MinHash/LSH set-similarity index over a JSON-array set column
+    /// (accelerates `set_similarity`).
+    MinHash,
 }
 
 /// An index on one or more columns.

@@ -9,6 +9,7 @@ use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::Schema as CoreSchema;
 use mongreldb_core::Database as CoreDatabase;
 use mongreldb_core::{AggState, ApproxAgg, NativeAgg, NativeAggResult};
+use mongreldb_kit_core::schema::IndexKind as KitIndexKind;
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
 use serde_json::Value;
@@ -655,10 +656,12 @@ impl Database {
 
     /// Rank rows of `table` by Jaccard set-similarity between `query` and the
     /// string set stored (as a JSON array) in `column`, returning the top `k`
-    /// with similarity `> 0`, highest first. This is the set-similarity /
-    /// dedup-join primitive the `MinHash` index kind is meant to serve; it runs
-    /// as an exact linear scan (a persistent MinHash/LSH index for sub-linear
-    /// candidate generation remains engine future-work).
+    /// with similarity `> 0`, highest first — the dedup/join primitive.
+    ///
+    /// When `column` has a `MinHash` index, candidate rows come from the engine's
+    /// LSH index (sub-linear) and are then re-verified with exact Jaccard, so the
+    /// top-k is exact for the recalled candidates (LSH recall is high but < 100%).
+    /// Without an index it is an exact linear scan.
     pub fn set_similarity(
         &self,
         table: &str,
@@ -672,14 +675,38 @@ impl Database {
             .iter()
             .find(|t| t.name == table)
             .ok_or_else(|| KitError::Validation(format!("unknown table '{table}'")))?;
-        if !t.columns.iter().any(|c| c.name == column) {
-            return Err(KitError::Validation(format!(
-                "unknown column '{column}' on table '{table}'"
-            )));
-        }
+        let col = t.columns.iter().find(|c| c.name == column).ok_or_else(|| {
+            KitError::Validation(format!("unknown column '{column}' on table '{table}'"))
+        })?;
         let query_set: std::collections::HashSet<String> = query.iter().cloned().collect();
-        let tx = self.begin()?;
-        let rows = tx.all_rows(table)?;
+
+        let has_minhash = t.indexes.iter().any(|idx| {
+            idx.kind == KitIndexKind::MinHash && idx.columns.iter().any(|c| c == column)
+        });
+        let rows = if has_minhash {
+            // Sub-linear candidate generation via the engine MinHash/LSH index.
+            let query_hashes: Vec<u64> = query
+                .iter()
+                .map(|s| mongreldb_core::index::minhash_token_hash(s))
+                .collect();
+            // Generous candidate budget so exact top-k keeps high recall.
+            let cand_k = k.saturating_mul(8).max(k + 64);
+            let cond = mongreldb_core::query::Condition::MinHashSimilar {
+                column_id: col.id as u16,
+                query: query_hashes,
+                k: cand_k,
+            };
+            let (snapshot, _pin) = self.inner.snapshot();
+            let core_rows = self.query_core_rows_at(table, &[cond], snapshot)?;
+            core_rows
+                .iter()
+                .map(|r| crate::schema::core_row_to_json(r, t))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            let tx = self.begin()?;
+            tx.all_rows(table)?
+        };
+
         let mut scored: Vec<SimilarRow> = Vec::new();
         for row in rows {
             let set = parse_string_set(row.values.get(column));

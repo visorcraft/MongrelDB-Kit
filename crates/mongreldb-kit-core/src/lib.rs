@@ -26,7 +26,7 @@ pub use query::{
     JoinQuery, Literal, OnConflict, OrderBy, Query, Select, Update, Upsert,
 };
 pub use schema::{
-    CheckConstraint, Column, ColumnType, DefaultKind, ForeignKey, ForeignKeyAction, Index, Schema,
-    SchemaError, Sequence, Table, UniqueConstraint,
+    CheckConstraint, Column, ColumnType, DefaultKind, ForeignKey, ForeignKeyAction, Index,
+    IndexKind, Schema, SchemaError, Sequence, Table, UniqueConstraint,
 };
 pub use validation::{validate_row, ValidationError};

@@ -603,11 +603,20 @@ def date(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
     return column(name, id, "date", **kwargs)
 
 
-def index(name: str, columns: str | list[str], unique: bool = False) -> dict[str, Any]:
+def index(
+    name: str,
+    columns: str | list[str],
+    unique: bool = False,
+    kind: str = "bitmap",
+) -> dict[str, Any]:
+    """Declare a secondary index. ``kind`` is ``bitmap`` (default), ``fm``,
+    ``ann``, ``sparse``, or ``minhash`` (set-similarity)."""
+    aliases = {"minhash": "min_hash"}
     return {
         "name": name,
         "columns": [columns] if isinstance(columns, str) else list(columns),
         "unique": unique,
+        "kind": aliases.get(kind, kind),
     }
 
 

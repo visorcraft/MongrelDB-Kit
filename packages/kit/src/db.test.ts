@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, real, json } from './schema.js';
+import { Schema, table, int, text, real, json, index } from './schema.js';
 import { eq, gt, gte } from './query.js';
 
 function makeTempDir(): string {
@@ -198,6 +198,35 @@ describe('KitDatabase', () => {
 			expect(() => db.incrementalAggregate('t', 'count', undefined, gt(t.amount, 45))).toThrow();
 			// sum without a column throws.
 			expect(() => db.incrementalAggregate('t', 'sum')).toThrow();
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('setSimilarity uses a MinHash index and re-verifies exactly', () => {
+		const t = table('t', {
+			columns: [int('id', { primaryKey: true }), json('tags')],
+			primaryKey: 'id',
+			indexes: [index(['tags'], { minhash: true })]
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([t]));
+		try {
+			const identical = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+			const near = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'x'];
+			const disjoint = ['p', 'q', 'r', 's', 't', 'u', 'v', 'w'];
+			db.insertInto(t).values({ id: 1n, tags: JSON.stringify(identical) }).executeSync();
+			db.insertInto(t).values({ id: 2n, tags: JSON.stringify(near) }).executeSync();
+			db.insertInto(t).values({ id: 3n, tags: JSON.stringify(disjoint) }).executeSync();
+
+			const hits = db.setSimilarity('t', 'tags', identical, 10);
+			const ids = hits.map((h) => Number(h.row.id));
+			expect(ids).toContain(1); // identical recalled
+			expect(ids).toContain(2); // high-Jaccard recalled
+			expect(ids).not.toContain(3); // disjoint excluded
+			expect(hits[0].row.id).toBe(1n);
+			expect(hits[0].similarity).toBeCloseTo(1.0, 9);
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });

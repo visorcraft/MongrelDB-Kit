@@ -134,7 +134,9 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 							? addon.IndexKindSpec.Ann
 							: idx.kind === 'sparse'
 								? addon.IndexKindSpec.Sparse
-								: addon.IndexKindSpec.Bitmap
+								: idx.kind === 'minhash'
+									? addon.IndexKindSpec.MinHash
+									: addon.IndexKindSpec.Bitmap
 			};
 		})
 	);
@@ -490,11 +492,34 @@ export class KitDatabase {
 		k: number
 	): { row: Record<string, unknown>; similarity: number }[] {
 		const spec = this.schema.table(table);
-		if (!spec.columns.some((c) => c.name === column)) {
+		const col = spec.columns.find((c) => c.name === column);
+		if (!col) {
 			throw new KitError(`unknown column '${column}' on table '${table}'`);
 		}
 		const q = new Set(query);
-		const rows = this.selectFrom(spec).executeSync() as Record<string, unknown>[];
+
+		// Fast path: a MinHash index generates sub-linear candidates via LSH,
+		// which are then re-verified with exact Jaccard below.
+		const hasMinhash = (spec.indexes ?? []).some(
+			(idx) => idx.kind === 'minhash' && idx.columns.includes(column)
+		);
+		let rows: Record<string, unknown>[];
+		if (hasMinhash) {
+			const candidateBudget = Math.max(k * 8, k + 64);
+			const cond = {
+				kind: addon.ConditionKind.MinHashSimilar,
+				columnId: col.id,
+				values: query,
+				k: candidateBudget
+			};
+			rows = this.db
+				.table(table)
+				.query([cond])
+				.map((rj) => rowFromRowJs(spec, rj) as Record<string, unknown>);
+		} else {
+			rows = this.selectFrom(spec).executeSync() as Record<string, unknown>[];
+		}
+
 		const scored: { row: Record<string, unknown>; similarity: number }[] = [];
 		for (const row of rows) {
 			const set = parseStringSet(row[column]);

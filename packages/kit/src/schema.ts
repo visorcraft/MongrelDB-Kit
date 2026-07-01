@@ -150,6 +150,8 @@ export interface IndexOptions {
 	ann?: boolean;
 	/** Create a sparse (SPLADE) index on a sparse column for `sparseMatch()`. */
 	sparse?: boolean;
+	/** Create a MinHash/LSH set-similarity index to accelerate `setSimilarity()`. */
+	minhash?: boolean;
 }
 
 export interface UniqueOptions {
@@ -171,7 +173,15 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 		name: opts.name ?? `idx_${columns.join('_')}`,
 		columns,
 		unique: opts.unique ?? false,
-		kind: opts.fm ? 'fm' : opts.ann ? 'ann' : opts.sparse ? 'sparse' : 'bitmap'
+		kind: opts.fm
+			? 'fm'
+			: opts.ann
+				? 'ann'
+				: opts.sparse
+					? 'sparse'
+					: opts.minhash
+						? 'minhash'
+						: 'bitmap'
 	};
 }
 

@@ -15,6 +15,7 @@ from mongreldb_kit import (
     bool_,
     fk,
     float_,
+    index,
     int,
     table,
     text,
@@ -512,6 +513,34 @@ def test_incremental_aggregate():
     # sum without a column errors.
     with pytest.raises(Exception):
         db.incremental_aggregate("m", "sum")
+    db.close()
+
+
+def test_set_similarity_minhash_index():
+    schema = {
+        "tables": [
+            table(
+                name="docs",
+                id=1,
+                columns=[int("id", 1, primary_key=True), text("tags", 2, nullable=True)],
+                primary_key="id",
+                indexes=[index("tags_mh", "tags", kind="minhash")],
+            )
+        ]
+    }
+    db = Database.create(tmp_db(), schema)
+    identical = ["a", "b", "c", "d", "e", "f", "g", "h"]
+    near = ["a", "b", "c", "d", "e", "f", "g", "x"]
+    disjoint = ["p", "q", "r", "s", "t", "u", "v", "w"]
+    with db.begin() as txn:
+        for i, s in enumerate([identical, near, disjoint], start=1):
+            txn.insert("docs", {"id": i, "tags": json.dumps(s)})
+        txn.commit()
+    hits = db.set_similarity("docs", "tags", identical, 10)
+    ids = [h["row"]["id"] for h in hits]
+    assert 1 in ids and 2 in ids and 3 not in ids
+    assert hits[0]["row"]["id"] == 1
+    assert abs(hits[0]["similarity"] - 1.0) < 1e-9
     db.close()
 
 
