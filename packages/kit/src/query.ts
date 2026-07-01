@@ -104,8 +104,10 @@ export type JoinRow = Record<string, Record<string, unknown> | null>;
 /** Join condition / post-join filter evaluated in JS over a {@link JoinRow}. */
 export type JoinPredicate = (row: JoinRow) => boolean;
 
-/** A single column aggregate used inside `GroupBuilder.aggregate`. */
-export type AggregateSpec = { fn: 'count' | ScalarAggKind; column?: ColumnSpec };
+/** A single column aggregate used inside `GroupBuilder.aggregate`. `distinct`
+ * de-duplicates the column's values (e.g. `COUNT(DISTINCT col)`); it requires a
+ * `column` and is a no-op for `min`/`max`. */
+export type AggregateSpec = { fn: 'count' | ScalarAggKind; column?: ColumnSpec; distinct?: boolean };
 
 /** One result row from a grouped query: group columns plus aggregate aliases. */
 export type GroupRow = Record<string, unknown>;
@@ -232,6 +234,16 @@ export function notExists(subquery: Subquery): Predicate {
 /** Aggregate descriptor: `COUNT(*)` for a group. */
 export function count(): AggregateSpec {
 	return { fn: 'count' };
+}
+
+/** Aggregate descriptor: `COUNT(column)` — non-null values in a group. */
+export function countColumn(column: ColumnSpec): AggregateSpec {
+	return { fn: 'count', column };
+}
+
+/** Aggregate descriptor: `COUNT(DISTINCT column)` — unique non-null values. */
+export function countDistinct(column: ColumnSpec): AggregateSpec {
+	return { fn: 'count', column, distinct: true };
 }
 
 /** Aggregate descriptor: `SUM(column)` for a group. */
@@ -638,16 +650,41 @@ function compositeKey(values: unknown[]): string {
 	return values.map(valueKey).join('\u0001');
 }
 
-/** Computes a scalar aggregate over matched rows, honoring NULL skipping. */
+/** `COUNT(*)` (no column), `COUNT(col)` (non-null), or `COUNT(DISTINCT col)`
+ * (unique non-null) over a group. */
+function computeCount(spec: AggregateSpec, rows: MatchedRow[]): bigint {
+	if (!spec.column) return BigInt(rows.length); // COUNT(*)
+	const name = spec.column.name;
+	const nonNull = rows.map((m) => m.row[name]).filter((v) => v !== null && v !== undefined);
+	if (spec.distinct) {
+		const seen = new Set<string>();
+		for (const v of nonNull) seen.add(valueKey(v));
+		return BigInt(seen.size);
+	}
+	return BigInt(nonNull.length);
+}
+
+/** Computes a scalar aggregate over matched rows, honoring NULL skipping.
+ * `distinct` de-duplicates the value set first (a no-op for MIN/MAX). */
 function computeAggregate(
 	kind: ScalarAggKind,
 	column: ColumnSpec,
-	rows: MatchedRow[]
+	rows: MatchedRow[],
+	distinct = false
 ): bigint | number | string | null {
 	const isInt = column.storageType === 'int64';
-	const values = rows
+	let values = rows
 		.map((m) => m.row[column.name])
 		.filter((v) => v !== null && v !== undefined);
+	if (distinct) {
+		const seen = new Set<string>();
+		values = values.filter((v) => {
+			const k = valueKey(v);
+			if (seen.has(k)) return false;
+			seen.add(k);
+			return true;
+		});
+	}
 	switch (kind) {
 		case 'sum': {
 			if (isInt) {
@@ -1248,8 +1285,8 @@ export class GroupBuilder<T extends TableSpec> {
 			for (const [alias, spec] of Object.entries(this._aggregates)) {
 				result[alias] =
 					spec.fn === 'count'
-						? BigInt(g.rows.length)
-						: computeAggregate(spec.fn, spec.column!, g.rows);
+						? computeCount(spec, g.rows)
+						: computeAggregate(spec.fn, spec.column!, g.rows, spec.distinct);
 			}
 			if (!this._having || this._having(result)) out.push(result);
 		}

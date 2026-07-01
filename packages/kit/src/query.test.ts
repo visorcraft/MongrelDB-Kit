@@ -21,6 +21,8 @@ import {
 	exists,
 	notExists,
 	count,
+	countColumn,
+	countDistinct,
 	sum,
 	min,
 	max,
@@ -595,6 +597,30 @@ describe('query builder extensions', () => {
 				.executeSync();
 			expect(big).toHaveLength(1);
 			expect(big[0].status).toBe('paid');
+		});
+	});
+
+	it('counts non-null and distinct column values per group', async () => {
+		await withDb(async (db) => {
+			await seedOrders(db);
+			// paid: 2 orders, both userId 1, amounts {100,200}; pending: 1 order userId 2.
+			const byStatus = db
+				.selectFrom(orders)
+				.groupBy(orders.status)
+				.aggregate({
+					users: countColumn(orders.userId),
+					distinctUsers: countDistinct(orders.userId),
+					distinctAmounts: countDistinct(orders.amount)
+				})
+				.executeSync();
+
+			const paid = byStatus.find((g) => g.status === 'paid')!;
+			expect(paid.users).toBe(2n); // COUNT(userId): 2 non-null
+			expect(paid.distinctUsers).toBe(1n); // COUNT(DISTINCT userId): {1}
+			expect(paid.distinctAmounts).toBe(2n); // {100, 200}
+
+			const pending = byStatus.find((g) => g.status === 'pending')!;
+			expect(pending.distinctUsers).toBe(1n); // {2}
 		});
 	});
 
