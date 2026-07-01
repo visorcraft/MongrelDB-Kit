@@ -194,6 +194,25 @@ impl PyDatabase {
         Ok(self.require_db()?.table_names())
     }
 
+    /// Reclaim orphaned runs and stale WAL/shadow files; returns the count.
+    fn gc(&self) -> PyResult<usize> {
+        self.require_db()?.gc().map_err(map_err)
+    }
+
+    /// Verify run footer checksums; returns any integrity issues (JSON strings).
+    fn check(&self) -> PyResult<Vec<String>> {
+        self.require_db()?
+            .check()
+            .iter()
+            .map(|v| serde_json::to_string(v).map_err(|e| StorageError::new_err(e.to_string())))
+            .collect()
+    }
+
+    /// Drop corrupt runs; returns the ids of the runs that were dropped.
+    fn doctor(&self) -> PyResult<Vec<u64>> {
+        self.require_db()?.doctor().map_err(map_err)
+    }
+
     fn close(&mut self) {
         self.db = None;
     }

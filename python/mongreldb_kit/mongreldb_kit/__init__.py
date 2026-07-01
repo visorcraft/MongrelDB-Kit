@@ -104,6 +104,18 @@ class Database:
         """Application table names, excluding reserved ``__kit_*`` tables."""
         return self._handle.table_names()
 
+    def gc(self) -> int:
+        """Reclaim orphaned runs and stale WAL/shadow files; return the count."""
+        return self._handle.gc()
+
+    def check(self) -> list[dict[str, Any]]:
+        """Verify run footer checksums; return a list of integrity issues."""
+        return [json.loads(s) for s in self._handle.check()]
+
+    def doctor(self) -> list[int]:
+        """Drop corrupt runs; return the ids of the runs that were dropped."""
+        return self._handle.doctor()
+
     def close(self) -> None:
         """Close the database handle and release underlying resources."""
         self._handle.close()

@@ -345,6 +345,16 @@ export class KitDatabase {
 		return this.db.tableNames().filter((name) => !name.startsWith('__kit_'));
 	}
 
+	/** Verify run footer checksums; returns integrity issues grouped by table. */
+	check(): unknown {
+		return JSON.parse(this.db.check());
+	}
+
+	/** Drop corrupt runs; returns the doctor report. */
+	doctor(): unknown {
+		return JSON.parse(this.db.doctor());
+	}
+
 	/**
 	 * Rename a live table from `oldName` to `newName`. The source must exist and
 	 * be live; the target must not collide with an existing table (the engine

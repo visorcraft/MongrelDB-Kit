@@ -360,3 +360,16 @@ def test_set_schema_blocked_while_transaction_open():
     txn.rollback()
     # The (still-referenced) txn object no longer pins the engine after rollback.
     db.set_schema(users_orders_schema())
+
+
+def test_maintenance_ops():
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+    with db.begin() as txn:
+        insert_user(txn, 1, "alice@example.com", "Alice")
+        txn.commit()
+    # A healthy database: nothing reclaimable, no integrity issues, no drops.
+    assert db.gc() >= 0
+    assert db.check() == []
+    assert db.doctor() == []
+    db.close()

@@ -230,6 +230,34 @@ impl Database {
         Ok(())
     }
 
+    /// Reclaim orphaned runs and stale WAL/shadow files; returns the count
+    /// removed. Safe to run on a live database.
+    pub fn gc(&self) -> Result<usize> {
+        self.inner.gc().map_err(KitError::from)
+    }
+
+    /// Verify run footer checksums; returns any integrity issues as JSON objects
+    /// (`table_id`, `table_name`, `severity`, `description`). Empty ⇒ healthy.
+    pub fn check(&self) -> Vec<serde_json::Value> {
+        self.inner
+            .check()
+            .into_iter()
+            .map(|i| {
+                serde_json::json!({
+                    "table_id": i.table_id,
+                    "table_name": i.table_name,
+                    "severity": i.severity,
+                    "description": i.description,
+                })
+            })
+            .collect()
+    }
+
+    /// Drop corrupt runs; returns the ids of the runs that were dropped.
+    pub fn doctor(&self) -> Result<Vec<u64>> {
+        self.inner.doctor().map_err(KitError::from)
+    }
+
     /// Return the migrations already recorded in `__kit_schema_migrations`.
     pub fn applied_migrations(&self) -> Result<Vec<mongreldb_kit_core::migrations::Migration>> {
         crate::migrate::load_applied_migrations(&self.inner)
