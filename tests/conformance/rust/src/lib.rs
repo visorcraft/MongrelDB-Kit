@@ -1,5 +1,5 @@
 use mongreldb_kit::{
-    encode_pk, encode_row_guard_key, encode_unique_key, Aggregate, AggregateQuery, Database,
+    encode_pk, encode_row_guard_key, encode_unique_key, Aggregate, AggregateQuery, Cte, Database,
     Direction, Expr, JoinQuery, KeyComponent, KitError, Literal, Migration, OnConflict, OrderBy,
     Query, Row, Schema, Select,
 };
@@ -715,6 +715,126 @@ pub fn run_joins() -> Result<(), String> {
                 .collect(),
         );
         assert_eq_json(&scenario.name, &actual, &expected_val)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// CTE conformance (materialized common table expressions, incl. chaining)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct CteDef {
+    name: String,
+    table: String,
+    #[serde(default)]
+    filter: Option<Map<String, Value>>,
+    #[serde(default)]
+    columns: Option<Vec<String>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CteScenario {
+    name: String,
+    ctes: Vec<CteDef>,
+    body: String,
+    #[serde(default)]
+    order: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CteFixture {
+    schema: Schema,
+    rows: Vec<Map<String, Value>>,
+    scenarios: Vec<CteScenario>,
+}
+
+fn cte_def_to_cte(def: &CteDef) -> Result<Cte, String> {
+    let filter = def.filter.as_ref().map(object_filter_to_expr).transpose()?;
+    let columns = def
+        .columns
+        .as_ref()
+        .map(|cs| cs.iter().map(|c| Expr::Column(c.clone())).collect())
+        .unwrap_or_default();
+    Ok(Cte {
+        name: def.name.clone(),
+        query: Box::new(Select {
+            table: def.table.clone(),
+            columns,
+            filter,
+            order_by: Vec::new(),
+            limit: None,
+            offset: None,
+        }),
+    })
+}
+
+fn sort_flat_rows(rows: &mut [Map<String, Value>], order: &str) {
+    let desc = order.starts_with('-');
+    let col = order.trim_start_matches(['+', '-']);
+    rows.sort_by(|a, b| {
+        let ord = cmp_json(a.get(col), b.get(col));
+        if desc {
+            ord.reverse()
+        } else {
+            ord
+        }
+    });
+}
+
+pub fn run_ctes() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: CteFixture = load_json(&fixtures.join("ctes.json"))?;
+    let expected: Map<String, Value> = load_json(&fixtures.join("expected/ctes.json"))?;
+
+    let table = fixture
+        .schema
+        .tables
+        .first()
+        .ok_or("ctes fixture has no table")?
+        .name
+        .clone();
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+
+    for row in &fixture.rows {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        txn.insert(&table, row.clone()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    for scenario in &fixture.scenarios {
+        let ctes = scenario
+            .ctes
+            .iter()
+            .map(cte_def_to_cte)
+            .collect::<Result<Vec<_>, _>>()?;
+        let body = Select {
+            table: scenario.body.clone(),
+            columns: Vec::new(),
+            filter: None,
+            order_by: Vec::new(),
+            limit: None,
+            offset: None,
+        };
+        let txn = db.begin().map_err(|e| e.to_string())?;
+        let mut rows: Vec<Map<String, Value>> = txn
+            .select_with(&ctes, &body)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|r| r.values)
+            .collect();
+        txn.commit().map_err(|e| e.to_string())?;
+        if let Some(order) = &scenario.order {
+            sort_flat_rows(&mut rows, order);
+        }
+        let actual = Value::Array(rows.into_iter().map(Value::Object).collect());
+        let exp = expected
+            .get(&scenario.name)
+            .and_then(|e| e.get("rows"))
+            .ok_or(format!("missing expected rows for {}", scenario.name))?;
+        assert_eq_json(&scenario.name, &actual, exp)?;
     }
     Ok(())
 }

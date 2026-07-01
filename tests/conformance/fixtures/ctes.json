@@ -1,0 +1,68 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "nums",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "val",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          },
+          {
+            "id": 3,
+            "name": "grp",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "val": 10, "grp": "a" },
+    { "id": 2, "val": 20, "grp": "a" },
+    { "id": 3, "val": 30, "grp": "b" },
+    { "id": 4, "val": 40, "grp": "b" },
+    { "id": 5, "val": 50, "grp": "a" }
+  ],
+  "scenarios": [
+    {
+      "name": "cte_filter",
+      "ctes": [{ "name": "high", "table": "nums", "filter": { "val": { "gte": 30 } } }],
+      "body": "high",
+      "order": "+id"
+    },
+    {
+      "name": "cte_chain",
+      "ctes": [
+        { "name": "mid", "table": "nums", "filter": { "val": { "gte": 20 } } },
+        { "name": "top", "table": "mid", "filter": { "val": { "gte": 40 } } }
+      ],
+      "body": "top",
+      "order": "+id"
+    }
+  ]
+}

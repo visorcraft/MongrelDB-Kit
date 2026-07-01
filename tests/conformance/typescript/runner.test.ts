@@ -666,6 +666,46 @@ describe('mongreldb-kit conformance', () => {
 		}
 	});
 
+	it('runs CTE scenarios against the TypeScript kit', () => {
+		const raw = loadJson('ctes.json');
+		const expected = loadJson('expected/ctes.json');
+		const schema = schemaFromFixture(raw.schema);
+		const baseTable = schema.table(raw.schema.tables[0].name);
+		const baseNames = new Set<string>(raw.schema.tables.map((t: any) => t.name));
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-cte-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const row of raw.rows) {
+				kit.insertInto(baseTable).values(normalizeRowForTs(baseTable, row)).executeSync();
+			}
+			for (const scenario of raw.scenarios) {
+				// Materialize each CTE in order; a later CTE reads an earlier one via
+				// the scope. Predicates reuse the base table's specs (CTE sources carry
+				// the same columns and evaluate by name).
+				let scope: any;
+				for (const cte of scenario.ctes) {
+					const src = baseNames.has(cte.table)
+						? kit.selectFrom(schema.table(cte.table))
+						: scope.selectFrom(cte.table);
+					const builder = cte.filter ? src.where(buildPredicate(baseTable, cte.filter)) : src;
+					scope = scope ? scope.with(cte.name, builder) : kit.with(cte.name, builder);
+				}
+				const rows = (scope.selectFrom(scenario.body).executeSync() as any[]).map(
+					normalizeValueForCompare
+				);
+				const exp = (expected[scenario.name].rows as any[]).map(normalizeValueForCompare);
+				if (scenario.order) {
+					sortAggRows(rows, scenario.order);
+					sortAggRows(exp, scenario.order);
+				}
+				expect(rows, `cte ${scenario.name}`).toEqual(exp);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it('runs Phase 1 DML shared fixture', async () => {
 		const schemaRaw = loadJson('schema.json');
 		const migrationsRaw = loadJson('migrations.json');

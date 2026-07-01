@@ -1,0 +1,15 @@
+{
+  "cte_filter": {
+    "rows": [
+      { "id": 3, "val": 30, "grp": "b" },
+      { "id": 4, "val": 40, "grp": "b" },
+      { "id": 5, "val": 50, "grp": "a" }
+    ]
+  },
+  "cte_chain": {
+    "rows": [
+      { "id": 4, "val": 40, "grp": "b" },
+      { "id": 5, "val": 50, "grp": "a" }
+    ]
+  }
+}
