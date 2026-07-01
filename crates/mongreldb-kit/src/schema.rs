@@ -64,6 +64,7 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
         columns,
         indexes,
         colocation: Vec::new(),
+        constraints: Default::default(),
     }
 }
 
