@@ -360,6 +360,11 @@ export class KitDatabase {
 		return JSON.parse(this.db.doctor());
 	}
 
+	/** The current visible commit epoch (monotonically increasing version). */
+	snapshotEpoch(): bigint {
+		return this.db.snapshotEpoch();
+	}
+
 	/**
 	 * Rename a live table from `oldName` to `newName`. The source must exist and
 	 * be live; the target must not collide with an existing table (the engine

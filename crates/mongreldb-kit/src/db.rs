@@ -290,6 +290,13 @@ impl Database {
         self.inner.doctor().map_err(KitError::from)
     }
 
+    /// The current visible commit epoch — a monotonically increasing version
+    /// stamp. A committed write bumps it; a snapshot at this epoch sees all
+    /// currently-committed data.
+    pub fn snapshot_epoch(&self) -> u64 {
+        self.inner.snapshot().0.epoch.0
+    }
+
     /// Return the migrations already recorded in `__kit_schema_migrations`.
     pub fn applied_migrations(&self) -> Result<Vec<mongreldb_kit_core::migrations::Migration>> {
         crate::migrate::load_applied_migrations(&self.inner)

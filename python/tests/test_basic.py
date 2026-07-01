@@ -373,3 +373,14 @@ def test_maintenance_ops():
     assert db.check() == []
     assert db.doctor() == []
     db.close()
+
+
+def test_snapshot_epoch_advances():
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+    e0 = db.snapshot_epoch()
+    with db.begin() as txn:
+        insert_user(txn, 1, "a@example.com")
+        txn.commit()
+    assert db.snapshot_epoch() > e0
+    db.close()

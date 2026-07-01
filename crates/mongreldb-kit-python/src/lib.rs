@@ -231,6 +231,11 @@ impl PyDatabase {
         self.require_db()?.doctor().map_err(map_err)
     }
 
+    /// The current visible commit epoch (monotonically increasing version).
+    fn snapshot_epoch(&self) -> PyResult<u64> {
+        Ok(self.require_db()?.snapshot_epoch())
+    }
+
     fn close(&mut self) {
         self.db = None;
     }

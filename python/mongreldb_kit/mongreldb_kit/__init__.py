@@ -128,6 +128,10 @@ class Database:
         """Drop corrupt runs; return the ids of the runs that were dropped."""
         return self._handle.doctor()
 
+    def snapshot_epoch(self) -> int:
+        """The current visible commit epoch (monotonically increasing version)."""
+        return self._handle.snapshot_epoch()
+
     def close(self) -> None:
         """Close the database handle and release underlying resources."""
         self._handle.close()
