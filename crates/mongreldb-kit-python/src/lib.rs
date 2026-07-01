@@ -236,6 +236,16 @@ impl PyDatabase {
         Ok(self.require_db()?.snapshot_epoch())
     }
 
+    /// Export every visible row of `table` as a TSV document.
+    fn export_tsv(&self, table: &str) -> PyResult<String> {
+        self.require_db()?.export_tsv(table).map_err(map_err)
+    }
+
+    /// Import a TSV document into `table`; returns the number of rows inserted.
+    fn import_tsv(&self, table: &str, text: &str) -> PyResult<usize> {
+        self.require_db()?.import_tsv(table, text).map_err(map_err)
+    }
+
     fn close(&mut self) {
         self.db = None;
     }

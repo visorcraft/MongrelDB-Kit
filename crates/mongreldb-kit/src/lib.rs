@@ -10,6 +10,7 @@ pub mod migrate;
 pub mod pushdown;
 pub mod query;
 pub mod schema;
+pub mod tsv;
 pub mod txn;
 
 pub use db::Database;

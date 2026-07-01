@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text } from './schema.js';
+import { Schema, table, int, text, real, json } from './schema.js';
 import { eq } from './query.js';
 
 function makeTempDir(): string {
@@ -37,6 +37,46 @@ describe('KitDatabase', () => {
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('exportTsv/importTsv round-trips rows across a fresh database', () => {
+		const t = table('t', {
+			columns: [
+				int('id', { primaryKey: true }),
+				text('name'),
+				real('score', { nullable: true }),
+				json('tags', { nullable: true })
+			],
+			primaryKey: 'id'
+		});
+		const schema = new Schema([t]);
+
+		const tagsJson = JSON.stringify(['x', 'y']);
+		const srcDir = makeTempDir();
+		const src = KitDatabase.openSync(srcDir, schema);
+		src.insertInto(t).values({ id: 1n, name: 'a\tb\nc', score: 1.5, tags: tagsJson }).executeSync();
+		src.insertInto(t).values({ id: 2n, name: 'plain', score: null, tags: null }).executeSync();
+
+		const tsv = src.exportTsv('t');
+		// Header + 2 data rows; tab/newline inside the string stay escaped.
+		expect(tsv.trimEnd().split('\n')).toHaveLength(3);
+		expect(tsv).toContain('a\\tb\\nc');
+
+		const dstDir = makeTempDir();
+		const dst = KitDatabase.openSync(dstDir, schema);
+		try {
+			expect(dst.importTsv('t', tsv)).toBe(2);
+			const rows = dst.selectFrom(t).executeSync();
+			expect(rows).toEqual([
+				{ id: 1n, name: 'a\tb\nc', score: 1.5, tags: tagsJson },
+				{ id: 2n, name: 'plain', score: null, tags: null }
+			]);
+		} finally {
+			src.close();
+			dst.close();
+			rmSync(srcDir, { recursive: true, force: true });
+			rmSync(dstDir, { recursive: true, force: true });
 		}
 	});
 

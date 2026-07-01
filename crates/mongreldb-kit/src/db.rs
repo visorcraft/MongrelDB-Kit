@@ -297,6 +297,42 @@ impl Database {
         self.inner.snapshot().0.epoch.0
     }
 
+    /// Export every visible row of `table` as a TSV document (header row of
+    /// column names, tab-separated cells, `NULL` = empty field). See
+    /// [`crate::tsv`] for the escaping rules.
+    pub fn export_tsv(&self, table: &str) -> Result<String> {
+        let t = self
+            .schema
+            .tables
+            .iter()
+            .find(|t| t.name == table)
+            .ok_or_else(|| KitError::Validation(format!("unknown table '{table}'")))?
+            .clone();
+        let tx = self.begin()?;
+        let rows = tx.all_rows(table)?;
+        Ok(crate::tsv::rows_to_tsv(&t, &rows))
+    }
+
+    /// Import a TSV document into `table` (one committed transaction). Each row
+    /// passes through defaults, validation, and constraint checks like a normal
+    /// insert. Returns the number of rows inserted.
+    pub fn import_tsv(&self, table: &str, text: &str) -> Result<usize> {
+        let t = self
+            .schema
+            .tables
+            .iter()
+            .find(|t| t.name == table)
+            .ok_or_else(|| KitError::Validation(format!("unknown table '{table}'")))?
+            .clone();
+        let rows = crate::tsv::tsv_to_rows(&t, text)?;
+        let n = rows.len();
+        self.transaction(1, |tx| {
+            tx.insert_many(table, rows.clone())?;
+            Ok(())
+        })?;
+        Ok(n)
+    }
+
     /// Return the migrations already recorded in `__kit_schema_migrations`.
     pub fn applied_migrations(&self) -> Result<Vec<mongreldb_kit_core::migrations::Migration>> {
         crate::migrate::load_applied_migrations(&self.inner)

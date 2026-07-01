@@ -132,6 +132,14 @@ class Database:
         """The current visible commit epoch (monotonically increasing version)."""
         return self._handle.snapshot_epoch()
 
+    def export_tsv(self, table: str) -> str:
+        """Export every visible row of ``table`` as a TSV document."""
+        return self._handle.export_tsv(table)
+
+    def import_tsv(self, table: str, text: str) -> int:
+        """Import a TSV document into ``table``; return the rows inserted."""
+        return self._handle.import_tsv(table, text)
+
     def close(self) -> None:
         """Close the database handle and release underlying resources."""
         self._handle.close()

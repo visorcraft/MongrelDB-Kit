@@ -384,3 +384,27 @@ def test_snapshot_epoch_advances():
         txn.commit()
     assert db.snapshot_epoch() > e0
     db.close()
+
+
+def test_tsv_export_import_round_trip():
+    src = Database.create(tmp_db(), users_orders_schema())
+    with src.begin() as txn:
+        insert_user(txn, 1, "a@example.com", "a\tb\nc")
+        insert_user(txn, 2, "b@example.com")
+        txn.commit()
+
+    tsv = src.export_tsv("users")
+    lines = tsv.rstrip("\n").split("\n")
+    assert lines[0].split("\t") == ["id", "email", "name"]
+    assert len(lines) == 3
+    assert "a\\tb\\nc" in tsv  # tab/newline stayed escaped
+
+    dst = Database.create(tmp_db(), users_orders_schema())
+    assert dst.import_tsv("users", tsv) == 2
+    with dst.begin() as txn:
+        r1 = txn.get_by_pk("users", 1)
+        assert r1["name"] == "a\tb\nc"
+        r2 = txn.get_by_pk("users", 2)
+        assert r2["name"] is None
+    src.close()
+    dst.close()

@@ -828,6 +828,11 @@ impl<'a> Transaction<'a> {
             .ok_or_else(|| KitError::Integrity(format!("table {name} not found")))
     }
 
+    /// All rows of `table` visible to this transaction (staged writes included).
+    pub fn all_rows(&self, table: &str) -> Result<Vec<Row>> {
+        self.snapshot_rows(table)
+    }
+
     fn snapshot_rows(&self, table: &str) -> Result<Vec<Row>> {
         let t = self.require_table(table)?;
         let core_rows = self

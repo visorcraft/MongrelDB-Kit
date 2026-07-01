@@ -8,6 +8,7 @@ import type {
 	ConditionKind as NativeConditionKind
 } from 'mongreldb/native.js';
 import { Schema } from './schema.js';
+import { rowsToTsv, tsvToRows } from './tsv.js';
 import {
 	internalTables,
 	kitSchemaCatalog
@@ -363,6 +364,24 @@ export class KitDatabase {
 	/** The current visible commit epoch (monotonically increasing version). */
 	snapshotEpoch(): bigint {
 		return this.db.snapshotEpoch();
+	}
+
+	/** Export every visible row of `table` as a TSV document. */
+	exportTsv(table: string): string {
+		const spec = this.schema.table(table);
+		const rows = this.selectFrom(spec).executeSync() as Record<string, unknown>[];
+		return rowsToTsv(spec, rows);
+	}
+
+	/** Import a TSV document into `table`; returns the number of rows inserted. */
+	importTsv(table: string, text: string): number {
+		const spec = this.schema.table(table);
+		const rows = tsvToRows(spec, text);
+		if (rows.length === 0) return 0;
+		this.insertInto(spec)
+			.valuesMany(rows as never)
+			.executeSync();
+		return rows.length;
 	}
 
 	/**
