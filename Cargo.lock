@@ -673,8 +673,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.16.0"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.16.0#79c301065640a7f610531473efa52e7ae0c00b06"
+version = "0.17.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.17.0#8b213a6a369661b2503358a468da2a1654d9d2e3"
 dependencies = [
  "aes-gcm",
  "arc-swap",
