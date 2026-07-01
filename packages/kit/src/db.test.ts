@@ -80,6 +80,78 @@ describe('KitDatabase', () => {
 		}
 	});
 
+	it('rowsAtEpoch reads a table as of a past commit epoch', () => {
+		const t = table('t', {
+			columns: [int('id', { primaryKey: true }), text('name')],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([t]));
+		try {
+			db.insertInto(t).values({ id: 1n, name: 'orig' }).executeSync();
+			const e1 = db.snapshotEpoch();
+			db.updateTable(t).set({ name: 'updated' }).where(eq(t.id, 1n)).executeSync();
+
+			const past = db.rowsAtEpoch('t', e1);
+			expect(past).toEqual([{ id: 1n, name: 'orig' }]);
+			const now = db.rowsAtEpoch('t', db.snapshotEpoch());
+			expect(now).toEqual([{ id: 1n, name: 'updated' }]);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('approxAggregate estimates a count with a confidence interval', () => {
+		const t = table('t', {
+			columns: [int('id', { primaryKey: true }), real('val')],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([t]));
+		try {
+			for (let i = 1n; i <= 300n; i++) {
+				db.insertInto(t).values({ id: i, val: Number(i) }).executeSync();
+			}
+			const res = db.approxAggregate('t', 'count');
+			expect(res).not.toBeNull();
+			expect(res!.n_population).toBe(300);
+			expect(Math.abs(res!.point - 300)).toBeLessThan(1e-6);
+			expect(res!.ci_low).toBeLessThanOrEqual(res!.point);
+			// sum/avg without a column throws.
+			expect(() => db.approxAggregate('t', 'avg')).toThrow();
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('scanBatched streams every row in bounded batches', () => {
+		const t = table('t', {
+			columns: [int('id', { primaryKey: true })],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([t]));
+		try {
+			for (let i = 1n; i <= 250n; i++) db.insertInto(t).values({ id: i }).executeSync();
+			const ids: number[] = [];
+			let maxBatch = 0;
+			db.scanBatched('t', 100, (rows) => {
+				maxBatch = Math.max(maxBatch, rows.length);
+				for (const r of rows) ids.push(Number(r.id));
+			});
+			expect(ids.length).toBe(250);
+			expect(maxBatch).toBeLessThanOrEqual(100);
+			expect([...ids].sort((a, b) => a - b)).toEqual(
+				Array.from({ length: 250 }, (_, i) => i + 1)
+			);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	describe('encrypted databases', () => {
 		const makeSchema = () => {
 			const secrets = table('secrets', {

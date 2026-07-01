@@ -9,6 +9,7 @@ import type {
 } from 'mongreldb/native.js';
 import { Schema } from './schema.js';
 import { rowsToTsv, tsvToRows } from './tsv.js';
+import { rowFromRowJs } from './rows.js';
 import {
 	internalTables,
 	kitSchemaCatalog
@@ -17,6 +18,16 @@ import type { TableSpec, ColumnStorageType, CheckSpec } from './types.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
 import { isReferencedTable, deleteGuardsForTable, type ConstraintKit } from './constraints.js';
 import { KitError, isRetryableConflict } from './errors.js';
+
+/** A reservoir-sampled approximate aggregate with a confidence interval. */
+export interface ApproxAggregate {
+	point: number;
+	ci_low: number;
+	ci_high: number;
+	n_population: number;
+	n_sample_live: number;
+	n_passing: number;
+}
 
 type MongrelColumnSpec = {
 	id: number;
@@ -371,6 +382,67 @@ export class KitDatabase {
 		const spec = this.schema.table(table);
 		const rows = this.selectFrom(spec).executeSync() as Record<string, unknown>[];
 		return rowsToTsv(spec, rows);
+	}
+
+	/** Read every row of `table` visible at commit `epoch` (MVCC time-travel). */
+	rowsAtEpoch(table: string, epoch: bigint): Record<string, unknown>[] {
+		const spec = this.schema.table(table);
+		return this.db
+			.table(table)
+			.rowsAtEpoch(epoch)
+			.map((rj) => rowFromRowJs(spec, rj) as Record<string, unknown>);
+	}
+
+	/**
+	 * Reservoir-sampled approximate aggregate (`count`/`sum`/`avg`) with a
+	 * `z`-score confidence interval (default ~95%). Returns
+	 * `{ point, ci_low, ci_high, n_population, n_sample_live, n_passing }`, or
+	 * `null` when the reservoir is empty. `column` is required for `sum`/`avg`.
+	 */
+	approxAggregate(
+		table: string,
+		agg: 'count' | 'sum' | 'avg',
+		column?: string,
+		z = 1.96
+	): ApproxAggregate | null {
+		const spec = this.schema.table(table);
+		let columnId: number | undefined;
+		if (column !== undefined) {
+			const col = spec.columns.find((c) => c.name === column);
+			if (!col) throw new KitError(`unknown column '${column}'`);
+			columnId = col.id;
+		} else if (agg !== 'count') {
+			throw new KitError(`approx ${agg} requires a column`);
+		}
+		const raw = this.db.table(table).approxAggregate(agg, columnId, z);
+		return raw === null ? null : (JSON.parse(raw) as ApproxAggregate);
+	}
+
+	/**
+	 * Stream `table` in batches of at most `batchSize` rows, invoking `cb` once
+	 * per batch. Implemented with `limit`/`offset` pagination, so memory stays
+	 * bounded to one batch. (Not snapshot-consistent across batches, and O(n·
+	 * pages) — the Rust/Python kit's `scan_batched` uses the engine's native
+	 * single-pass cursor.)
+	 */
+	scanBatched(
+		table: string,
+		batchSize: number,
+		cb: (rows: Record<string, unknown>[]) => void
+	): void {
+		const spec = this.schema.table(table);
+		const size = Math.max(1, Math.floor(batchSize));
+		let offset = 0;
+		for (;;) {
+			const rows = this.selectFrom(spec)
+				.limit(size)
+				.offset(offset)
+				.executeSync() as Record<string, unknown>[];
+			if (rows.length === 0) break;
+			cb(rows);
+			if (rows.length < size) break;
+			offset += rows.length;
+		}
 	}
 
 	/** Import a TSV document into `table`; returns the number of rows inserted. */
