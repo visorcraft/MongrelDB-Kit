@@ -393,6 +393,23 @@ function makeContainsCondition(
 	return { kind: ConditionKind.FmContains, columnId: column.id, text: substr };
 }
 
+/** Build an `FmContainsAll` condition of a LIKE pattern's literal runs (a
+ * superset the caller re-checks). Requires an FM index; escaped patterns and
+ * pure-wildcard patterns fall back to an in-memory match. */
+function makeLikeCondition(
+	table: TableSpec,
+	column: ColumnSpec,
+	pattern: string
+): ConditionSpec | null {
+	const hasFm = table.indexes.some(
+		(idx) => idx.kind === 'fm' && idx.columns.includes(column.name)
+	);
+	if (!hasFm || column.storageType !== 'text' || pattern.includes('\\')) return null;
+	const segments = pattern.split(/[%_]/).filter((s) => s.length > 0);
+	if (segments.length === 0) return null;
+	return { kind: ConditionKind.FmContainsAll, columnId: column.id, values: segments };
+}
+
 type RangeConditionPlan =
 	| { condition: ConditionSpec; residual?: Predicate }
 	| { alwaysFalse: true };
@@ -641,6 +658,12 @@ function compilePredicate(table: TableSpec, predicate: Predicate): PredicatePlan
 				columnId: predicate.column.id
 			};
 			return { conditions: [cond], residual: predicate };
+		}
+		case 'like': {
+			// Push FmContainsAll of the pattern's literal runs on an FM column;
+			// keep the LIKE match as a residual (the engine returns a superset).
+			const condition = makeLikeCondition(table, predicate.column, predicate.pattern);
+			return condition ? { conditions: [condition], residual: predicate } : residualPlan(predicate);
 		}
 		default:
 			return residualPlan(predicate);

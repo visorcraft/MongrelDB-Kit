@@ -27,12 +27,13 @@
 //! | `Lt/Lte/Gt/Gte(Column, Literal)` int | `Range` | int-typed column |
 //! | `Lt/Lte/Gt/Gte(Column, Literal)` float | `RangeF64` | float-typed column |
 //! | `Contains(Column, needle)` | `FmContains` | FM-indexed column (residual re-check) |
+//! | `Like(Column, pattern)` | `FmContainsAll` | FM-indexed column (residual re-check) |
 //! | `IsNull` / `IsNotNull(Column)` | `IsNull` / `IsNotNull` | page-stat-aware (residual re-check) |
 //! | `And([sub-exprs])` | recurse each | each part translated independently |
 //!
-//! Unsupported (`Or`, `Not`, `Ne`, `NotIn`, `Like`, `InSubquery`, `Exists`,
-//! cross-column comparisons) are left as residual Rust evaluation — the caller
-//! falls back to a full scan for those branches.
+//! Unsupported (`Or`, `Not`, `Ne`, `NotIn`, `InSubquery`, `Exists`, cross-column
+//! comparisons) are left as residual Rust evaluation — the caller falls back to
+//! a full scan for those branches.
 
 use mongreldb_core::query::Condition;
 use mongreldb_kit_core::query::{Expr, Literal};
@@ -95,6 +96,14 @@ fn collect_conditions(table: &KitTable, expr: &Expr, out: &mut Vec<Condition>) -
             // but keep `Contains` as a residual (the engine returns a superset)
             // by reporting the sub-expression as not fully translated.
             if let Some(c) = try_translate_contains(table, a, needle) {
+                out.push(c);
+            }
+            false
+        }
+        Expr::Like(a, pattern) => {
+            // Multi-segment LIKE: push `FmContainsAll` of the literal runs (a
+            // superset — order and wildcards are re-checked by the residual).
+            if let Some(c) = try_translate_like(table, a, pattern) {
                 out.push(c);
             }
             false
@@ -232,6 +241,33 @@ fn has_fm_index(table: &KitTable, col_name: &str) -> bool {
         .indexes
         .iter()
         .any(|idx| idx.kind == KitIndexKind::Fm && idx.columns.iter().any(|c| c == col_name))
+}
+
+/// Translate `Like(Column, pattern)` into `FmContainsAll` of the pattern's
+/// literal runs (the text between `%`/`_` wildcards) when the column has an FM
+/// index. Every literal run is a required substring, so the result is a superset
+/// of the real `LIKE`; the Kit re-checks the pattern in Rust. Escaped patterns
+/// (containing `\`) are left to a full scan.
+fn try_translate_like(table: &KitTable, a: &Expr, pattern: &str) -> Option<Condition> {
+    let Expr::Column(col_name) = a else {
+        return None;
+    };
+    let col = table.column(col_name)?;
+    if !has_fm_index(table, col_name) || pattern.contains('\\') {
+        return None;
+    }
+    let patterns: Vec<Vec<u8>> = pattern
+        .split(['%', '_'])
+        .filter(|s| !s.is_empty())
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+    if patterns.is_empty() {
+        return None;
+    }
+    Some(Condition::FmContainsAll {
+        column_id: col.id as u16,
+        patterns,
+    })
 }
 
 /// Translate `Contains(Column, needle)` into `FmContains` when the column has an

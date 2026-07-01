@@ -1,0 +1,14 @@
+{
+  "like_apple": {
+    "rows": [
+      { "id": 1, "body": "apple pie" },
+      { "id": 3, "body": "apple tart" }
+    ]
+  },
+  "like_a_t": {
+    "rows": [{ "id": 3, "body": "apple tart" }]
+  },
+  "like_none": {
+    "rows": []
+  }
+}

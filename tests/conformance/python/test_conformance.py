@@ -462,6 +462,36 @@ def test_null_filter():
         db.close()
 
 
+def test_like():
+    raw = load_json("like.json")
+    expected = load_json("expected/like.json")
+    table = raw["schema"]["tables"][0]["name"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = kit.Database.create(tmp, raw["schema"])
+        for row in raw["rows"]:
+            txn = db.begin()
+            txn.insert(table, row)
+            txn.commit()
+
+        for scenario in raw["scenarios"]:
+            txn = db.begin()
+            rows = txn.select(scenario["table"], filter=scenario["filter"])
+            txn.commit()
+            order = scenario.get("order")
+            if order:
+                desc = order.startswith("-")
+                col = order.lstrip("+-")
+                rows = sorted(
+                    rows,
+                    key=lambda r: (r.get(col) is None, r.get(col)),
+                    reverse=desc,
+                )
+            exp = expected[scenario["name"]]["rows"]
+            assert rows == exp, f"{scenario['name']}: {rows} != {exp}"
+        db.close()
+
+
 def run_phase1_dml_with_db(db):
     """Run the Phase 1 DML fixture against an already-open, migrated database."""
     fixture = load_json("phase1_dml.json")

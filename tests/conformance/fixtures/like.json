@@ -1,0 +1,48 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "words",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "body",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [
+          { "name": "idx_words_body_fm", "columns": ["body"], "unique": false, "kind": "fm" }
+        ],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "body": "apple pie" },
+    { "id": 2, "body": "banana bread" },
+    { "id": 3, "body": "apple tart" },
+    { "id": 4, "body": "cherry cake" }
+  ],
+  "scenarios": [
+    { "name": "like_apple", "table": "words", "order": "+id", "filter": { "body": { "like": "%apple%" } } },
+    { "name": "like_a_t", "table": "words", "order": "+id", "filter": { "body": { "like": "%a%t%" } } },
+    { "name": "like_none", "table": "words", "order": "+id", "filter": { "body": { "like": "%z%" } } }
+  ]
+}

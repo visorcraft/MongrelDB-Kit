@@ -30,6 +30,7 @@ import {
 	notExists,
 	joinEq,
 	contains,
+	like,
 	asc,
 	desc,
 	KitError,
@@ -235,6 +236,9 @@ function buildPredicate(table: TableSpec, filter: Record<string, any>): any {
 					break;
 				case 'is_not_null':
 					parts.push(isNotNull(col));
+					break;
+				case 'like':
+					parts.push(like(col, operand as string));
 					break;
 				default:
 					throw new Error(`unknown operator ${op}`);
@@ -817,6 +821,37 @@ describe('mongreldb-kit conformance', () => {
 				const ids = rows.map((r) => Number(r.id)).sort((a, b) => a - b);
 				const want = [...(scenario.expect_ids as number[])].sort((a, b) => a - b);
 				expect(ids, `ann ${scenario.name}`).toEqual(want);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs LIKE scenarios against the TypeScript kit', () => {
+		const raw = loadJson('like.json');
+		const expected = loadJson('expected/like.json');
+		const schema = schemaFromFixture(raw.schema);
+		const baseTable = schema.table(raw.schema.tables[0].name);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-like-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const row of raw.rows) {
+				kit.insertInto(baseTable).values(normalizeRowForTs(baseTable, row)).executeSync();
+			}
+			for (const scenario of raw.scenarios) {
+				const tspec = schema.table(scenario.table);
+				const rows = (
+					kit.selectFrom(tspec).where(buildPredicate(tspec, scenario.filter)).executeSync() as any[]
+				).map((r) => normalizeRowForCompare(tspec, r));
+				const exp = (expected[scenario.name].rows as any[]).map((r) =>
+					normalizeRowForCompare(tspec, r)
+				);
+				if (scenario.order) {
+					sortAggRows(rows, scenario.order);
+					sortAggRows(exp, scenario.order);
+				}
+				expect(rows, `like ${scenario.name}`).toEqual(exp);
 			}
 		} finally {
 			kit.close();
