@@ -1,18 +1,23 @@
 //! Typed remote client for a running `mongreldb-server` daemon (PLAN.md #3).
 //!
-//! [`RemoteDatabase`] speaks the daemon's typed `/kit/txn` + `/kit/schema`
-//! endpoints (plus `/sql` for reads), giving Rust callers a schema-aware CRUD
-//! surface over HTTP. **Authority is server-side**: writes run inside one core
-//! transaction on the daemon, which enforces the engine's declarative
-//! constraints (unique / FK-restrict / check) atomically. Client-side field
-//! validation (enum / min / max / regex / defaults) is NOT applied here — the
-//! daemon does not store the Kit's rich column metadata, so those are the
-//! caller's responsibility in remote mode.
+//! [`RemoteDatabase`] speaks the daemon's typed endpoints over HTTP:
+//! - `GET  /kit/schema` — schema + constraint metadata,
+//! - `POST /kit/txn` — a typed atomic write batch (put / put_returning / upsert
+//!   / delete / delete_by_pk) with an idempotency key,
+//! - `POST /kit/query` — a native typed query returning physical row ids +
+//!   typed cells,
+//! - `POST /sql` — SQL reads decoded to JSON rows.
 //!
-//! This is the MVP surface: typed insert / insert_returning / upsert /
-//! delete_by_pk committed as an atomic batch, plus schema introspection and
-//! SQL reads. Mirroring the *full* embedded `Database`/`Transaction` (defaults,
-//! Kit constraints, sequences, the query builder) is the "full version" item.
+//! **Authority is server-side**: writes run inside one core transaction on the
+//! daemon, which enforces the engine's declarative constraints (unique /
+//! FK-RESTRICT/CASCADE/SET-NULL / check) atomically, and the idempotency store
+//! is persisted to `<root>/_idem/` so retries survive a daemon restart.
+//!
+//! **Architectural boundary (by design):** the daemon stores engine-level
+//! constraints only — not the Kit's richer per-column metadata (defaults,
+//! enums, min/max, length, regex). Those Kit-specific field validations are
+//! therefore **the caller's responsibility in remote mode**; only the engine
+//! constraints are enforced authoritatively server-side.
 //!
 //! Enable with the `remote` cargo feature.
 
