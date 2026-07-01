@@ -631,6 +631,23 @@ impl PyTransaction {
         rows.iter().map(row_to_json).collect()
     }
 
+    /// Learned-sparse (SPLADE) retrieval over a `Sparse` column's index; returns
+    /// the top-`k` rows for the weighted query tokens (as JSON strings).
+    fn sparse_match(
+        &self,
+        table: &str,
+        column: &str,
+        query: Vec<(u32, f32)>,
+        k: usize,
+    ) -> PyResult<Vec<String>> {
+        let txn = self
+            .txn
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))?;
+        let rows = txn.sparse_match(table, column, query, k).map_err(map_err)?;
+        rows.iter().map(row_to_json).collect()
+    }
+
     fn commit(&mut self) -> PyResult<()> {
         if let Some(txn) = self.txn.take() {
             let result = txn.commit().map_err(map_err);

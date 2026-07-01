@@ -1,0 +1,47 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "docs",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "terms",
+            "storage_type": "sparse",
+            "application_type": "sparse",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [
+          { "name": "idx_docs_terms_sparse", "columns": ["terms"], "unique": false, "kind": "sparse" }
+        ],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "terms": [[1, 0.9], [2, 0.5]] },
+    { "id": 2, "terms": [[2, 0.8], [3, 0.7]] },
+    { "id": 3, "terms": [[3, 0.6], [4, 0.9]] }
+  ],
+  "scenarios": [
+    { "name": "match_t1", "table": "docs", "column": "terms", "query": [[1, 1.0]], "k": 1, "expect_ids": [1] },
+    { "name": "match_t2", "table": "docs", "column": "terms", "query": [[2, 1.0]], "k": 2, "expect_ids": [1, 2] },
+    { "name": "match_t4", "table": "docs", "column": "terms", "query": [[4, 1.0]], "k": 1, "expect_ids": [3] }
+  ]
+}

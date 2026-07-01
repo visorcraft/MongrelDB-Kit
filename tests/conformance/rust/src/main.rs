@@ -31,6 +31,10 @@ fn main() {
         eprintln!("ANN conformance failed: {}", e);
         std::process::exit(1);
     }
+    if let Err(e) = conformance_runner::run_sparse() {
+        eprintln!("sparse conformance failed: {}", e);
+        std::process::exit(1);
+    }
     if let Err(e) = conformance_runner::run_null_filter() {
         eprintln!("null filter conformance failed: {}", e);
         std::process::exit(1);

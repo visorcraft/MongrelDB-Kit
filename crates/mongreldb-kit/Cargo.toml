@@ -9,6 +9,7 @@ keywords = ["mongreldb", "database", "orm", "migrations", "transactions"]
 categories = ["database"]
 
 [dependencies]
+bincode = "1"
 mongreldb-kit-core = { path = "../mongreldb-kit-core" }
 mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.16.0" }
 serde_json = { version = "1", features = ["preserve_order"] }

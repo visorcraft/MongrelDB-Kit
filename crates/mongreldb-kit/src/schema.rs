@@ -34,6 +34,7 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
             KitIndexKind::Bitmap => IndexKind::Bitmap,
             KitIndexKind::Fm => IndexKind::FmIndex,
             KitIndexKind::Ann => IndexKind::Ann,
+            KitIndexKind::Sparse => IndexKind::Sparse,
         };
         for col_name in &idx.columns {
             if let Some(col) = table.column(col_name) {
@@ -92,6 +93,9 @@ pub(crate) fn to_core_type(ty: ColumnType) -> TypeId {
         // Dimension is filled from the column's `embedding_dim` in
         // `to_core_schema`; a bare type has no dimension context.
         ColumnType::Embedding => TypeId::Embedding { dim: 0 },
+        // Sparse vectors are stored as bincode'd `Vec<(u32, f32)>` in a Bytes
+        // column; the Sparse index reads the tokens from those bytes.
+        ColumnType::Sparse => TypeId::Bytes,
     }
 }
 
@@ -109,7 +113,25 @@ pub fn json_to_core(value: &Value, ty: ColumnType) -> Result<CoreValue> {
         }
         Value::String(s) => CoreValue::Bytes(s.as_bytes().to_vec()),
         Value::Array(arr) => {
-            if ty == ColumnType::Embedding {
+            if ty == ColumnType::Sparse {
+                let mut terms: Vec<(u32, f32)> = Vec::with_capacity(arr.len());
+                for pair in arr {
+                    let p = pair
+                        .as_array()
+                        .ok_or_else(|| KitError::Validation("sparse expects pairs".into()))?;
+                    let token =
+                        p.first().and_then(|v| v.as_u64()).ok_or_else(|| {
+                            KitError::Validation("sparse token must be u32".into())
+                        })? as u32;
+                    let weight = p.get(1).and_then(|v| v.as_f64()).ok_or_else(|| {
+                        KitError::Validation("sparse weight must be number".into())
+                    })? as f32;
+                    terms.push((token, weight));
+                }
+                CoreValue::Bytes(
+                    bincode::serialize(&terms).map_err(|e| KitError::Validation(e.to_string()))?,
+                )
+            } else if ty == ColumnType::Embedding {
                 let mut vec = Vec::with_capacity(arr.len());
                 for v in arr {
                     match v.as_f64() {
@@ -150,6 +172,16 @@ pub fn core_to_json(value: &CoreValue, ty: ColumnType) -> Result<Value> {
         (CoreValue::Int64(i), _) => Value::Number((*i).into()),
         (CoreValue::Float64(f), ColumnType::Float32) => serde_json::to_value(*f as f32)?,
         (CoreValue::Float64(f), _) => serde_json::to_value(*f)?,
+        (CoreValue::Bytes(b), ColumnType::Sparse) => {
+            let terms: Vec<(u32, f32)> =
+                bincode::deserialize(b).map_err(|e| KitError::Validation(e.to_string()))?;
+            Value::Array(
+                terms
+                    .into_iter()
+                    .map(|(t, w)| Value::Array(vec![Value::from(t), Value::from(w as f64)]))
+                    .collect(),
+            )
+        }
         (CoreValue::Bytes(b), ColumnType::Bytes) => {
             Value::Array(b.iter().map(|x| Value::Number((*x).into())).collect())
         }

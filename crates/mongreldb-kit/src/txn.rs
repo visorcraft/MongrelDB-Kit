@@ -695,6 +695,29 @@ impl<'a> Transaction<'a> {
         self.snapshot_rows_pushed(table, &[cond])
     }
 
+    /// Learned-sparse (SPLADE-style) retrieval: return the `k` rows whose
+    /// `Sparse` column best matches the weighted query tokens `query`
+    /// (`(token_id, weight)` pairs), resolved by the column's sparse index.
+    /// Requires a `Sparse` index on `column`.
+    pub fn sparse_match(
+        &self,
+        table: &str,
+        column: &str,
+        query: Vec<(u32, f32)>,
+        k: usize,
+    ) -> Result<Vec<Row>> {
+        let t = self.require_table(table)?;
+        let col = t
+            .column(column)
+            .ok_or_else(|| KitError::Validation(format!("unknown column \"{column}\"")))?;
+        let cond = Condition::SparseMatch {
+            column_id: col.id as u16,
+            query,
+            k,
+        };
+        self.snapshot_rows_pushed(table, &[cond])
+    }
+
     pub fn execute(&mut self, query: &Query) -> Result<Vec<Value>> {
         match query {
             Query::Select(_) => Err(KitError::Validation("use select() for SELECT".into())),

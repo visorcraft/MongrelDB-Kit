@@ -1051,6 +1051,7 @@ fn ts_type(ty: ColumnType) -> &'static str {
         ColumnType::Bytes => "Uint8Array",
         ColumnType::Json => "unknown",
         ColumnType::Embedding => "number[]",
+        ColumnType::Sparse => "[number, number][]",
     }
 }
 
@@ -1111,6 +1112,7 @@ fn rust_type(ty: ColumnType) -> &'static str {
         ColumnType::Bytes => "Vec<u8>",
         ColumnType::Json => "serde_json::Value",
         ColumnType::Embedding => "Vec<f32>",
+        ColumnType::Sparse => "Vec<(u32, f32)>",
     }
 }
 
@@ -1183,6 +1185,7 @@ fn python_type(ty: ColumnType) -> &'static str {
         ColumnType::Bytes => "bytes",
         ColumnType::Json => "Any",
         ColumnType::Embedding => "list[float]",
+        ColumnType::Sparse => "list[tuple[int, float]]",
     }
 }
 

@@ -492,6 +492,28 @@ def test_like():
         db.close()
 
 
+def test_sparse():
+    raw = load_json("sparse.json")
+    table = raw["schema"]["tables"][0]["name"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = kit.Database.create(tmp, raw["schema"])
+        for row in raw["rows"]:
+            txn = db.begin()
+            txn.insert(table, row)
+            txn.commit()
+
+        for scenario in raw["scenarios"]:
+            txn = db.begin()
+            rows = txn.sparse_match(
+                scenario["table"], scenario["column"], scenario["query"], scenario["k"]
+            )
+            txn.commit()
+            ids = sorted(r["id"] for r in rows)
+            assert ids == sorted(scenario["expect_ids"]), f"{scenario['name']}: {ids}"
+        db.close()
+
+
 def run_phase1_dml_with_db(db):
     """Run the Phase 1 DML fixture against an already-open, migrated database."""
     fixture = load_json("phase1_dml.json")

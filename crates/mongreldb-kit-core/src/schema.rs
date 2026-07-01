@@ -26,6 +26,9 @@ pub enum ColumnType {
     /// A dense float32 vector for nearest-neighbour (ANN) search. The dimension
     /// is carried on the column as `embedding_dim`.
     Embedding,
+    /// A learned-sparse (SPLADE-style) weighted token vector, stored as a
+    /// `[[token_id, weight], ...]` list, for sparse retrieval.
+    Sparse,
 }
 
 /// How a default value is produced when a row omits a column.
@@ -124,6 +127,8 @@ pub enum IndexKind {
     Fm,
     /// HNSW approximate-nearest-neighbour index for `Embedding` columns.
     Ann,
+    /// SPLADE-style learned-sparse retrieval index for `Sparse` columns.
+    Sparse,
 }
 
 /// An index on one or more columns.

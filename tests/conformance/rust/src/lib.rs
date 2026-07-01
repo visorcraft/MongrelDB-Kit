@@ -1120,6 +1120,75 @@ pub fn run_ann() -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Sparse (SPLADE) conformance (sparse_match top-k over a Sparse column)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct SparseScenario {
+    name: String,
+    table: String,
+    column: String,
+    query: Vec<(u32, f32)>,
+    k: usize,
+    expect_ids: Vec<i64>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SparseFixture {
+    schema: Schema,
+    rows: Vec<Map<String, Value>>,
+    scenarios: Vec<SparseScenario>,
+}
+
+pub fn run_sparse() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: SparseFixture = load_json(&fixtures.join("sparse.json"))?;
+
+    let table = fixture
+        .schema
+        .tables
+        .first()
+        .ok_or("sparse fixture has no table")?
+        .name
+        .clone();
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+    for row in &fixture.rows {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        txn.insert(&table, row.clone()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    for scenario in &fixture.scenarios {
+        let txn = db.begin().map_err(|e| e.to_string())?;
+        let rows = txn
+            .sparse_match(
+                &scenario.table,
+                &scenario.column,
+                scenario.query.clone(),
+                scenario.k,
+            )
+            .map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+        let mut ids: Vec<i64> = rows
+            .iter()
+            .filter_map(|r| r.values.get("id").and_then(|v| v.as_i64()))
+            .collect();
+        ids.sort_unstable();
+        let mut expect = scenario.expect_ids.clone();
+        expect.sort_unstable();
+        if ids != expect {
+            return Err(format!(
+                "{}: sparse ids {:?} != expected {:?}",
+                scenario.name, ids, expect
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // IS NULL / IS NOT NULL pushdown conformance
 // ---------------------------------------------------------------------------
 

@@ -579,6 +579,7 @@ dependencies = [
 name = "mongreldb-kit"
 version = "0.5.0"
 dependencies = [
+ "bincode",
  "mongreldb-core",
  "mongreldb-kit-core",
  "parking_lot",

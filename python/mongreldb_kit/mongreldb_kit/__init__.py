@@ -332,6 +332,20 @@ class Transaction:
         rows = self._handle.ann_search(table, column, [float(x) for x in query], k)
         return [json.loads(r) for r in rows]
 
+    def sparse_match(
+        self,
+        table: str,
+        column: str,
+        query: Iterable[tuple[int, float]],
+        k: int,
+    ) -> list[dict[str, Any]]:
+        """Learned-sparse (SPLADE) retrieval: return the ``k`` rows whose
+        ``column`` (a sparse token vector) best matches the weighted query
+        ``(token_id, weight)`` pairs, by sparse dot product."""
+        q = [(t, float(w)) for t, w in query]
+        rows = self._handle.sparse_match(table, column, q, k)
+        return [json.loads(r) for r in rows]
+
     def commit(self) -> None:
         if not self._closed:
             self._handle.commit()

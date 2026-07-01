@@ -263,6 +263,12 @@ fn type_check(table: &Table, col: &Column, value: &Value) -> Result<(), Validati
         ColumnType::Embedding => value
             .as_array()
             .is_some_and(|a| a.iter().all(|v| v.is_number())),
+        ColumnType::Sparse => value.as_array().is_some_and(|a| {
+            a.iter().all(|pair| {
+                pair.as_array()
+                    .is_some_and(|p| p.len() == 2 && p[0].is_u64() && p[1].is_number())
+            })
+        }),
     };
 
     if !ok {
