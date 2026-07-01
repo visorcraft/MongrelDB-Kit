@@ -24,6 +24,7 @@ from .mongreldb_kit_py import Database as _Database
 from .mongreldb_kit_py import Transaction as _Transaction
 
 from ._schema import Column, ForeignKey, Index, Table, UniqueConstraint
+from .remote import RemoteDatabase, RemoteTransaction
 
 __all__ = [
     "Database",
@@ -67,6 +68,8 @@ __all__ = [
     "Index",
     "Table",
     "UniqueConstraint",
+    "RemoteDatabase",
+    "RemoteTransaction",
 ]
 
 
