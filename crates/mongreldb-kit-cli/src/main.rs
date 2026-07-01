@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use mongreldb_kit::{
-    migrate as run_migrations, Column, ColumnType, Database, Migration, MigrationOp, Query, Schema,
-    Select, Table,
+    migrate as run_migrations, AggFunc, Aggregate, AggregateQuery, Column, ColumnType, Database,
+    Direction, Expr, Literal, Migration, MigrationOp, OnConflict, OrderBy, Query, Schema, Select,
+    Table,
 };
 use mongreldb_kit_core::migrations::plan_migrations;
 use serde::{Deserialize, Serialize};
@@ -148,6 +149,68 @@ enum Command {
     Doctor { path: PathBuf },
     /// Remove all rows from a table.
     Truncate { path: PathBuf, table: String },
+    /// Point-read a single row by primary key.
+    Get {
+        path: PathBuf,
+        table: String,
+        pk: String,
+    },
+    /// Query rows with an optional friendly filter, ordering, and projection.
+    Query {
+        path: PathBuf,
+        table: String,
+        /// Friendly filter JSON, e.g. '{"amount":{"gte":100},"region":"east"}'.
+        #[arg(long)]
+        filter: Option<String>,
+        /// Order key(s), comma-separated, `+col` asc / `-col` desc.
+        #[arg(long)]
+        order: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        offset: Option<usize>,
+        /// Projected columns (comma-separated); default is all columns.
+        #[arg(long, value_delimiter = ',')]
+        columns: Option<Vec<String>>,
+        /// Drop duplicate rows.
+        #[arg(long)]
+        distinct: bool,
+    },
+    /// Insert one row (JSON object) and print it with defaults applied.
+    Insert {
+        path: PathBuf,
+        table: String,
+        row: String,
+    },
+    /// Update a row by primary key with a JSON patch object.
+    Update {
+        path: PathBuf,
+        table: String,
+        pk: String,
+        patch: String,
+    },
+    /// Delete a row by primary key.
+    Delete {
+        path: PathBuf,
+        table: String,
+        pk: String,
+    },
+    /// Insert a row, or update it on a primary-key conflict with `--update`.
+    Upsert {
+        path: PathBuf,
+        table: String,
+        row: String,
+        /// On conflict, update with the provided row instead of doing nothing.
+        #[arg(long)]
+        update: bool,
+    },
+    /// Count rows, optionally matching a friendly filter.
+    Count {
+        path: PathBuf,
+        table: String,
+        #[arg(long)]
+        filter: Option<String>,
+    },
     /// Schema commands.
     #[command(subcommand)]
     Schema(SchemaCmd),
@@ -217,6 +280,45 @@ fn main() -> Result<()> {
         Command::Check { path } => cmd_check(&path),
         Command::Doctor { path } => cmd_doctor(&path),
         Command::Truncate { path, table } => cmd_truncate(&path, &table),
+        Command::Get { path, table, pk } => cmd_get(&path, &table, &pk),
+        Command::Query {
+            path,
+            table,
+            filter,
+            order,
+            limit,
+            offset,
+            columns,
+            distinct,
+        } => cmd_query(
+            &path,
+            &table,
+            filter.as_deref(),
+            order.as_deref(),
+            limit,
+            offset,
+            columns,
+            distinct,
+        ),
+        Command::Insert { path, table, row } => cmd_insert(&path, &table, &row),
+        Command::Update {
+            path,
+            table,
+            pk,
+            patch,
+        } => cmd_update(&path, &table, &pk, &patch),
+        Command::Delete { path, table, pk } => cmd_delete(&path, &table, &pk),
+        Command::Upsert {
+            path,
+            table,
+            row,
+            update,
+        } => cmd_upsert(&path, &table, &row, update),
+        Command::Count {
+            path,
+            table,
+            filter,
+        } => cmd_count(&path, &table, filter.as_deref()),
         Command::Schema(cmd) => match cmd {
             SchemaCmd::Print { path } => cmd_schema_print(&path),
             SchemaCmd::Validate { schema } => cmd_schema_validate(&schema),
@@ -289,6 +391,245 @@ fn cmd_truncate(path: &Path, table: &str) -> Result<()> {
         .context(format!("failed to truncate {table}"))?;
     txn.commit().context("failed to commit transaction")?;
     println!("table {table} truncated");
+    Ok(())
+}
+
+// ── Data commands ──────────────────────────────────────────────────────────
+//
+// Scalars (primary keys) are parsed as JSON with a string fallback, so `5` is an
+// integer and `alice` is the text "alice" without shell quoting. Rows/patches
+// are JSON objects. Filters use the same friendly `{"col": {"op": value}}` shape
+// the language facades accept, so the CLI, Kit, and conformance runners agree.
+
+fn parse_scalar(arg: &str) -> Value {
+    serde_json::from_str(arg).unwrap_or_else(|_| Value::String(arg.to_string()))
+}
+
+fn parse_object(arg: &str, what: &str) -> Result<Map<String, Value>> {
+    match serde_json::from_str(arg).context(format!("failed to parse {what} JSON"))? {
+        Value::Object(m) => Ok(m),
+        _ => bail!("{what} must be a JSON object"),
+    }
+}
+
+fn value_to_literal(v: &Value) -> Literal {
+    match v {
+        Value::Null => Literal::Null,
+        Value::Bool(b) => Literal::Bool(*b),
+        Value::Number(n) => n
+            .as_i64()
+            .map(Literal::Int)
+            .unwrap_or_else(|| Literal::Float(n.as_f64().unwrap_or(f64::NAN))),
+        Value::String(s) => Literal::Text(s.clone()),
+        other => Literal::Json(other.clone()),
+    }
+}
+
+fn literal_list(v: &Value) -> Result<Vec<Literal>> {
+    Ok(v.as_array()
+        .context("in/not_in expects an array")?
+        .iter()
+        .map(value_to_literal)
+        .collect())
+}
+
+/// Translate a friendly per-column filter object into an engine `Expr`. Ops:
+/// eq/ne/gt/gte/lt/lte/in/not_in/is_null/is_not_null; `{"col": value}` is
+/// shorthand for eq; multiple keys are AND-ed.
+fn parse_filter(map: &Map<String, Value>) -> Result<Expr> {
+    let mut parts = Vec::new();
+    for (col, val) in map {
+        let col_expr = || Box::new(Expr::Column(col.clone()));
+        let lit = |v: &Value| Box::new(Expr::Literal(value_to_literal(v)));
+        let expr = match val {
+            Value::Object(op) if op.len() == 1 => {
+                let (name, operand) = op.iter().next().unwrap();
+                match name.as_str() {
+                    "eq" => Expr::Eq(col_expr(), lit(operand)),
+                    "ne" => Expr::Ne(col_expr(), lit(operand)),
+                    "gt" => Expr::Gt(col_expr(), lit(operand)),
+                    "gte" => Expr::Gte(col_expr(), lit(operand)),
+                    "lt" => Expr::Lt(col_expr(), lit(operand)),
+                    "lte" => Expr::Lte(col_expr(), lit(operand)),
+                    "in" => Expr::In(col_expr(), literal_list(operand)?),
+                    "not_in" => Expr::NotIn(col_expr(), literal_list(operand)?),
+                    "is_null" => Expr::IsNull(col_expr()),
+                    "is_not_null" => Expr::IsNotNull(col_expr()),
+                    other => bail!("unknown filter operator {other}"),
+                }
+            }
+            Value::Null => Expr::IsNull(col_expr()),
+            other => Expr::Eq(col_expr(), lit(other)),
+        };
+        parts.push(expr);
+    }
+    Ok(match parts.len() {
+        0 => Expr::Literal(Literal::Bool(true)),
+        1 => parts.into_iter().next().unwrap(),
+        _ => Expr::And(parts),
+    })
+}
+
+fn parse_order(order: &str) -> Vec<OrderBy> {
+    order
+        .split(',')
+        .filter_map(|part| {
+            let part = part.trim();
+            if part.is_empty() {
+                return None;
+            }
+            let (direction, col) = match part.strip_prefix('-') {
+                Some(rest) => (Direction::Desc, rest),
+                None => (Direction::Asc, part.strip_prefix('+').unwrap_or(part)),
+            };
+            Some(OrderBy {
+                expr: Expr::Column(col.to_string()),
+                direction,
+            })
+        })
+        .collect()
+}
+
+fn optional_filter(filter: Option<&str>) -> Result<Option<Expr>> {
+    match filter {
+        Some(s) => Ok(Some(parse_filter(&parse_object(s, "filter")?)?)),
+        None => Ok(None),
+    }
+}
+
+fn cmd_get(path: &Path, table: &str, pk: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let txn = db.begin().context("failed to begin transaction")?;
+    let row = txn
+        .get_by_pk(table, &parse_scalar(pk))
+        .context(format!("failed to read from {table}"))?;
+    match row {
+        Some(r) => println!(
+            "{}",
+            serde_json::to_string_pretty(&Value::Object(r.values))?
+        ),
+        None => println!("null"),
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_query(
+    path: &Path,
+    table: &str,
+    filter: Option<&str>,
+    order: Option<&str>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    columns: Option<Vec<String>>,
+    distinct: bool,
+) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let txn = db.begin().context("failed to begin transaction")?;
+    let select = Select {
+        table: table.to_string(),
+        columns: columns
+            .unwrap_or_default()
+            .into_iter()
+            .map(Expr::Column)
+            .collect(),
+        filter: optional_filter(filter)?,
+        order_by: order.map(parse_order).unwrap_or_default(),
+        limit,
+        offset,
+    };
+    let query = Query::Select(select);
+    let rows = if distinct {
+        txn.select_distinct(&query)
+    } else {
+        txn.select(&query)
+    }
+    .context(format!("failed to query {table}"))?;
+    let values: Vec<Value> = rows.into_iter().map(|r| Value::Object(r.values)).collect();
+    println!("{}", serde_json::to_string_pretty(&Value::Array(values))?);
+    Ok(())
+}
+
+fn cmd_insert(path: &Path, table: &str, row: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let mut txn = db.begin().context("failed to begin transaction")?;
+    let inserted = txn
+        .insert(table, parse_object(row, "row")?)
+        .context(format!("failed to insert into {table}"))?;
+    txn.commit().context("failed to commit transaction")?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&Value::Object(inserted.values))?
+    );
+    Ok(())
+}
+
+fn cmd_update(path: &Path, table: &str, pk: &str, patch: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let mut txn = db.begin().context("failed to begin transaction")?;
+    let updated = txn
+        .update(table, &parse_scalar(pk), parse_object(patch, "patch")?)
+        .context(format!("failed to update {table}"))?;
+    txn.commit().context("failed to commit transaction")?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&Value::Object(updated.values))?
+    );
+    Ok(())
+}
+
+fn cmd_delete(path: &Path, table: &str, pk: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let mut txn = db.begin().context("failed to begin transaction")?;
+    txn.delete(table, &parse_scalar(pk))
+        .context(format!("failed to delete from {table}"))?;
+    txn.commit().context("failed to commit transaction")?;
+    println!("deleted");
+    Ok(())
+}
+
+fn cmd_upsert(path: &Path, table: &str, row: &str, update: bool) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let mut txn = db.begin().context("failed to begin transaction")?;
+    let row_map = parse_object(row, "row")?;
+    let returning: Vec<String> = row_map.keys().cloned().collect();
+    let on_conflict = if update {
+        OnConflict::DoUpdate(row_map.clone())
+    } else {
+        OnConflict::DoNothing
+    };
+    let result = txn
+        .upsert(table, row_map, on_conflict, returning)
+        .context(format!("failed to upsert into {table}"))?;
+    txn.commit().context("failed to commit transaction")?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+fn cmd_count(path: &Path, table: &str, filter: Option<&str>) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let txn = db.begin().context("failed to begin transaction")?;
+    let query = AggregateQuery {
+        table: table.to_string(),
+        filter: optional_filter(filter)?,
+        group_by: Vec::new(),
+        aggregates: vec![Aggregate {
+            func: AggFunc::Count,
+            column: None,
+            alias: "count".to_string(),
+            distinct: false,
+        }],
+        having: None,
+    };
+    let rows = txn
+        .aggregate(&query)
+        .context(format!("failed to count {table}"))?;
+    let count = rows
+        .first()
+        .and_then(|r| r.values.get("count"))
+        .cloned()
+        .unwrap_or_else(|| Value::from(0));
+    println!("{count}");
     Ok(())
 }
 
@@ -980,4 +1321,58 @@ fn read_migrations(path: &Path) -> Result<Vec<Migration>> {
     let cli_migrations: Vec<CliMigration> =
         serde_json::from_str(&text).context("failed to parse migrations JSON")?;
     Ok(cli_migrations.into_iter().map(Into::into).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn obj(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn scalar_arg_parses_as_json_with_string_fallback() {
+        assert_eq!(parse_scalar("5"), Value::from(5));
+        assert_eq!(parse_scalar("true"), Value::from(true));
+        // Bare, unquoted text is treated as a string, not a JSON parse error.
+        assert_eq!(parse_scalar("alice"), Value::from("alice"));
+    }
+
+    #[test]
+    fn friendly_filter_translates_to_expr() {
+        let col = |c: &str| Box::new(Expr::Column(c.to_string()));
+        let int = |n: i64| Box::new(Expr::Literal(Literal::Int(n)));
+
+        assert_eq!(
+            parse_filter(&obj(json!({"amount": {"gte": 100}}))).unwrap(),
+            Expr::Gte(col("amount"), int(100))
+        );
+        // Bare value is shorthand for eq.
+        assert_eq!(
+            parse_filter(&obj(json!({"region": "east"}))).unwrap(),
+            Expr::Eq(
+                col("region"),
+                Box::new(Expr::Literal(Literal::Text("east".into())))
+            )
+        );
+        // Multiple keys AND together.
+        assert!(matches!(
+            parse_filter(&obj(json!({"a": 1, "b": 2}))).unwrap(),
+            Expr::And(parts) if parts.len() == 2
+        ));
+        assert_eq!(
+            parse_filter(&obj(json!({"name": {"is_null": true}}))).unwrap(),
+            Expr::IsNull(col("name"))
+        );
+    }
+
+    #[test]
+    fn order_spec_parses_direction_prefixes() {
+        let ords = parse_order("+id,-created");
+        assert_eq!(ords.len(), 2);
+        assert!(matches!(ords[0].direction, Direction::Asc));
+        assert!(matches!(ords[1].direction, Direction::Desc));
+    }
 }
