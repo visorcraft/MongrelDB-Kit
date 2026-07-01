@@ -304,9 +304,9 @@ dependencies = [
 
 [[package]]
 name = "console"
-version = "0.16.3"
+version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
+checksum = "4fe5f465a4f6fee88fad41b85d990f84c835335e85b5d9e6e63e0d06d28cba7c"
 dependencies = [
  "encode_unicode",
  "libc",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bincode",
  "mongreldb-core",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "hex",
  "insta",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-python"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "mongreldb-kit",
  "mongreldb-kit-core",
