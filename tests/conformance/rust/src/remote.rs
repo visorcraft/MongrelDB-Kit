@@ -283,5 +283,23 @@ fn inner() -> KitResult<()> {
         )));
     }
 
+    // 8. native typed query: PK lookup returns the row with its physical row id.
+    let rows = db.query("users", vec![json!({"pk": {"value": id}})], None, None)?;
+    if rows.len() != 1 {
+        return Err(KitError::Storage(format!(
+            "pk query returned {} rows",
+            rows.len()
+        )));
+    }
+    if rows[0].row_id.parse::<u64>().is_err() {
+        return Err(KitError::Storage("query row_id not numeric".into()));
+    }
+    if rows[0].values.get("email") != Some(&json!("a@x")) {
+        return Err(KitError::Storage(format!(
+            "query row email mismatch: {:?}",
+            rows[0].values.get("email")
+        )));
+    }
+
     Ok(())
 }

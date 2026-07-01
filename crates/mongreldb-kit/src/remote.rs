@@ -181,6 +181,83 @@ impl RemoteDatabase {
         }
         Ok(rows)
     }
+
+    /// Run a native typed query (`POST /kit/query`) returning rows with their
+    /// physical row ids and name-keyed cells. Conditions are raw JSON objects
+    /// mirroring the daemon's condition variants (e.g. `{"pk": {"value": 2}}`).
+    pub fn query(
+        &self,
+        table: &str,
+        conditions: Vec<Value>,
+        projection: Option<Vec<u16>>,
+        limit: Option<usize>,
+    ) -> Result<Vec<RemoteQueryRow>> {
+        #[derive(serde::Serialize)]
+        struct Req<'a> {
+            table: &'a str,
+            #[serde(skip_serializing_if = "<[_]>::is_empty")]
+            conditions: &'a [Value],
+            #[serde(skip_serializing_if = "Option::is_none")]
+            projection: Option<Vec<u16>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            limit: Option<usize>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            #[allow(dead_code)]
+            truncated: bool,
+            rows: Vec<RawRow>,
+        }
+        #[derive(serde::Deserialize)]
+        struct RawRow {
+            row_id: String,
+            cells: Vec<Value>,
+        }
+        let req = Req {
+            table,
+            conditions: &conditions,
+            projection,
+            limit,
+        };
+        let resp = self
+            .client
+            .post(self.url("/kit/query"))
+            .json(&req)
+            .send()
+            .map_err(ioe)?;
+        let parsed: Resp = decode(resp)?;
+        let info = self.require_table(table)?;
+        let mut out = Vec::with_capacity(parsed.rows.len());
+        for r in parsed.rows {
+            out.push(RemoteQueryRow {
+                row_id: r.row_id,
+                values: decode_cells(&r.cells, &info.id_to_name),
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// A row returned by [`RemoteDatabase::query`]: its physical row id plus the
+/// projected cells keyed by column name.
+#[derive(Debug, Clone)]
+pub struct RemoteQueryRow {
+    pub row_id: String,
+    pub values: Map<String, Value>,
+}
+
+fn decode_cells(cells: &[Value], id_to_name: &HashMap<u16, String>) -> Map<String, Value> {
+    let mut out = Map::new();
+    let mut i = 0;
+    while i + 1 < cells.len() {
+        if let Some(id) = cells[i].as_u64() {
+            if let Some(name) = id_to_name.get(&(id as u16)) {
+                out.insert(name.clone(), cells[i + 1].clone());
+            }
+        }
+        i += 2;
+    }
+    out
 }
 
 /// An in-flight typed batch against the daemon. Buffered ops commit atomically

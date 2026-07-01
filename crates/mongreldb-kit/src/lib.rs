@@ -23,7 +23,7 @@ pub use error::{KitError, Result};
 pub use migrate::migrate;
 pub use query::JoinRow;
 #[cfg(feature = "remote")]
-pub use remote::{RemoteBatch, RemoteDatabase, RemoteOpResult, RemoteTransaction};
+pub use remote::{RemoteBatch, RemoteDatabase, RemoteOpResult, RemoteQueryRow, RemoteTransaction};
 pub use schema::Row;
 pub use txn::Transaction;
 

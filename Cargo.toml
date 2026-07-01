@@ -14,4 +14,4 @@ resolver = "2"
 # `[patch.crates-io]` is stripped by `cargo publish`, so published kits are
 # unaffected.
 [patch.crates-io]
-mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.19.0" }
+mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.19.1" }
