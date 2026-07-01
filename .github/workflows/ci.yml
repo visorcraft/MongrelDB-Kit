@@ -59,12 +59,14 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       - name: TypeScript typecheck
         working-directory: MongrelDB-Kit/packages/kit
         run: |
-          npm install --no-save --ignore-scripts
+          npm install --no-save --ignore-scripts --legacy-peer-deps
+          mkdir -p node_modules
+          ln -sfn "$GITHUB_WORKSPACE/mongreldb/crates/mongreldb-node" node_modules/mongreldb
           npm run check
 
       - name: Python facade import
@@ -110,7 +112,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Build MongrelDB Node addon
         working-directory: mongreldb/crates/mongreldb-node
@@ -122,7 +124,7 @@ jobs:
         working-directory: MongrelDB-Kit/packages/kit
         run: |
           mkdir -p node_modules
-          ln -sfn ../../../mongreldb/crates/mongreldb-node node_modules/mongreldb
+          ln -sfn "$GITHUB_WORKSPACE/mongreldb/crates/mongreldb-node" node_modules/mongreldb
 
       - name: TypeScript build + tests
         working-directory: MongrelDB-Kit/packages/kit
@@ -134,10 +136,12 @@ jobs:
       - name: Python build (PyO3) + tests
         working-directory: MongrelDB-Kit
         run: |
+          python -m venv .venv
+          . .venv/bin/activate
           python -m pip install --upgrade pip maturin pytest
           maturin develop -m crates/mongreldb-kit-python/Cargo.toml
-          PYTHONPATH=python/mongreldb_kit python -m pytest python/tests -q
+          PYTHONPATH=python/mongreldb_kit python -m pytest python/tests tests/conformance/python -q
 
       - name: Conformance (Rust)
         working-directory: MongrelDB-Kit
-        run: cargo test -p mongreldb-kit-conformance
+        run: cargo run -p conformance-runner
