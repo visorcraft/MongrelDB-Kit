@@ -48,6 +48,7 @@ __all__ = [
     "fk",
     "check",
     "agg",
+    "count_distinct",
     "col",
     "on_eq",
     "encode_pk",
@@ -509,16 +510,30 @@ def check(name: str, expr: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def agg(func: str, alias: str, column: Optional[str] = None) -> dict[str, Any]:
+def agg(
+    func: str,
+    alias: str,
+    column: Optional[str] = None,
+    distinct: bool = False,
+) -> dict[str, Any]:
     """Build an aggregate spec, e.g. ``agg("sum", "total_sum", "total")``.
 
     ``func`` is one of ``count``/``sum``/``min``/``max``/``avg``. ``column`` may
-    be omitted for ``count`` (``COUNT(*)``).
+    be omitted for ``count`` (``COUNT(*)``). ``distinct=True`` gives e.g.
+    ``COUNT(DISTINCT col)``; it requires a ``column`` and is a no-op for
+    ``min``/``max``.
     """
     spec: dict[str, Any] = {"func": func, "alias": alias}
     if column is not None:
         spec["column"] = column
+    if distinct:
+        spec["distinct"] = True
     return spec
+
+
+def count_distinct(alias: str, column: str) -> dict[str, Any]:
+    """``COUNT(DISTINCT column) AS alias``."""
+    return agg("count", alias, column, distinct=True)
 
 
 def col(name: str) -> dict[str, Any]:
