@@ -260,6 +260,9 @@ fn type_check(table: &Table, col: &Column, value: &Value) -> Result<(), Validati
             true
         }
         ColumnType::Date | ColumnType::DateTime | ColumnType::TimestampNanos => value.is_string(),
+        ColumnType::Embedding => value
+            .as_array()
+            .is_some_and(|a| a.iter().all(|v| v.is_number())),
     };
 
     if !ok {

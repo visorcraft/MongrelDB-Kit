@@ -672,6 +672,29 @@ impl<'a> Transaction<'a> {
         run_join(&ctx, query)
     }
 
+    /// Approximate nearest-neighbour search: return the `k` rows whose
+    /// `Embedding` column is closest to `query`, resolved by the column's ANN
+    /// (HNSW) index. Requires an `Ann` index on `column`. Results are the top-`k`
+    /// survivor rows (as a set — distance ranking is not currently surfaced).
+    pub fn ann_search(
+        &self,
+        table: &str,
+        column: &str,
+        query: Vec<f32>,
+        k: usize,
+    ) -> Result<Vec<Row>> {
+        let t = self.require_table(table)?;
+        let col = t
+            .column(column)
+            .ok_or_else(|| KitError::Validation(format!("unknown column \"{column}\"")))?;
+        let cond = Condition::Ann {
+            column_id: col.id as u16,
+            query,
+            k,
+        };
+        self.snapshot_rows_pushed(table, &[cond])
+    }
+
     pub fn execute(&mut self, query: &Query) -> Result<Vec<Value>> {
         match query {
             Query::Select(_) => Err(KitError::Validation("use select() for SELECT".into())),

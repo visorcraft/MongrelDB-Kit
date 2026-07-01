@@ -1045,6 +1045,75 @@ pub fn run_contains() -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// ANN conformance (ann_search top-k over an Embedding column's HNSW index)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct AnnScenario {
+    name: String,
+    table: String,
+    column: String,
+    query: Vec<f32>,
+    k: usize,
+    expect_ids: Vec<i64>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AnnFixture {
+    schema: Schema,
+    rows: Vec<Map<String, Value>>,
+    scenarios: Vec<AnnScenario>,
+}
+
+pub fn run_ann() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: AnnFixture = load_json(&fixtures.join("ann.json"))?;
+
+    let table = fixture
+        .schema
+        .tables
+        .first()
+        .ok_or("ann fixture has no table")?
+        .name
+        .clone();
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+    for row in &fixture.rows {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        txn.insert(&table, row.clone()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    for scenario in &fixture.scenarios {
+        let txn = db.begin().map_err(|e| e.to_string())?;
+        let rows = txn
+            .ann_search(
+                &scenario.table,
+                &scenario.column,
+                scenario.query.clone(),
+                scenario.k,
+            )
+            .map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+        let mut ids: Vec<i64> = rows
+            .iter()
+            .filter_map(|r| r.values.get("id").and_then(|v| v.as_i64()))
+            .collect();
+        ids.sort_unstable();
+        let mut expect = scenario.expect_ids.clone();
+        expect.sort_unstable();
+        if ids != expect {
+            return Err(format!(
+                "{}: ann ids {:?} != expected {:?}",
+                scenario.name, ids, expect
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Phase 1 DML conformance
 // ---------------------------------------------------------------------------
 

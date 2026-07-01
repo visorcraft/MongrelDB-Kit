@@ -18,7 +18,12 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
         .map(|c| ColumnDef {
             id: c.id as u16,
             name: c.name.clone(),
-            ty: to_core_type(c.storage_type),
+            ty: match c.storage_type {
+                ColumnType::Embedding => TypeId::Embedding {
+                    dim: c.embedding_dim.unwrap_or(0),
+                },
+                other => to_core_type(other),
+            },
             flags: to_core_flags(table, c),
         })
         .collect();
@@ -28,6 +33,7 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
         let kind = match idx.kind {
             KitIndexKind::Bitmap => IndexKind::Bitmap,
             KitIndexKind::Fm => IndexKind::FmIndex,
+            KitIndexKind::Ann => IndexKind::Ann,
         };
         for col_name in &idx.columns {
             if let Some(col) = table.column(col_name) {
@@ -83,6 +89,9 @@ pub(crate) fn to_core_type(ty: ColumnType) -> TypeId {
         | ColumnType::Date
         | ColumnType::DateTime => TypeId::Bytes,
         ColumnType::TimestampNanos => TypeId::Int64,
+        // Dimension is filled from the column's `embedding_dim` in
+        // `to_core_schema`; a bare type has no dimension context.
+        ColumnType::Embedding => TypeId::Embedding { dim: 0 },
     }
 }
 
@@ -100,7 +109,18 @@ pub fn json_to_core(value: &Value, ty: ColumnType) -> Result<CoreValue> {
         }
         Value::String(s) => CoreValue::Bytes(s.as_bytes().to_vec()),
         Value::Array(arr) => {
-            if ty == ColumnType::Bytes {
+            if ty == ColumnType::Embedding {
+                let mut vec = Vec::with_capacity(arr.len());
+                for v in arr {
+                    match v.as_f64() {
+                        Some(f) => vec.push(f as f32),
+                        None => {
+                            return Err(KitError::Validation("embedding expects numbers".into()))
+                        }
+                    }
+                }
+                CoreValue::Embedding(vec)
+            } else if ty == ColumnType::Bytes {
                 let mut bytes = Vec::with_capacity(arr.len());
                 for v in arr {
                     match v {

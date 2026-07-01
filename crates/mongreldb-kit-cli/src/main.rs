@@ -1050,6 +1050,7 @@ fn ts_type(ty: ColumnType) -> &'static str {
         ColumnType::Text | ColumnType::Date | ColumnType::DateTime => "string",
         ColumnType::Bytes => "Uint8Array",
         ColumnType::Json => "unknown",
+        ColumnType::Embedding => "number[]",
     }
 }
 
@@ -1109,6 +1110,7 @@ fn rust_type(ty: ColumnType) -> &'static str {
         ColumnType::Text | ColumnType::Date | ColumnType::DateTime => "String",
         ColumnType::Bytes => "Vec<u8>",
         ColumnType::Json => "serde_json::Value",
+        ColumnType::Embedding => "Vec<f32>",
     }
 }
 
@@ -1180,6 +1182,7 @@ fn python_type(ty: ColumnType) -> &'static str {
         ColumnType::Text | ColumnType::Date | ColumnType::DateTime => "str",
         ColumnType::Bytes => "bytes",
         ColumnType::Json => "Any",
+        ColumnType::Embedding => "list[float]",
     }
 }
 

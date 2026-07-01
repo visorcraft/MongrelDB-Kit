@@ -23,6 +23,9 @@ pub enum ColumnType {
     Date,
     DateTime,
     TimestampNanos,
+    /// A dense float32 vector for nearest-neighbour (ANN) search. The dimension
+    /// is carried on the column as `embedding_dim`.
+    Embedding,
 }
 
 /// How a default value is produced when a row omits a column.
@@ -81,6 +84,9 @@ pub struct Column {
     /// An optional check expression name for runtime evaluation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_expr: Option<String>,
+    /// Vector dimension for an `Embedding` column (required for ANN).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_dim: Option<u32>,
 }
 
 impl Column {
@@ -102,6 +108,7 @@ impl Column {
             max_length: None,
             regex: None,
             check_expr: None,
+            embedding_dim: None,
         }
     }
 }
@@ -115,6 +122,8 @@ pub enum IndexKind {
     Bitmap,
     /// FM-index substring search (`contains(col, needle)` pushes to `FmContains`).
     Fm,
+    /// HNSW approximate-nearest-neighbour index for `Embedding` columns.
+    Ann,
 }
 
 /// An index on one or more columns.
