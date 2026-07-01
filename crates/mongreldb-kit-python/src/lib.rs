@@ -3,7 +3,7 @@
 //! Exposes a small Python API over `mongreldb-kit`: database open/create,
 //! transactions with CRUD, migrations, and stable error categories.
 
-use mongreldb_kit::{ApproxAggKind, Database, KitError, Transaction};
+use mongreldb_kit::{ApproxAggKind, Database, IncrementalAggKind, KitError, Transaction};
 use mongreldb_kit_core::keys::{
     encode_pk as core_encode_pk, encode_row_guard_key as core_encode_row_guard_key,
     encode_unique_key as core_encode_unique_key, KeyComponent,
@@ -347,6 +347,58 @@ impl PyDatabase {
                 dict.into_py_any(py)
             })
             .collect()
+    }
+
+    /// Flush all tables' in-memory writes to durable runs (also enables the
+    /// incremental-aggregate fast path).
+    fn flush(&self) -> PyResult<()> {
+        self.require_db()?.flush().map_err(map_err)
+    }
+
+    /// Incrementally-maintained aggregate (`count`/`sum`/`min`/`max`/`avg`) over
+    /// `table`, optionally filtered by the friendly `filter` object (which must
+    /// translate exactly to index conditions). Returns a JSON object
+    /// `{value, incremental, delta_rows}`; the value is always exact.
+    fn incremental_aggregate(
+        &self,
+        py: Python<'_>,
+        table: &str,
+        agg: &str,
+        column: Option<&str>,
+        filter: Option<Py<PyAny>>,
+    ) -> PyResult<String> {
+        let kind = match agg {
+            "count" => IncrementalAggKind::Count,
+            "sum" => IncrementalAggKind::Sum,
+            "min" => IncrementalAggKind::Min,
+            "max" => IncrementalAggKind::Max,
+            "avg" => IncrementalAggKind::Avg,
+            other => {
+                return Err(ValidationError::new_err(format!(
+                    "unknown aggregate '{other}'"
+                )))
+            }
+        };
+        let expr = match filter {
+            Some(obj) if !obj.is_none(py) => {
+                let value = py_to_value(obj.bind(py))?;
+                let map = value
+                    .as_object()
+                    .ok_or_else(|| ValidationError::new_err("filter must be an object"))?;
+                Some(parse_filter(map).map_err(map_err)?)
+            }
+            _ => None,
+        };
+        let res = self
+            .require_db()?
+            .incremental_aggregate(table, column, kind, expr.as_ref())
+            .map_err(map_err)?;
+        let json = serde_json::json!({
+            "value": res.value,
+            "incremental": res.incremental,
+            "delta_rows": res.delta_rows,
+        });
+        Ok(json.to_string())
     }
 
     /// Explain how `filter` (the friendly filter object) would push down against

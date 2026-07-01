@@ -392,6 +392,17 @@ export class KitDatabase {
 		return JSON.parse(this.db.doctor());
 	}
 
+	/**
+	 * Flush every table's in-memory writes to durable sorted runs. Besides
+	 * durability, this empties the memtable, which enables the engine's
+	 * incremental-aggregate fast path (see `incrementalAggregate`).
+	 */
+	flush(): void {
+		for (const name of this.db.tableNames()) {
+			this.db.table(name).flush();
+		}
+	}
+
 	/** The current visible commit epoch (monotonically increasing version). */
 	snapshotEpoch(): bigint {
 		return this.db.snapshotEpoch();

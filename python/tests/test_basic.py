@@ -485,6 +485,36 @@ def test_set_similarity():
     db.close()
 
 
+def test_incremental_aggregate():
+    schema = {
+        "tables": [
+            table(
+                name="m",
+                id=1,
+                columns=[int("id", 1, primary_key=True), float_("amount", 2)],
+                primary_key="id",
+            )
+        ]
+    }
+    db = Database.create(tmp_db(), schema)
+    with db.begin() as txn:
+        for i in range(1, 51):
+            txn.insert("m", {"id": i, "amount": float(i)})
+        txn.commit()
+    db.flush()
+    c = db.incremental_aggregate("m", "count")
+    assert c["value"] == 50
+    s = db.incremental_aggregate("m", "sum", "amount")
+    assert abs(s["value"] - sum(range(1, 51))) < 1e-9
+    # Exact filter: amount > 45 -> {46..50}.
+    f = db.incremental_aggregate("m", "count", filter={"amount": {"gt": 45.0}})
+    assert f["value"] == 5
+    # sum without a column errors.
+    with pytest.raises(Exception):
+        db.incremental_aggregate("m", "sum")
+    db.close()
+
+
 def test_explain_reports_pushdown():
     db = Database.create(tmp_db(), users_orders_schema())
     # id is the primary key → equality pushes down exactly.

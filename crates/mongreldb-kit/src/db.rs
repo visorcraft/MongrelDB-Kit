@@ -8,7 +8,7 @@ use mongreldb_core::memtable::Row as CoreRow;
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::Schema as CoreSchema;
 use mongreldb_core::Database as CoreDatabase;
-use mongreldb_core::{ApproxAgg, NativeAgg, NativeAggResult};
+use mongreldb_core::{AggState, ApproxAgg, NativeAgg, NativeAggResult};
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
 use serde_json::Value;
@@ -61,6 +61,73 @@ fn parse_string_set(value: Option<&Value>) -> std::collections::HashSet<String> 
             _ => None,
         })
         .collect()
+}
+
+/// Which aggregate to maintain incrementally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncrementalAggKind {
+    Count,
+    Sum,
+    Min,
+    Max,
+    Avg,
+}
+
+/// The result of [`Database::incremental_aggregate`].
+#[derive(Debug, Clone)]
+pub struct IncrementalAggregate {
+    /// The exact aggregate value at the current epoch: a JSON number, or `null`
+    /// when no rows matched (`COUNT` returns `0`, not null).
+    pub value: Value,
+    /// `true` when produced by merging only newly-committed rows (the fast
+    /// path); `false` when a full recompute was required (cold cache, a delete,
+    /// pending writes, or the same epoch as the cached state).
+    pub incremental: bool,
+    /// Rows processed in the delta pass (`0` for a full recompute).
+    pub delta_rows: u64,
+}
+
+/// Stable per-`(table, column, agg, filter)` cache key for the engine's
+/// incremental-aggregate cache. Deterministic within a process (fixed-seed
+/// hasher); the cache itself is per-`Db`, so cross-process stability is moot.
+fn incremental_cache_key(
+    table_id: u32,
+    column: Option<u16>,
+    agg: IncrementalAggKind,
+    conditions: &[mongreldb_core::query::Condition],
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    table_id.hash(&mut h);
+    column.hash(&mut h);
+    (agg as u8).hash(&mut h);
+    // `Condition` has no `Hash`; its `Debug` form is stable and unique enough.
+    format!("{conditions:?}").hash(&mut h);
+    h.finish()
+}
+
+/// Finalize a mergeable [`AggState`] to a JSON scalar, preserving integer-ness
+/// for `COUNT`/`MIN`/`MAX`/int `SUM` and using a float for averages / float
+/// columns. `null` when there were no matching inputs.
+fn agg_state_value(s: &AggState) -> Value {
+    let num_f64 = |x: f64| {
+        serde_json::Number::from_f64(x)
+            .map(Value::Number)
+            .unwrap_or(Value::Null)
+    };
+    match s {
+        AggState::Count(n) => Value::from(*n),
+        AggState::SumI { sum, .. } => i64::try_from(*sum)
+            .map(Value::from)
+            .unwrap_or_else(|_| num_f64(*sum as f64)),
+        AggState::SumF { sum, .. } => num_f64(*sum),
+        AggState::AvgI { sum, count } if *count > 0 => num_f64(*sum as f64 / *count as f64),
+        AggState::AvgF { sum, count } if *count > 0 => num_f64(*sum / *count as f64),
+        AggState::AvgI { .. } | AggState::AvgF { .. } => Value::Null,
+        AggState::MinI(n) | AggState::MaxI(n) => Value::from(*n),
+        AggState::MinF(f) | AggState::MaxF(f) => num_f64(*f),
+        AggState::Empty => Value::Null,
+    }
 }
 
 /// Which approximate aggregate to estimate from the reservoir sample.
@@ -637,6 +704,94 @@ impl Database {
         });
         scored.truncate(k);
         Ok(scored)
+    }
+
+    /// Flush every table's in-memory writes to durable sorted runs. Besides
+    /// durability, this empties the memtable, which is what enables the engine's
+    /// incremental-aggregate fast path (see [`Self::incremental_aggregate`]).
+    pub fn flush(&self) -> Result<()> {
+        for name in self.inner.table_names() {
+            let handle = self.inner.table(&name).map_err(KitError::from)?;
+            let mut guard = handle.lock();
+            guard.flush().map_err(KitError::from)?;
+        }
+        Ok(())
+    }
+
+    /// Maintain and read an aggregate over `table` that updates by merging only
+    /// newly-committed rows instead of rescanning. `column` is required for
+    /// `Sum`/`Min`/`Max`/`Avg` and ignored for `Count`. An optional `filter`
+    /// restricts the aggregate; it must translate **exactly** to index
+    /// conditions (no residual), otherwise this errors — an inexact filter would
+    /// silently aggregate the wrong rows.
+    ///
+    /// The engine keeps a per-`(table, column, agg, filter)` cached state and,
+    /// on a warm cache with an advanced epoch and no deletes/pending writes,
+    /// folds in just the delta. The returned `value` is always exact; the
+    /// `incremental` flag reports whether the fast path was taken.
+    pub fn incremental_aggregate(
+        &self,
+        table: &str,
+        column: Option<&str>,
+        agg: IncrementalAggKind,
+        filter: Option<&mongreldb_kit_core::query::Expr>,
+    ) -> Result<IncrementalAggregate> {
+        let t = self
+            .schema
+            .tables
+            .iter()
+            .find(|t| t.name == table)
+            .ok_or_else(|| KitError::Validation(format!("unknown table '{table}'")))?;
+        if !matches!(agg, IncrementalAggKind::Count) && column.is_none() {
+            return Err(KitError::Validation(
+                "sum/min/max/avg incremental aggregate requires a column".into(),
+            ));
+        }
+        let cid = match column {
+            Some(name) => Some(
+                t.columns
+                    .iter()
+                    .find(|c| c.name == name)
+                    .ok_or_else(|| KitError::Validation(format!("unknown column '{name}'")))?
+                    .id as u16,
+            ),
+            None => None,
+        };
+        let conditions = match filter {
+            Some(expr) => {
+                let plan = crate::pushdown::translate_predicate(t, expr).ok_or_else(|| {
+                    KitError::Validation(
+                        "filter is not index-translatable for an incremental aggregate".into(),
+                    )
+                })?;
+                if !plan.fully_translated {
+                    return Err(KitError::Validation(
+                        "filter has a residual that an incremental aggregate cannot apply exactly"
+                            .into(),
+                    ));
+                }
+                plan.conditions
+            }
+            None => Vec::new(),
+        };
+        let core_agg = match agg {
+            IncrementalAggKind::Count => NativeAgg::Count,
+            IncrementalAggKind::Sum => NativeAgg::Sum,
+            IncrementalAggKind::Min => NativeAgg::Min,
+            IncrementalAggKind::Max => NativeAgg::Max,
+            IncrementalAggKind::Avg => NativeAgg::Avg,
+        };
+        let cache_key = incremental_cache_key(t.id, cid, agg, &conditions);
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let mut guard = handle.lock();
+        let res = guard
+            .aggregate_incremental(cache_key, &conditions, cid, core_agg)
+            .map_err(KitError::from)?;
+        Ok(IncrementalAggregate {
+            value: agg_state_value(&res.state),
+            incremental: res.incremental,
+            delta_rows: res.delta_rows,
+        })
     }
 
     /// Return the migrations already recorded in `__kit_schema_migrations`.

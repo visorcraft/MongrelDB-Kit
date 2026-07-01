@@ -186,6 +186,27 @@ class Database:
         """
         return self._handle.set_similarity(table, column, list(query), k)
 
+    def flush(self) -> None:
+        """Flush all tables to durable runs (enables the incremental fast path)."""
+        self._handle.flush()
+
+    def incremental_aggregate(
+        self,
+        table: str,
+        agg: str,
+        column: str | None = None,
+        filter: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Incrementally-maintained ``count``/``sum``/``min``/``max``/``avg``.
+
+        Returns ``{value, incremental, delta_rows}``; ``value`` is always exact.
+        ``column`` is required for sum/min/max/avg. An optional ``filter`` must
+        translate exactly to index conditions.
+        """
+        return json.loads(
+            self._handle.incremental_aggregate(table, agg, column, filter)
+        )
+
     def explain(self, table: str, filter: dict[str, Any]) -> dict[str, Any]:
         """Explain how ``filter`` pushes down against ``table`` (diagnostic only).
 

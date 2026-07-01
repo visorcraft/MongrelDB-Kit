@@ -44,7 +44,31 @@ declare module './db.js' {
 			name: string,
 			builder: { _materialize(): { rows: Record<string, unknown>[]; columns: ColumnSpec[] } }
 		): CteScope;
+		/**
+		 * Incrementally-maintained aggregate (`count`/`sum`/`min`/`max`/`avg`)
+		 * over `table`, optionally filtered by an exact `where` predicate. The
+		 * `value` is always exact; `incremental` reports whether the engine folded
+		 * in only the delta of newly-committed rows. `column` is required for
+		 * sum/min/max/avg. A filter with a residual (e.g. `contains`/`like`) is
+		 * rejected — it would aggregate the wrong rows.
+		 */
+		incrementalAggregate(
+			table: string,
+			agg: 'count' | 'sum' | 'min' | 'max' | 'avg',
+			column?: string,
+			filter?: Predicate
+		): IncrementalAggregate;
 	}
+}
+
+/** The result of `KitDatabase.incrementalAggregate`. */
+export interface IncrementalAggregate {
+	/** Exact aggregate value: a JSON number, or `null` when no rows matched. */
+	value: number | null;
+	/** True when computed by merging only newly-committed rows (fast path). */
+	incremental: boolean;
+	/** Rows processed in the delta pass (0 for a full recompute). */
+	delta_rows: number;
 }
 
 type ApplicationTypeMap = {
@@ -1972,4 +1996,35 @@ export class DeleteBuilder<T extends TableSpec, TResult = bigint> {
 	builder: { _materialize(): { rows: Record<string, unknown>[]; columns: ColumnSpec[] } }
 ): CteScope {
 	return new CteScope(this).with(name, builder);
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(KitDatabase.prototype as any).incrementalAggregate = function (
+	this: KitDatabase,
+	table: string,
+	agg: 'count' | 'sum' | 'min' | 'max' | 'avg',
+	column?: string,
+	filter?: Predicate
+): IncrementalAggregate {
+	const spec = this.schema.table(table);
+	let columnId: number | undefined;
+	if (column !== undefined) {
+		const col = spec.columns.find((c) => c.name === column);
+		if (!col) throw new KitError(`unknown column '${column}' on table '${table}'`);
+		columnId = col.id;
+	} else if (agg !== 'count') {
+		throw new KitError(`incremental ${agg} requires a column`);
+	}
+	let conditions: ConditionSpec[] = [];
+	if (filter) {
+		const plan = compilePredicate(spec, filter);
+		if (plan.alwaysFalse || plan.residual || plan.conditions.length === 0) {
+			throw new KitError(
+				'filter has no exact pushdown; an incremental aggregate cannot apply it'
+			);
+		}
+		conditions = plan.conditions;
+	}
+	const raw = this.nativeDb.table(table).incrementalAggregate(agg, columnId, conditions);
+	return JSON.parse(raw) as IncrementalAggregate;
 };

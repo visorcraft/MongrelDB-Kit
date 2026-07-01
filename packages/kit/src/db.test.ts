@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KitDatabase } from './db.js';
 import { Schema, table, int, text, real, json } from './schema.js';
-import { eq } from './query.js';
+import { eq, gt, gte } from './query.js';
 
 function makeTempDir(): string {
 	return mkdtempSync(join(tmpdir(), 'kit-db-test-'));
@@ -171,6 +171,33 @@ describe('KitDatabase', () => {
 
 			expect(db.setSimilarity('t', 'tags', ['a', 'b', 'c'], 1)).toHaveLength(1);
 			expect(() => db.setSimilarity('t', 'missing', ['a'], 1)).toThrow();
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('incrementalAggregate returns exact count/sum/avg, with an optional filter', () => {
+		const t = table('t', {
+			columns: [int('id', { primaryKey: true }), real('amount')],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([t]));
+		try {
+			for (let i = 1n; i <= 50n; i++) {
+				db.insertInto(t).values({ id: i, amount: Number(i) }).executeSync();
+			}
+			db.flush();
+			expect(db.incrementalAggregate('t', 'count').value).toBe(50);
+			expect(db.incrementalAggregate('t', 'sum', 'amount').value).toBe(1275); // 1+..+50
+			expect(db.incrementalAggregate('t', 'avg', 'amount').value).toBe(25.5);
+			// Exact filter: amount >= 46 -> {46..50} (gte on a float has no residual).
+			expect(db.incrementalAggregate('t', 'count', undefined, gte(t.amount, 46)).value).toBe(5);
+			// An inexact filter (float `>` needs a residual) is rejected.
+			expect(() => db.incrementalAggregate('t', 'count', undefined, gt(t.amount, 45))).toThrow();
+			// sum without a column throws.
+			expect(() => db.incrementalAggregate('t', 'sum')).toThrow();
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });
