@@ -1,7 +1,7 @@
 use mongreldb_kit::{
     encode_pk, encode_row_guard_key, encode_unique_key, Aggregate, AggregateQuery, Database,
-    Direction, Expr, KeyComponent, KitError, Literal, Migration, OnConflict, OrderBy, Query, Row,
-    Schema, Select,
+    Direction, Expr, JoinQuery, KeyComponent, KitError, Literal, Migration, OnConflict, OrderBy,
+    Query, Row, Schema, Select,
 };
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -617,6 +617,104 @@ pub fn run_aggregates() -> Result<(), String> {
             .and_then(|e| e.get("rows"))
             .ok_or(format!("missing expected rows for {}", scenario.name))?;
         assert_eq_json(&scenario.name, &actual, exp)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Join conformance (inner / left / cross, unmatched LEFT side)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct JoinScenario {
+    name: String,
+    #[serde(default)]
+    order: Vec<String>,
+    query: JoinQuery,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct JoinFixture {
+    schema: Schema,
+    seed: Map<String, Value>,
+    scenarios: Vec<JoinScenario>,
+}
+
+/// Resolve a qualified `"table.column"` reference inside a join result row.
+/// Returns `None` when the source is the unmatched (JSON `null`) side of a LEFT
+/// join, which sorts before any present value.
+fn join_key<'a>(row: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    let (table, col) = key.split_once('.')?;
+    match row.get(table) {
+        Some(Value::Object(m)) => m.get(col),
+        _ => None,
+    }
+}
+
+fn cmp_join(
+    a: &Map<String, Value>,
+    b: &Map<String, Value>,
+    order: &[String],
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    for key in order {
+        let ord = cmp_json(join_key(a, key), join_key(b, key));
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    Ordering::Equal
+}
+
+fn sorted_join_rows(rows: &[Value], order: &[String]) -> Vec<Map<String, Value>> {
+    let mut out: Vec<Map<String, Value>> =
+        rows.iter().filter_map(|v| v.as_object().cloned()).collect();
+    out.sort_by(|a, b| cmp_join(a, b, order));
+    out
+}
+
+pub fn run_joins() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: JoinFixture = load_json(&fixtures.join("joins.json"))?;
+    let expected: Map<String, Value> = load_json(&fixtures.join("expected/joins.json"))?;
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+
+    for (table, rows) in &fixture.seed {
+        let rows = rows
+            .as_array()
+            .ok_or(format!("seed for {table} is not an array"))?;
+        for row in rows {
+            let row = row
+                .as_object()
+                .ok_or(format!("seed row for {table} is not an object"))?
+                .clone();
+            let mut txn = db.begin().map_err(|e| e.to_string())?;
+            txn.insert(table, row).map_err(|e| e.to_string())?;
+            txn.commit().map_err(|e| e.to_string())?;
+        }
+    }
+
+    for scenario in &fixture.scenarios {
+        let txn = db.begin().map_err(|e| e.to_string())?;
+        let mut rows = txn.join(&scenario.query).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+        rows.sort_by(|a, b| cmp_join(a, b, &scenario.order));
+        let actual = Value::Array(rows.into_iter().map(Value::Object).collect());
+
+        let exp_rows = expected
+            .get(&scenario.name)
+            .and_then(|e| e.get("rows"))
+            .and_then(|v| v.as_array())
+            .ok_or(format!("missing expected rows for {}", scenario.name))?;
+        let expected_val = Value::Array(
+            sorted_join_rows(exp_rows, &scenario.order)
+                .into_iter()
+                .map(Value::Object)
+                .collect(),
+        );
+        assert_eq_json(&scenario.name, &actual, &expected_val)?;
     }
     Ok(())
 }

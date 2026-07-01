@@ -1,0 +1,121 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "users",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "name",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      },
+      {
+        "id": 2,
+        "name": "orders",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "user_id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          },
+          {
+            "id": 3,
+            "name": "amount",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "seed": {
+    "users": [
+      { "id": 1, "name": "alice" },
+      { "id": 2, "name": "bob" }
+    ],
+    "orders": [
+      { "id": 10, "user_id": 1, "amount": 100 },
+      { "id": 11, "user_id": 1, "amount": 200 }
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "inner_users_orders",
+      "order": ["users.id", "orders.id"],
+      "query": {
+        "table": "users",
+        "joins": [
+          {
+            "kind": "inner",
+            "table": "orders",
+            "on": { "eq": [{ "column": "orders.user_id" }, { "column": "users.id" }] }
+          }
+        ]
+      }
+    },
+    {
+      "name": "left_users_orders",
+      "order": ["users.id", "orders.id"],
+      "query": {
+        "table": "users",
+        "joins": [
+          {
+            "kind": "left",
+            "table": "orders",
+            "on": { "eq": [{ "column": "orders.user_id" }, { "column": "users.id" }] }
+          }
+        ]
+      }
+    },
+    {
+      "name": "cross_users_orders",
+      "order": ["users.id", "orders.id"],
+      "query": {
+        "table": "users",
+        "joins": [{ "kind": "cross", "table": "orders" }]
+      }
+    }
+  ]
+}

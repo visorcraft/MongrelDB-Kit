@@ -463,6 +463,37 @@ function sortAggRows(rows: Record<string, unknown>[], order: string): void {
 	});
 }
 
+/** Resolve a qualified `table.column` reference inside a join result row; the
+ * unmatched (`null`) side of a LEFT join resolves to `null`. */
+function joinValueAt(row: Record<string, any>, qualified: string): unknown {
+	const [table, col] = qualified.split('.');
+	const source = row[table];
+	return source == null ? null : source[col];
+}
+
+/** Turn the fixture's declarative `{ eq: [{column}, {column}] }` predicate into
+ * the JS closure the TypeScript join builder expects. */
+function makeJoinOn(on: any): (row: Record<string, any>) => boolean {
+	const [left, right] = on.eq;
+	return (row) => valuesEqual(joinValueAt(row, left.column), joinValueAt(row, right.column));
+}
+
+/** Sort join result rows by qualified `table.column` keys for a deterministic
+ * comparison; `null` (unmatched LEFT) sorts first. */
+function sortJoinRows(rows: Record<string, any>[], order: string[]): void {
+	rows.sort((a, b) => {
+		for (const key of order) {
+			const av = joinValueAt(a, key);
+			const bv = joinValueAt(b, key);
+			if (av === bv) continue;
+			if (av === null || av === undefined) return -1;
+			if (bv === null || bv === undefined) return 1;
+			return av < bv ? -1 : 1;
+		}
+		return 0;
+	});
+}
+
 describe('mongreldb-kit conformance', () => {
 	it('encodes keys byte-identically to the shared vectors', () => {
 		const fixture = loadJson('keys.json');
@@ -587,6 +618,47 @@ describe('mongreldb-kit conformance', () => {
 					.map(normalizeAggRow);
 				if (scenario.order) sortAggRows(rows, scenario.order);
 				expect({ rows }, `aggregate ${scenario.name}`).toEqual(expected[scenario.name]);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs join scenarios against the TypeScript kit', () => {
+		const raw = loadJson('joins.json');
+		const expected = loadJson('expected/joins.json');
+		const schema = schemaFromFixture(raw.schema);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-join-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const [tableName, rows] of Object.entries(raw.seed)) {
+				const tspec = schema.table(tableName);
+				for (const row of rows as any[]) {
+					kit.insertInto(tspec).values(normalizeRowForTs(tspec, row)).executeSync();
+				}
+			}
+			for (const scenario of raw.scenarios) {
+				const query = scenario.query;
+				// The TS builder keys join rows by table name (no aliases) and takes a
+				// JS predicate, so translate the declarative fixture into builder calls.
+				let builder: any = kit.selectFrom(schema.table(query.table));
+				for (const clause of query.joins) {
+					const joined = schema.table(clause.table);
+					if (clause.kind === 'cross') {
+						builder = builder.crossJoin(joined);
+					} else if (clause.kind === 'left') {
+						builder = builder.leftJoin(joined, makeJoinOn(clause.on));
+					} else {
+						builder = builder.innerJoin(joined, makeJoinOn(clause.on));
+					}
+				}
+				const order: string[] = scenario.order ?? [];
+				const actual = (builder.executeSync() as any[]).map(normalizeValueForCompare);
+				sortJoinRows(actual, order);
+				const exp = (expected[scenario.name].rows as any[]).map(normalizeValueForCompare);
+				sortJoinRows(exp, order);
+				expect(actual, `join ${scenario.name}`).toEqual(exp);
 			}
 		} finally {
 			kit.close();

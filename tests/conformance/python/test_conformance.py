@@ -277,6 +277,46 @@ def test_aggregates():
         db.close()
 
 
+def _join_sort_key(row, order):
+    """Sort key for a join result row: resolve each qualified ``table.column``
+    reference, treating the unmatched (``None``) side of a LEFT join as sorting
+    first."""
+    key = []
+    for qualified in order:
+        table, col = qualified.split(".", 1)
+        source = row.get(table)
+        value = None if source is None else source.get(col)
+        key.append((value is None, value))
+    return tuple(key)
+
+
+def test_joins():
+    raw = load_json("joins.json")
+    expected = load_json("expected/joins.json")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = kit.Database.create(tmp, raw["schema"])
+        for table, rows in raw["seed"].items():
+            for row in rows:
+                txn = db.begin()
+                txn.insert(table, row)
+                txn.commit()
+
+        for scenario in raw["scenarios"]:
+            query = scenario["query"]
+            txn = db.begin()
+            rows = txn.join(query["table"], query["joins"])
+            txn.commit()
+            order = scenario.get("order", [])
+            rows = sorted(rows, key=lambda r: _join_sort_key(r, order))
+            exp = sorted(
+                expected[scenario["name"]]["rows"],
+                key=lambda r: _join_sort_key(r, order),
+            )
+            assert rows == exp, f"{scenario['name']}: {rows} != {exp}"
+        db.close()
+
+
 def run_phase1_dml_with_db(db):
     """Run the Phase 1 DML fixture against an already-open, migrated database."""
     fixture = load_json("phase1_dml.json")

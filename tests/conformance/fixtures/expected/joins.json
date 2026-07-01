@@ -1,0 +1,50 @@
+{
+  "inner_users_orders": {
+    "rows": [
+      {
+        "users": { "id": 1, "name": "alice" },
+        "orders": { "id": 10, "user_id": 1, "amount": 100 }
+      },
+      {
+        "users": { "id": 1, "name": "alice" },
+        "orders": { "id": 11, "user_id": 1, "amount": 200 }
+      }
+    ]
+  },
+  "left_users_orders": {
+    "rows": [
+      {
+        "users": { "id": 1, "name": "alice" },
+        "orders": { "id": 10, "user_id": 1, "amount": 100 }
+      },
+      {
+        "users": { "id": 1, "name": "alice" },
+        "orders": { "id": 11, "user_id": 1, "amount": 200 }
+      },
+      {
+        "users": { "id": 2, "name": "bob" },
+        "orders": null
+      }
+    ]
+  },
+  "cross_users_orders": {
+    "rows": [
+      {
+        "users": { "id": 1, "name": "alice" },
+        "orders": { "id": 10, "user_id": 1, "amount": 100 }
+      },
+      {
+        "users": { "id": 1, "name": "alice" },
+        "orders": { "id": 11, "user_id": 1, "amount": 200 }
+      },
+      {
+        "users": { "id": 2, "name": "bob" },
+        "orders": { "id": 10, "user_id": 1, "amount": 100 }
+      },
+      {
+        "users": { "id": 2, "name": "bob" },
+        "orders": { "id": 11, "user_id": 1, "amount": 200 }
+      }
+    ]
+  }
+}
