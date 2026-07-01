@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Database as NativeDatabase, Cell, RowJs } from 'mongreldb/native.js';
-import { ColumnType, IndexKindSpec, ConditionKind } from 'mongreldb/native.js';
+import type { Database as NativeDatabase, Cell, RowJs } from '@visorcraft/mongreldb/native.js';
+import { ColumnType, IndexKindSpec, ConditionKind } from '@visorcraft/mongreldb/native.js';
 import { tableFromIPC } from 'apache-arrow';
 import { KitDatabase } from './db.js';
 import { table, int, text, type Schema } from './schema.js';

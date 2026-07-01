@@ -1,4 +1,4 @@
-import type { Cell, RowJs } from 'mongreldb/native.js';
+import type { Cell, RowJs } from '@visorcraft/mongreldb/native.js';
 import type { TableSpec } from './types.js';
 
 export function cellValue(cell: Cell | undefined): unknown {

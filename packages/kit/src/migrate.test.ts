@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ColumnType, ConditionKind } from 'mongreldb/native.js';
+import { ColumnType, ConditionKind } from '@visorcraft/mongreldb/native.js';
 import { KitDatabase } from './db.js';
 import { Schema, table, int, text, real, json, index, unique, foreignKey } from './schema.js';
 import { sequenceDefault } from './defaults.js';

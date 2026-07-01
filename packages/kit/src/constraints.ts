@@ -1,5 +1,5 @@
-import { ConditionKind } from 'mongreldb/native.js';
-import type { Database as NativeDatabase, Transaction, Cell, RowJs } from 'mongreldb/native.js';
+import { ConditionKind } from '@visorcraft/mongreldb/native.js';
+import type { Database as NativeDatabase, Transaction, Cell, RowJs } from '@visorcraft/mongreldb/native.js';
 import type { Schema } from './schema.js';
 import type { TableSpec, ColumnSpec, ForeignKeySpec, PkValue } from './types.js';
 import { validateRow } from './validation.js';

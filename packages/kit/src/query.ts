@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { tableFromIPC, type Table as ArrowTable } from 'apache-arrow';
-import { ConditionKind } from 'mongreldb/native.js';
-import type { Database as NativeDatabase, ConditionSpec, Transaction } from 'mongreldb/native.js';
+import { ConditionKind } from '@visorcraft/mongreldb/native.js';
+import type { Database as NativeDatabase, ConditionSpec, Transaction } from '@visorcraft/mongreldb/native.js';
 import { KitDatabase, runSyncTxn } from './db.js';
 import type { TableSpec, ColumnSpec, PkValue } from './types.js';
 import type { Row, Insert, Update } from './types.js';

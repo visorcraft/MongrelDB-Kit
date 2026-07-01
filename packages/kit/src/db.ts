@@ -6,7 +6,7 @@ import type {
 	ColumnType as NativeColumnType,
 	IndexKindSpec as NativeIndexKindSpec,
 	ConditionKind as NativeConditionKind
-} from 'mongreldb/native.js';
+} from '@visorcraft/mongreldb/native.js';
 import { Schema } from './schema.js';
 import { rowsToTsv, tsvToRows } from './tsv.js';
 import { rowFromRowJs } from './rows.js';

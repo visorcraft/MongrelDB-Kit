@@ -1,4 +1,4 @@
-import { RemoteDatabase as NativeRemoteDatabase } from 'mongreldb/native.js';
+import { RemoteDatabase as NativeRemoteDatabase } from '@visorcraft/mongreldb/native.js';
 import { tableFromIPC, type Table as ArrowTable } from 'apache-arrow';
 
 /**
