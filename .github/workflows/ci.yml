@@ -69,9 +69,13 @@ jobs:
           ln -sfn "$GITHUB_WORKSPACE/mongreldb/crates/mongreldb-node" node_modules/mongreldb
           npm run check
 
-      - name: Python facade import
+      - name: Python facade syntax check
         working-directory: MongrelDB-Kit
-        run: python -c "import sys; sys.path.insert(0, 'python/mongreldb_kit'); import mongreldb_kit._schema"
+        # The facade's __init__ eagerly imports the native extension, which this
+        # fast job doesn't build, so byte-compile the pure-Python sources for a
+        # syntax check instead of importing them. The full import + tests run in
+        # the integration job.
+        run: python -m py_compile python/mongreldb_kit/mongreldb_kit/*.py
 
   # Full integration. Requires the MongrelDB engine repo checked out as a sibling
   # directory so the `../../../mongreldb/...` Cargo path deps and the
@@ -139,7 +143,11 @@ jobs:
           python -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip maturin pytest
-          maturin develop -m crates/mongreldb-kit-python/Cargo.toml
+          # Build from the facade's pyproject so the extension installs as the
+          # `mongreldb_kit.mongreldb_kit_py` submodule (module-name in
+          # pyproject.toml), not a top-level module the `-m Cargo.toml` form
+          # would produce — the facade does `from .mongreldb_kit_py import ...`.
+          (cd python/mongreldb_kit && maturin develop)
           PYTHONPATH=python/mongreldb_kit python -m pytest python/tests tests/conformance/python -q
 
       - name: Conformance (Rust)
