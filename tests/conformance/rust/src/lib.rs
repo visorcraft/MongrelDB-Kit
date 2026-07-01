@@ -970,6 +970,81 @@ pub fn run_subqueries() -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// FM substring conformance (contains() pushed to FmContains on an FM index)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct ContainsScenario {
+    name: String,
+    table: String,
+    column: String,
+    needle: String,
+    #[serde(default)]
+    order: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ContainsFixture {
+    schema: Schema,
+    rows: Vec<Map<String, Value>>,
+    scenarios: Vec<ContainsScenario>,
+}
+
+pub fn run_contains() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: ContainsFixture = load_json(&fixtures.join("contains.json"))?;
+    let expected: Map<String, Value> = load_json(&fixtures.join("expected/contains.json"))?;
+
+    let table = fixture
+        .schema
+        .tables
+        .first()
+        .ok_or("contains fixture has no table")?
+        .name
+        .clone();
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+    for row in &fixture.rows {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        txn.insert(&table, row.clone()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    for scenario in &fixture.scenarios {
+        let select = Select {
+            table: scenario.table.clone(),
+            columns: Vec::new(),
+            filter: Some(Expr::Contains(
+                Box::new(Expr::Column(scenario.column.clone())),
+                scenario.needle.clone(),
+            )),
+            order_by: Vec::new(),
+            limit: None,
+            offset: None,
+        };
+        let txn = db.begin().map_err(|e| e.to_string())?;
+        let mut rows: Vec<Map<String, Value>> = txn
+            .select(&Query::Select(select))
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|r| r.values)
+            .collect();
+        txn.commit().map_err(|e| e.to_string())?;
+        if let Some(order) = &scenario.order {
+            sort_flat_rows(&mut rows, order);
+        }
+        let actual = Value::Array(rows.into_iter().map(Value::Object).collect());
+        let exp = expected
+            .get(&scenario.name)
+            .and_then(|e| e.get("rows"))
+            .ok_or(format!("missing expected rows for {}", scenario.name))?;
+        assert_eq_json(&scenario.name, &actual, exp)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Phase 1 DML conformance
 // ---------------------------------------------------------------------------
 

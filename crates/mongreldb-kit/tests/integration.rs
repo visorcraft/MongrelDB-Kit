@@ -31,6 +31,7 @@ fn users_table() -> Table {
             name: "idx_email".into(),
             columns: vec!["email".into()],
             unique: true,
+            kind: Default::default(),
         }],
         foreign_keys: vec![],
         unique_constraints: vec![UniqueConstraint {
@@ -1442,6 +1443,7 @@ fn migrate_add_index_rebuilds_table_and_preserves_rows() {
             name: "idx_people_email".into(),
             columns: vec!["email".into()],
             unique: false,
+            kind: Default::default(),
         }))])
         .unwrap(),
     );
@@ -1471,6 +1473,7 @@ fn migrate_drop_index_rebuilds_table_and_preserves_rows() {
         name: "idx_people_email".into(),
         columns: vec!["email".into()],
         unique: false,
+        kind: Default::default(),
     }));
     let mut db = Database::create(&dir, Schema::new(vec![indexed]).unwrap()).unwrap();
 

@@ -1,0 +1,17 @@
+{
+  "contains_world": {
+    "rows": [
+      { "id": 1, "body": "hello world" },
+      { "id": 2, "body": "goodbye world" }
+    ]
+  },
+  "contains_hello": {
+    "rows": [
+      { "id": 1, "body": "hello world" },
+      { "id": 3, "body": "hello there" }
+    ]
+  },
+  "contains_none": {
+    "rows": []
+  }
+}

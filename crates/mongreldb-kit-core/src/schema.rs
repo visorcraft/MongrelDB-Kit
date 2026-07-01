@@ -106,12 +106,27 @@ impl Column {
     }
 }
 
+/// The kind of secondary index the Kit declares on a column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexKind {
+    /// Equality / `IN` acceleration (the default).
+    #[default]
+    Bitmap,
+    /// FM-index substring search (`contains(col, needle)` pushes to `FmContains`).
+    Fm,
+}
+
 /// An index on one or more columns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Index {
     pub name: String,
     pub columns: Vec<String>,
     pub unique: bool,
+    /// Index kind; defaults to `Bitmap` so pre-existing schemas deserialize
+    /// unchanged.
+    #[serde(default)]
+    pub kind: IndexKind,
 }
 
 /// A uniqueness constraint over one or more columns.
@@ -443,12 +458,14 @@ mod tests {
                     name: "idx_email".into(),
                     columns: vec!["email".into()],
                     unique: true,
+                    kind: Default::default(),
                 },
                 // A non-unique index must NOT synthesize a constraint.
                 Index {
                     name: "idx_handle".into(),
                     columns: vec!["handle".into()],
                     unique: false,
+                    kind: Default::default(),
                 },
             ],
             foreign_keys: vec![],
@@ -478,6 +495,7 @@ mod tests {
                 name: "idx_email".into(),
                 columns: vec!["email".into()],
                 unique: true,
+                kind: Default::default(),
             }],
             foreign_keys: vec![],
             unique_constraints: vec![UniqueConstraint {
@@ -510,6 +528,7 @@ mod tests {
                 name: "idx_email".into(),
                 columns: vec!["email".into()],
                 unique: true,
+                kind: Default::default(),
             }],
             foreign_keys: vec![],
             unique_constraints: vec![],

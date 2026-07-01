@@ -26,15 +26,16 @@
 //! | `In(Column, [literals])` | `BitmapIn` | bitmap-indexed column |
 //! | `Lt/Lte/Gt/Gte(Column, Literal)` int | `Range` | int-typed column |
 //! | `Lt/Lte/Gt/Gte(Column, Literal)` float | `RangeF64` | float-typed column |
+//! | `Contains(Column, needle)` | `FmContains` | FM-indexed column (residual re-check) |
 //! | `And([sub-exprs])` | recurse each | each part translated independently |
 //!
-//! Unsupported (`Or`, `Not`, `Ne`, `NotIn`, `IsNull`, `Like`, `Contains`,
-//! `InSubquery`, `Exists`, cross-column comparisons) are left as residual Rust
-//! evaluation — the caller falls back to a full scan for those branches.
+//! Unsupported (`Or`, `Not`, `Ne`, `NotIn`, `IsNull`, `Like`, `InSubquery`,
+//! `Exists`, cross-column comparisons) are left as residual Rust evaluation —
+//! the caller falls back to a full scan for those branches.
 
 use mongreldb_core::query::Condition;
 use mongreldb_kit_core::query::{Expr, Literal};
-use mongreldb_kit_core::schema::{ColumnType, Table as KitTable};
+use mongreldb_kit_core::schema::{ColumnType, IndexKind as KitIndexKind, Table as KitTable};
 use serde_json::{Map, Value};
 
 /// The result of translating a Kit predicate into core conditions.
@@ -88,8 +89,17 @@ fn collect_conditions(table: &KitTable, expr: &Expr, out: &mut Vec<Condition>) -
         Expr::Gt(a, b) => push_if_some(out, try_translate_cmp(table, a, b, CmpOp::Gt)),
         Expr::Gte(a, b) => push_if_some(out, try_translate_cmp(table, a, b, CmpOp::Gte)),
         Expr::In(a, list) => push_if_some(out, try_translate_in(table, a, list)),
-        // Unsupported: Or, Not, Ne, NotIn, IsNull, IsNotNull, Like, Contains,
-        // InSubquery, Exists, NotExists → leave as residual Rust evaluation.
+        Expr::Contains(a, needle) => {
+            // FM substring: push `FmContains` when the column has an FM index,
+            // but keep `Contains` as a residual (the engine returns a superset)
+            // by reporting the sub-expression as not fully translated.
+            if let Some(c) = try_translate_contains(table, a, needle) {
+                out.push(c);
+            }
+            false
+        }
+        // Unsupported: Or, Not, Ne, NotIn, IsNull, IsNotNull, Like, InSubquery,
+        // Exists, NotExists → leave as residual Rust evaluation.
         _ => false,
     }
 }
@@ -187,6 +197,31 @@ fn try_translate_cmp(table: &KitTable, a: &Expr, b: &Expr, op: CmpOp) -> Option<
     } else {
         None
     }
+}
+
+/// Whether `col_name` has a declared FM (substring) index.
+fn has_fm_index(table: &KitTable, col_name: &str) -> bool {
+    table
+        .indexes
+        .iter()
+        .any(|idx| idx.kind == KitIndexKind::Fm && idx.columns.iter().any(|c| c == col_name))
+}
+
+/// Translate `Contains(Column, needle)` into `FmContains` when the column has an
+/// FM index. The engine returns rows whose column contains `needle` as a
+/// substring — a superset the Kit re-checks in Rust.
+fn try_translate_contains(table: &KitTable, a: &Expr, needle: &str) -> Option<Condition> {
+    let Expr::Column(col_name) = a else {
+        return None;
+    };
+    let col = table.column(col_name)?;
+    if !has_fm_index(table, col_name) {
+        return None;
+    }
+    Some(Condition::FmContains {
+        column_id: col.id as u16,
+        pattern: needle.as_bytes().to_vec(),
+    })
 }
 
 /// Translate `In(Column, [literals])` into `BitmapIn`.
@@ -391,6 +426,7 @@ mod tests {
                 name: "idx_email".into(),
                 columns: vec!["email".into()],
                 unique: false,
+                kind: Default::default(),
             }],
             foreign_keys: vec![],
             unique_constraints: vec![],

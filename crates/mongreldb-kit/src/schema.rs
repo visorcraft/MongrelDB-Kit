@@ -5,7 +5,9 @@ use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::{
     ColumnDef, ColumnFlags, IndexDef, IndexKind, Schema as CoreSchema, TypeId,
 };
-use mongreldb_kit_core::schema::{Column, ColumnType, Table as KitTable};
+use mongreldb_kit_core::schema::{
+    Column, ColumnType, IndexKind as KitIndexKind, Table as KitTable,
+};
 use serde_json::{Map, Value};
 
 /// Convert a kit table to a core schema.
@@ -23,12 +25,16 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
 
     let mut indexes: Vec<IndexDef> = Vec::new();
     for idx in &table.indexes {
+        let kind = match idx.kind {
+            KitIndexKind::Bitmap => IndexKind::Bitmap,
+            KitIndexKind::Fm => IndexKind::FmIndex,
+        };
         for col_name in &idx.columns {
             if let Some(col) = table.column(col_name) {
                 indexes.push(IndexDef {
                     name: format!("{}_{}", idx.name, col_name),
                     column_id: col.id as u16,
-                    kind: IndexKind::Bitmap,
+                    kind,
                 });
             }
         }

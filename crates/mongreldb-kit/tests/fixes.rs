@@ -261,6 +261,7 @@ fn unique_index_enforces_uniqueness() {
             name: "idx_email".into(),
             columns: vec!["email".into()],
             unique: true,
+            kind: Default::default(),
         }],
         foreign_keys: vec![],
         // No explicit unique constraint: the unique INDEX alone must enforce it.
@@ -299,6 +300,7 @@ fn non_unique_index_does_not_enforce_uniqueness() {
             name: "idx_email".into(),
             columns: vec!["email".into()],
             unique: false,
+            kind: Default::default(),
         }],
         foreign_keys: vec![],
         unique_constraints: vec![],

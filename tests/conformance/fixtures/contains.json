@@ -1,0 +1,48 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "docs",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "body",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [
+          { "name": "idx_docs_body_fm", "columns": ["body"], "unique": false, "kind": "fm" }
+        ],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "body": "hello world" },
+    { "id": 2, "body": "goodbye world" },
+    { "id": 3, "body": "hello there" },
+    { "id": 4, "body": "nothing here" }
+  ],
+  "scenarios": [
+    { "name": "contains_world", "table": "docs", "column": "body", "needle": "world", "order": "+id" },
+    { "name": "contains_hello", "table": "docs", "column": "body", "needle": "hello", "order": "+id" },
+    { "name": "contains_none", "table": "docs", "column": "body", "needle": "xyz", "order": "+id" }
+  ]
+}
