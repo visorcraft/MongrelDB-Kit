@@ -42,6 +42,9 @@ export interface IndexSpec {
 	name: string;
 	columns: string[];
 	unique: boolean;
+	/** Index kind; defaults to `bitmap`. `fm` enables FM substring search so
+	 * `contains(col, needle)` pushes down to the engine instead of scanning. */
+	kind?: 'bitmap' | 'fm';
 }
 
 export interface ForeignKeySpec {

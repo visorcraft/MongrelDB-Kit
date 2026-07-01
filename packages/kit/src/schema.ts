@@ -119,6 +119,8 @@ export function blob<const TName extends string, const TOpts extends ColumnOptio
 export interface IndexOptions {
 	name?: string;
 	unique?: boolean;
+	/** Create an FM substring index so `contains()` pushes down to the engine. */
+	fm?: boolean;
 }
 
 export interface UniqueOptions {
@@ -139,7 +141,8 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 	return {
 		name: opts.name ?? `idx_${columns.join('_')}`,
 		columns,
-		unique: opts.unique ?? false
+		unique: opts.unique ?? false,
+		kind: opts.fm ? 'fm' : 'bitmap'
 	};
 }
 

@@ -28,6 +28,7 @@ import {
 	exists,
 	notExists,
 	joinEq,
+	contains,
 	asc,
 	desc,
 	KitError,
@@ -84,7 +85,9 @@ function columnFromJson(col: any): ColumnSpec {
 function schemaFromFixture(raw: any): Schema {
 	const tables = raw.tables.map((t: any) => {
 		const cols = t.columns.map(columnFromJson);
-		const idxs = (t.indexes ?? []).map((i: any) => index(i.columns, { name: i.name, unique: i.unique }));
+		const idxs = (t.indexes ?? []).map((i: any) =>
+			index(i.columns, { name: i.name, unique: i.unique, fm: i.kind === 'fm' })
+		);
 		const uqs = (t.unique_constraints ?? []).map((u: any) => unique(u.columns, { name: u.name }));
 		const fks = (t.foreign_keys ?? []).map((fk: any) => {
 			const onDelete = fk.on_delete === 'set_null' ? 'set null' : fk.on_delete;
@@ -742,6 +745,38 @@ describe('mongreldb-kit conformance', () => {
 					sortAggRows(exp, scenario.order);
 				}
 				expect(rows, `cte ${scenario.name}`).toEqual(exp);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs FM contains scenarios against the TypeScript kit', () => {
+		const raw = loadJson('contains.json');
+		const expected = loadJson('expected/contains.json');
+		const schema = schemaFromFixture(raw.schema);
+		const baseTable = schema.table(raw.schema.tables[0].name);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-fm-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const row of raw.rows) {
+				kit.insertInto(baseTable).values(normalizeRowForTs(baseTable, row)).executeSync();
+			}
+			for (const scenario of raw.scenarios) {
+				const tspec = schema.table(scenario.table);
+				const col = tspec.columns.find((c) => c.name === scenario.column)!;
+				const rows = (
+					kit.selectFrom(tspec).where(contains(col, scenario.needle)).executeSync() as any[]
+				).map((r) => normalizeRowForCompare(tspec, r));
+				const exp = (expected[scenario.name].rows as any[]).map((r) =>
+					normalizeRowForCompare(tspec, r)
+				);
+				if (scenario.order) {
+					sortAggRows(rows, scenario.order);
+					sortAggRows(exp, scenario.order);
+				}
+				expect(rows, `contains ${scenario.name}`).toEqual(exp);
 			}
 		} finally {
 			kit.close();

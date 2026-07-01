@@ -86,7 +86,7 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			return {
 				name: `${idx.name}_${colName}`,
 				columnId: col.id,
-				kind: addon.IndexKindSpec.Bitmap
+				kind: idx.kind === 'fm' ? addon.IndexKindSpec.FmIndex : addon.IndexKindSpec.Bitmap
 			};
 		})
 	);

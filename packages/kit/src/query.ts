@@ -378,6 +378,21 @@ function makeInCondition(
 	};
 }
 
+/** Build an `FmContains` condition when `column` has an FM index; else `null`
+ * (the caller falls back to an in-memory substring check). The engine returns a
+ * superset, so the caller keeps the predicate as a residual. */
+function makeContainsCondition(
+	table: TableSpec,
+	column: ColumnSpec,
+	substr: string
+): ConditionSpec | null {
+	const hasFm = table.indexes.some(
+		(idx) => idx.kind === 'fm' && idx.columns.includes(column.name)
+	);
+	if (!hasFm || column.storageType !== 'text') return null;
+	return { kind: ConditionKind.FmContains, columnId: column.id, text: substr };
+}
+
 type RangeConditionPlan =
 	| { condition: ConditionSpec; residual?: Predicate }
 	| { alwaysFalse: true };
@@ -611,6 +626,12 @@ function compilePredicate(table: TableSpec, predicate: Predicate): PredicatePlan
 		case 'or': {
 			const inPlan = compileOrAsIn(table, predicate.predicates);
 			return inPlan ?? residualPlan(predicate);
+		}
+		case 'contains': {
+			// Push FmContains on an FM-indexed column; keep the substring check as
+			// a residual since the engine returns a superset.
+			const condition = makeContainsCondition(table, predicate.column, predicate.substr);
+			return condition ? { conditions: [condition], residual: predicate } : residualPlan(predicate);
 		}
 		default:
 			return residualPlan(predicate);
