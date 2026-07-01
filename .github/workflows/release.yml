@@ -32,9 +32,11 @@ jobs:
           registry-url: https://registry.npmjs.org
           scope: '@visorcraft'
 
-      # npm 7+ auto-installs the @visorcraft/mongreldb peer from npm, which
-      # provides the types tsc needs and the native addon the tests load.
-      - run: npm install
+      # The committed lockfile points @visorcraft/mongreldb at the sibling
+      # engine checkout used by local/CI integration jobs. Release only checks
+      # out this repo, so install from package.json and let npm fetch the
+      # already-published peer from the registry for typecheck/tests.
+      - run: npm install --package-lock=false
 
       - run: npm run build
 
