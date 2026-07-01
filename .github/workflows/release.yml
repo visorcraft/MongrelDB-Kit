@@ -35,12 +35,14 @@ jobs:
       # The committed lockfile points @visorcraft/mongreldb at the sibling
       # engine checkout used by local/CI integration jobs. Release only checks
       # out this repo, so install from package.json and let npm fetch the
-      # already-published peer from the registry for typecheck/tests.
+      # already-published peer from the registry for typecheck/build.
       - run: npm install --package-lock=false
 
       - run: npm run build
 
-      - run: npm test
+      # Runtime tests load the engine's native addon. The full CI integration
+      # job builds that addon on the runner and tests against it; release only
+      # needs the published peer for type declarations before publishing Kit.
 
       - run: npm publish --provenance --access public
         env:
