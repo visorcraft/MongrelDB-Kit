@@ -262,6 +262,7 @@ def test_aggregates():
                 scenario["aggregates"],
                 group_by=scenario.get("group_by"),
             )
+            txn.commit()
             order = scenario.get("order")
             if order:
                 desc = order.startswith("-")

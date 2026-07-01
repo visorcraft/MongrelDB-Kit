@@ -579,7 +579,7 @@ pub fn run_aggregates() -> Result<(), String> {
         .clone();
 
     let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let mut db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
 
     for row in &fixture.rows {
         let mut txn = db.begin().map_err(|e| e.to_string())?;
