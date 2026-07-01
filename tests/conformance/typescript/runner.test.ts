@@ -93,7 +93,8 @@ function schemaFromFixture(raw: any): Schema {
 				name: i.name,
 				unique: i.unique,
 				fm: i.kind === 'fm',
-				ann: i.kind === 'ann'
+				ann: i.kind === 'ann',
+				sparse: i.kind === 'sparse'
 			})
 		);
 		const uqs = (t.unique_constraints ?? []).map((u: any) => unique(u.columns, { name: u.name }));
@@ -852,6 +853,33 @@ describe('mongreldb-kit conformance', () => {
 					sortAggRows(exp, scenario.order);
 				}
 				expect(rows, `like ${scenario.name}`).toEqual(exp);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs sparse scenarios against the TypeScript kit', () => {
+		const raw = loadJson('sparse.json');
+		const schema = schemaFromFixture(raw.schema);
+		const baseTable = schema.table(raw.schema.tables[0].name);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-sparse-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const row of raw.rows) {
+				kit.insertInto(baseTable).values(normalizeRowForTs(baseTable, row)).executeSync();
+			}
+			for (const scenario of raw.scenarios) {
+				const tspec = schema.table(scenario.table);
+				const col = tspec.columns.find((c) => c.name === scenario.column)!;
+				const rows = kit
+					.selectFrom(tspec)
+					.sparseMatch(col, scenario.query, scenario.k)
+					.executeSync() as any[];
+				const ids = rows.map((r) => Number(r.id)).sort((a, b) => a - b);
+				const want = [...(scenario.expect_ids as number[])].sort((a, b) => a - b);
+				expect(ids, `sparse ${scenario.name}`).toEqual(want);
 			}
 		} finally {
 			kit.close();

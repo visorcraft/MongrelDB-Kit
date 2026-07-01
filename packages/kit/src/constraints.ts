@@ -69,6 +69,14 @@ export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] 
 				return { columnId: col.id, bytes: Buffer.from(value as Uint8Array) };
 			case 'embedding':
 				return { columnId: col.id, embedding: (value as number[]).map(Number) };
+			case 'sparse': {
+				const terms = value as [number, number][];
+				return {
+					columnId: col.id,
+					sparseTokens: terms.map((p) => p[0]),
+					sparseWeights: terms.map((p) => p[1])
+				};
+			}
 			default: {
 				const _exhaustive: never = col.storageType;
 				throw new Error(`Unsupported storage type for cell conversion: ${_exhaustive}`);

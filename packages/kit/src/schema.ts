@@ -127,6 +127,14 @@ export function embedding<const TName extends string, const TOpts extends Column
 	return col;
 }
 
+/** A learned-sparse (SPLADE) token-vector column for `sparseMatch`. */
+export function sparse<const TName extends string, const TOpts extends ColumnOptions = {}>(
+	name: TName,
+	opts?: TOpts
+): ColumnSpec<TName, 'sparse', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
+	return column(name, 'sparse', opts);
+}
+
 export interface IndexOptions {
 	name?: string;
 	unique?: boolean;
@@ -134,6 +142,8 @@ export interface IndexOptions {
 	fm?: boolean;
 	/** Create an ANN (HNSW) index on an embedding column for `annSearch()`. */
 	ann?: boolean;
+	/** Create a sparse (SPLADE) index on a sparse column for `sparseMatch()`. */
+	sparse?: boolean;
 }
 
 export interface UniqueOptions {
@@ -155,7 +165,7 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 		name: opts.name ?? `idx_${columns.join('_')}`,
 		columns,
 		unique: opts.unique ?? false,
-		kind: opts.fm ? 'fm' : opts.ann ? 'ann' : 'bitmap'
+		kind: opts.fm ? 'fm' : opts.ann ? 'ann' : opts.sparse ? 'sparse' : 'bitmap'
 	};
 }
 

@@ -9,7 +9,8 @@ export type ColumnStorageType =
 	| 'text'
 	| 'bytes'
 	| 'json'
-	| 'embedding';
+	| 'embedding'
+	| 'sparse';
 
 export type PkValue = string | bigint | (string | bigint | null)[];
 
@@ -47,7 +48,7 @@ export interface IndexSpec {
 	unique: boolean;
 	/** Index kind; defaults to `bitmap`. `fm` enables FM substring search so
 	 * `contains(col, needle)` pushes down to the engine instead of scanning. */
-	kind?: 'bitmap' | 'fm' | 'ann';
+	kind?: 'bitmap' | 'fm' | 'ann' | 'sparse';
 }
 
 export interface ForeignKeySpec {
@@ -95,6 +96,7 @@ type ApplicationTypeMap = {
 	bytes: unknown;
 	json: unknown;
 	embedding: number[];
+	sparse: [number, number][];
 };
 
 type ApplicationType<T extends ColumnApplicationType> = ApplicationTypeMap[T];

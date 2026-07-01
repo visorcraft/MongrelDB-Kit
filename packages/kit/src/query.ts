@@ -1082,6 +1082,7 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> implements S
 	private _distinct = false;
 	private _aggregate?: { kind: ScalarAggKind; column: ColumnSpec };
 	private _ann?: { column: ColumnSpec; vector: number[]; k: number };
+	private _sparse?: { column: ColumnSpec; query: [number, number][]; k: number };
 	/** Internal: in-memory rows backing a CTE source instead of a native table. */
 	_source?: MatchedRow[];
 
@@ -1243,6 +1244,21 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> implements S
 		return next;
 	}
 
+	/**
+	 * Learned-sparse (SPLADE) retrieval: return the `k` rows whose `column` (a
+	 * sparse token vector) best matches the weighted `query` `[token, weight]`
+	 * pairs. Terminal — call `executeSync()`/`execute()` next.
+	 */
+	sparseMatch(
+		column: ColumnSpec,
+		query: [number, number][],
+		k: number
+	): SelectBuilder<T, Row<T>[]> {
+		const next = this as unknown as SelectBuilder<T, Row<T>[]>;
+		next._sparse = { column, query, k };
+		return next;
+	}
+
 	executeSync(): TResult {
 		const db = this.kit.nativeDb;
 
@@ -1252,6 +1268,17 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> implements S
 				columnId: this._ann.column.id,
 				embedding: this._ann.vector,
 				k: this._ann.k
+			};
+			return queryNativeRows(db, this.table, [cond]).map((m) => m.row) as TResult;
+		}
+
+		if (this._sparse) {
+			const cond: ConditionSpec = {
+				kind: ConditionKind.SparseMatch,
+				columnId: this._sparse.column.id,
+				sparseTokens: this._sparse.query.map((p) => p[0]),
+				sparseWeights: this._sparse.query.map((p) => p[1]),
+				k: this._sparse.k
 			};
 			return queryNativeRows(db, this.table, [cond]).map((m) => m.row) as TResult;
 		}

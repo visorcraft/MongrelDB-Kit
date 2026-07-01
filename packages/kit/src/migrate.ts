@@ -162,6 +162,8 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 			return ColumnType.Bytes;
 		case 'embedding':
 			return ColumnType.Embedding;
+		case 'sparse':
+			return ColumnType.Bytes;
 	}
 }
 

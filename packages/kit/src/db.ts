@@ -75,6 +75,10 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 			return addon.ColumnType.Bytes;
 		case 'embedding':
 			return addon.ColumnType.Embedding;
+		case 'sparse':
+			// A sparse column is stored as bincoded bytes; the sparse index reads
+			// the tokens from those bytes.
+			return addon.ColumnType.Bytes;
 	}
 }
 
@@ -93,7 +97,9 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 						? addon.IndexKindSpec.FmIndex
 						: idx.kind === 'ann'
 							? addon.IndexKindSpec.Ann
-							: addon.IndexKindSpec.Bitmap
+							: idx.kind === 'sparse'
+								? addon.IndexKindSpec.Sparse
+								: addon.IndexKindSpec.Bitmap
 			};
 		})
 	);
