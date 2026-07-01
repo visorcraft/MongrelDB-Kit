@@ -1,0 +1,536 @@
+//! Typed remote client for a running `mongreldb-server` daemon (PLAN.md #3).
+//!
+//! [`RemoteDatabase`] speaks the daemon's typed `/kit/txn` + `/kit/schema`
+//! endpoints (plus `/sql` for reads), giving Rust callers a schema-aware CRUD
+//! surface over HTTP. **Authority is server-side**: writes run inside one core
+//! transaction on the daemon, which enforces the engine's declarative
+//! constraints (unique / FK-restrict / check) atomically. Client-side field
+//! validation (enum / min / max / regex / defaults) is NOT applied here — the
+//! daemon does not store the Kit's rich column metadata, so those are the
+//! caller's responsibility in remote mode.
+//!
+//! This is the MVP surface: typed insert / insert_returning / upsert /
+//! delete_by_pk committed as an atomic batch, plus schema introspection and
+//! SQL reads. Mirroring the *full* embedded `Database`/`Transaction` (defaults,
+//! Kit constraints, sequences, the query builder) is the "full version" item.
+//!
+//! Enable with the `remote` cargo feature.
+
+#![cfg(feature = "remote")]
+
+use std::collections::HashMap;
+
+use arrow::array::{
+    Array, BooleanArray, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
+};
+use arrow::record_batch::RecordBatch;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+
+use crate::error::{KitError, Result};
+
+const EC_UNIQUE: &str = "UNIQUE_VIOLATION";
+const EC_FK: &str = "FK_VIOLATION";
+const EC_CHECK: &str = "CHECK_VIOLATION";
+const EC_CONFLICT: &str = "CONFLICT";
+const EC_BAD: &str = "BAD_REQUEST";
+
+/// A typed remote client bound to a `mongreldb-server` URL.
+pub struct RemoteDatabase {
+    base_url: String,
+    client: reqwest::blocking::Client,
+    schemas: HashMap<String, RemoteTable>,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteTable {
+    id_to_name: HashMap<u16, String>,
+    name_to_id: HashMap<String, u16>,
+    primary_key: Option<u16>,
+}
+
+/// The server-side schema descriptor subset we rely on.
+#[derive(Debug, Deserialize)]
+struct SchemaInfo {
+    columns: Vec<ColumnMeta>,
+}
+#[derive(Debug, Deserialize)]
+struct ColumnMeta {
+    id: u16,
+    name: String,
+    primary_key: bool,
+    #[allow(dead_code)]
+    #[serde(default)]
+    nullable: bool,
+    #[allow(dead_code)]
+    #[serde(default)]
+    auto_increment: bool,
+}
+#[derive(Debug, Deserialize)]
+struct AllSchemas {
+    tables: Map<String, serde_json::Value>,
+}
+
+impl RemoteDatabase {
+    /// Connect to a daemon and load every table's schema metadata.
+    pub fn connect(url: &str) -> Result<Self> {
+        let mut db = Self {
+            base_url: url.trim_end_matches('/').to_string(),
+            client: reqwest::blocking::Client::new(),
+            schemas: HashMap::new(),
+        };
+        db.refresh()?;
+        Ok(db)
+    }
+
+    /// Re-fetch schema metadata (call after DDL on the server).
+    pub fn refresh(&mut self) -> Result<()> {
+        let resp = self
+            .client
+            .get(format!("{}/kit/schema", self.base_url))
+            .send()
+            .map_err(ioe)?;
+        let all: AllSchemas = decode(resp)?;
+        self.schemas.clear();
+        for (name, body) in &all.tables {
+            let info: SchemaInfo = serde_json::from_value(body.clone())
+                .map_err(|e| KitError::Storage(e.to_string()))?;
+            let mut id_to_name = HashMap::new();
+            let mut name_to_id = HashMap::new();
+            let mut primary_key = None;
+            for c in &info.columns {
+                id_to_name.insert(c.id, c.name.clone());
+                name_to_id.insert(c.name.clone(), c.id);
+                if c.primary_key {
+                    primary_key = Some(c.id);
+                }
+            }
+            self.schemas.insert(
+                name.clone(),
+                RemoteTable {
+                    id_to_name,
+                    name_to_id,
+                    primary_key,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    pub fn table_names(&self) -> Vec<String> {
+        self.schemas.keys().cloned().collect()
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base_url)
+    }
+
+    fn require_table(&self, table: &str) -> Result<&RemoteTable> {
+        self.schemas
+            .get(table)
+            .ok_or_else(|| KitError::Integrity(format!("unknown table {table:?}")))
+    }
+
+    /// Translate a column-name → JSON-value map into the flat
+    /// `[col_id, val, col_id, val, …]` cell array the daemon expects.
+    fn cells(&self, table: &str, row: &Map<String, Value>) -> Result<Vec<Value>> {
+        let t = self.require_table(table)?;
+        let mut out = Vec::with_capacity(row.len() * 2);
+        for (name, val) in row {
+            let id = *t.name_to_id.get(name).ok_or_else(|| {
+                KitError::Validation(format!("unknown column {name:?} in table {table:?}"))
+            })?;
+            out.push(json!(id));
+            out.push(val.clone());
+        }
+        Ok(out)
+    }
+
+    /// Begin a typed atomic batch.
+    pub fn begin(&self) -> RemoteTransaction<'_> {
+        RemoteTransaction {
+            db: self,
+            ops: Vec::new(),
+            idempotency_key: None,
+        }
+    }
+
+    /// Run a SQL read and decode the Arrow response into JSON row maps keyed by
+    /// column name. Covers the common fixed-width types + UTF-8 + null.
+    pub fn sql_rows(&self, sql: &str) -> Result<Vec<Map<String, Value>>> {
+        let resp = self
+            .client
+            .post(self.url("/sql"))
+            .json(&serde_json::json!({ "sql": sql }))
+            .send()
+            .map_err(ioe)?;
+        if !resp.status().is_success() {
+            return Err(KitError::Storage(format!(
+                "sql http {}: {}",
+                resp.status(),
+                resp.text().unwrap_or_default()
+            )));
+        }
+        let bytes = resp.bytes().map_err(ioe)?;
+        let batches = read_arrow_ipc(&bytes)?;
+        let mut rows = Vec::new();
+        for b in &batches {
+            for row in batch_to_rows(b)? {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+}
+
+/// An in-flight typed batch against the daemon. Buffered ops commit atomically
+/// on [`RemoteTransaction::commit`].
+pub struct RemoteTransaction<'a> {
+    db: &'a RemoteDatabase,
+    ops: Vec<TxnOp>,
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+enum TxnOp {
+    Put {
+        table: String,
+        cells: Vec<Value>,
+        returning: bool,
+    },
+    Upsert {
+        table: String,
+        cells: Vec<Value>,
+        update_cells: Option<Vec<Value>>,
+        returning: bool,
+    },
+    DeleteByPk {
+        table: String,
+        pk: Value,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct TxnRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    idempotency_key: Option<String>,
+    ops: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TxnResponse {
+    #[allow(dead_code)]
+    status: String,
+    #[allow(dead_code)]
+    epoch: u64,
+    results: Vec<OpResult>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+enum OpResult {
+    Put {
+        #[allow(dead_code)]
+        row_id: Option<String>,
+        auto_inc: Option<i64>,
+        #[serde(default)]
+        row: Option<Vec<Value>>,
+    },
+    Upsert {
+        action: String,
+        #[allow(dead_code)]
+        auto_inc: Option<i64>,
+        #[serde(default)]
+        row: Option<Vec<Value>>,
+    },
+    Deleted,
+    NotFound,
+}
+
+/// The decoded outcome of a committed batch — the committed epoch plus the
+/// per-op typed results (post-image rows where `returning` was set).
+#[derive(Debug, Clone)]
+pub struct RemoteBatch {
+    pub epoch: u64,
+    pub results: Vec<RemoteOpResult>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RemoteOpResult {
+    /// A put result. `row` is the post-image when `returning` was requested.
+    Put {
+        auto_inc: Option<i64>,
+        row: Option<Map<String, Value>>,
+    },
+    /// An upsert result with the resolved action (`inserted` / `updated` / `unchanged`).
+    Upsert {
+        action: String,
+        row: Option<Map<String, Value>>,
+    },
+    Deleted,
+    NotFound,
+}
+
+impl<'a> RemoteTransaction<'a> {
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
+        self
+    }
+
+    /// Stage an insert (a `put`).
+    pub fn insert(&mut self, table: &str, row: Map<String, Value>) -> Result<&mut Self> {
+        let cells = self.db.cells(table, &row)?;
+        self.ops.push(TxnOp::Put {
+            table: table.to_string(),
+            cells,
+            returning: false,
+        });
+        Ok(self)
+    }
+
+    /// Stage an insert that returns the committed post-image row.
+    pub fn insert_returning(&mut self, table: &str, row: Map<String, Value>) -> Result<&mut Self> {
+        let cells = self.db.cells(table, &row)?;
+        self.ops.push(TxnOp::Put {
+            table: table.to_string(),
+            cells,
+            returning: true,
+        });
+        Ok(self)
+    }
+
+    /// Stage an upsert (DO NOTHING unless `update` cells are supplied).
+    pub fn upsert(
+        &mut self,
+        table: &str,
+        row: Map<String, Value>,
+        update: Option<Map<String, Value>>,
+    ) -> Result<&mut Self> {
+        let cells = self.db.cells(table, &row)?;
+        let update_cells = match update {
+            Some(u) => Some(self.db.cells(table, &u)?),
+            None => None,
+        };
+        self.ops.push(TxnOp::Upsert {
+            table: table.to_string(),
+            cells,
+            update_cells,
+            returning: true,
+        });
+        Ok(self)
+    }
+
+    /// Stage a delete of the row with the given primary-key scalar value.
+    pub fn delete_by_pk(&mut self, table: &str, pk: Value) -> Result<&mut Self> {
+        let t = self.db.require_table(table)?;
+        if t.primary_key.is_none() {
+            return Err(KitError::Validation(format!(
+                "table {table:?} has no primary key"
+            )));
+        }
+        self.ops.push(TxnOp::DeleteByPk {
+            table: table.to_string(),
+            pk,
+        });
+        Ok(self)
+    }
+
+    /// Commit the batch atomically. Constraint violations map to [`KitError`].
+    pub fn commit(self) -> Result<RemoteBatch> {
+        let mut ops_json = Vec::with_capacity(self.ops.len());
+        for op in &self.ops {
+            ops_json.push(serde_json::to_value(op).map_err(|e| KitError::Storage(e.to_string()))?);
+        }
+        let req = TxnRequest {
+            idempotency_key: self.idempotency_key.clone(),
+            ops: ops_json,
+        };
+        let resp = self
+            .db
+            .client
+            .post(self.db.url("/kit/txn"))
+            .json(&req)
+            .send()
+            .map_err(ioe)?;
+        if !resp.status().is_success() {
+            return Err(map_error(resp));
+        }
+        let txn: TxnResponse = decode(resp)?;
+        let mut results = Vec::with_capacity(txn.results.len());
+        for (i, r) in txn.results.into_iter().enumerate() {
+            match r {
+                OpResult::Put { auto_inc, row, .. } => {
+                    results.push(RemoteOpResult::Put {
+                        auto_inc,
+                        row: row_to_map(self.db, op_table(&self.ops, i)?, row.as_deref()),
+                    });
+                }
+                OpResult::Upsert { action, row, .. } => {
+                    results.push(RemoteOpResult::Upsert {
+                        action,
+                        row: row_to_map(self.db, op_table(&self.ops, i)?, row.as_deref()),
+                    });
+                }
+                OpResult::Deleted => results.push(RemoteOpResult::Deleted),
+                OpResult::NotFound => results.push(RemoteOpResult::NotFound),
+            }
+        }
+        Ok(RemoteBatch {
+            epoch: txn.epoch,
+            results,
+        })
+    }
+}
+
+fn op_table(ops: &[TxnOp], _i: usize) -> Result<&str> {
+    match ops.get(_i) {
+        Some(TxnOp::Put { table, .. })
+        | Some(TxnOp::Upsert { table, .. })
+        | Some(TxnOp::DeleteByPk { table, .. }) => Ok(table.as_str()),
+        None => Err(KitError::Integrity("op/result length mismatch".into())),
+    }
+}
+
+/// Decode a `[col_id, val, col_id, val, …]` post-image into a name-keyed map.
+fn row_to_map(
+    db: &RemoteDatabase,
+    table: &str,
+    row: Option<&[Value]>,
+) -> Option<Map<String, Value>> {
+    let row = row?;
+    let t = db.schemas.get(table)?;
+    let mut out = Map::new();
+    let mut i = 0;
+    while i + 1 < row.len() {
+        if let Some(id) = row[i].as_u64() {
+            if let Some(name) = t.id_to_name.get(&(id as u16)) {
+                out.insert(name.clone(), row[i + 1].clone());
+            }
+        }
+        i += 2;
+    }
+    Some(out)
+}
+
+fn map_error(resp: reqwest::blocking::Response) -> KitError {
+    let status = resp.status();
+    let body = resp.text().unwrap_or_default();
+    if let Ok(v) = serde_json::from_str::<Value>(&body) {
+        let code = v["error"]["code"].as_str().unwrap_or("");
+        let msg = v["error"]["message"]
+            .as_str()
+            .unwrap_or("remote transaction rejected")
+            .to_string();
+        match code {
+            EC_UNIQUE => return KitError::Duplicate(msg),
+            EC_FK => return KitError::ForeignKey(msg),
+            EC_CHECK | EC_BAD => return KitError::Validation(msg),
+            EC_CONFLICT => return KitError::Conflict(msg),
+            _ => {}
+        }
+    }
+    KitError::Storage(format!("http {status}: {body}"))
+}
+
+fn ioe(e: reqwest::Error) -> KitError {
+    KitError::Storage(e.to_string())
+}
+
+fn decode<T: for<'de> Deserialize<'de>>(resp: reqwest::blocking::Response) -> Result<T> {
+    if !resp.status().is_success() {
+        return Err(map_error(resp));
+    }
+    let v: T = resp.json().map_err(|e| KitError::Storage(e.to_string()))?;
+    Ok(v)
+}
+
+fn read_arrow_ipc(bytes: &[u8]) -> Result<Vec<RecordBatch>> {
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cursor = std::io::Cursor::new(bytes);
+    let reader = arrow::ipc::reader::FileReader::try_new(cursor, None)
+        .map_err(|e| KitError::Storage(e.to_string()))?;
+    reader
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| KitError::Storage(e.to_string()))
+}
+
+fn batch_to_rows(b: &RecordBatch) -> Result<Vec<Map<String, Value>>> {
+    let schema = b.schema();
+    let mut rows = Vec::with_capacity(b.num_rows());
+    for r in 0..b.num_rows() {
+        let mut row = Map::new();
+        for (c, field) in schema.fields().iter().enumerate() {
+            let name = field.name();
+            let arr = b.column(c);
+            row.insert(name.clone(), cell_value(arr.as_ref(), r));
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+fn cell_value(arr: &dyn Array, r: usize) -> Value {
+    if arr.is_null(r) {
+        return Value::Null;
+    }
+    if let Some(a) = arr.as_any().downcast_ref::<Int64Array>() {
+        return json!(a.value(r));
+    }
+    if let Some(a) = arr.as_any().downcast_ref::<Int32Array>() {
+        return json!(a.value(r));
+    }
+    if let Some(a) = arr.as_any().downcast_ref::<Float64Array>() {
+        return serde_json::Number::from_f64(a.value(r))
+            .map(Value::Number)
+            .unwrap_or(Value::Null);
+    }
+    if let Some(a) = arr.as_any().downcast_ref::<BooleanArray>() {
+        return Value::Bool(a.value(r));
+    }
+    if let Some(a) = arr.as_any().downcast_ref::<StringArray>() {
+        return Value::String(a.value(r).to_string());
+    }
+    if arr.as_any().downcast_ref::<NullArray>().is_some() {
+        return Value::Null;
+    }
+    // Fallback: stringify unknown types.
+    Value::String(format!("{arr:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cells_flat_encode() {
+        let mut schemas = HashMap::new();
+        let mut id_to_name = HashMap::new();
+        let mut name_to_id = HashMap::new();
+        id_to_name.insert(1u16, "id".to_string());
+        id_to_name.insert(2u16, "name".to_string());
+        name_to_id.insert("id".to_string(), 1u16);
+        name_to_id.insert("name".to_string(), 2u16);
+        schemas.insert(
+            "t".to_string(),
+            RemoteTable {
+                id_to_name,
+                name_to_id,
+                primary_key: Some(1),
+            },
+        );
+        let db = RemoteDatabase {
+            base_url: "http://x".into(),
+            client: reqwest::blocking::Client::new(),
+            schemas,
+        };
+        let mut row = Map::new();
+        row.insert("id".into(), json!(5));
+        row.insert("name".into(), json!("a"));
+        let cells = db.cells("t", &row).unwrap();
+        assert_eq!(cells, vec![json!(1), json!(5), json!(2), json!("a")]);
+    }
+}

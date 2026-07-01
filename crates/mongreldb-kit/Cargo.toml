@@ -12,11 +12,23 @@ categories = ["database"]
 bincode = "1"
 mongreldb-kit-core = { path = "../mongreldb-kit-core" }
 mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.18.0", features = ["encryption"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"
 parking_lot = "0.12"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
+
+# Remote (HTTP daemon) client surface. Gated behind the `remote` feature so the
+# default embedded build is not burdened with an HTTP + Arrow dependency tree.
+reqwest = { version = "0.12", features = ["blocking", "json"], optional = true }
+arrow = { version = "58", optional = true }
+
+[features]
+default = []
+# Enable `RemoteDatabase` / `RemoteTransaction` — a typed client for a running
+# `mongreldb-server` daemon (see PLAN.md item #3).
+remote = ["dep:reqwest", "dep:arrow"]
 
 [dev-dependencies]
 tempfile = "3"

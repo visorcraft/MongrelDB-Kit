@@ -9,6 +9,8 @@ pub(crate) mod internal;
 pub mod migrate;
 pub mod pushdown;
 pub mod query;
+#[cfg(feature = "remote")]
+pub mod remote;
 pub mod schema;
 pub mod tsv;
 pub mod txn;
@@ -20,6 +22,8 @@ pub use db::{
 pub use error::{KitError, Result};
 pub use migrate::migrate;
 pub use query::JoinRow;
+#[cfg(feature = "remote")]
+pub use remote::{RemoteBatch, RemoteDatabase, RemoteOpResult, RemoteTransaction};
 pub use schema::Row;
 pub use txn::Transaction;
 
