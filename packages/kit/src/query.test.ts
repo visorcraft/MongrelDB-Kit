@@ -876,3 +876,20 @@ describe('executeArrow (columnar output)', () => {
 		});
 	});
 });
+
+describe('explain (pushdown diagnostics)', () => {
+	it('reports which conditions push down and whether the plan is exact', () => {
+		withDbSync((db) => {
+			// Range on an int column → exact RangeInt push-down.
+			const p1 = db.selectFrom(orders).where(gt(orders.amount, 6n)).explain();
+			expect(p1.indexAccelerated).toBe(true);
+			expect(p1.exact).toBe(true);
+			expect(p1.pushedConditions).toEqual(['RangeInt']);
+
+			// contains() on a column with no FM index → no push-down.
+			const p2 = db.selectFrom(orders).where(contains(orders.status, 'x')).explain();
+			expect(p2.indexAccelerated).toBe(false);
+			expect(p2.pushedConditions).toEqual([]);
+		});
+	});
+});

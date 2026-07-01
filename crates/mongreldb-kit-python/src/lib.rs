@@ -246,6 +246,23 @@ impl PyDatabase {
         self.require_db()?.import_tsv(table, text).map_err(map_err)
     }
 
+    /// Explain how `filter` (the friendly filter object) would push down against
+    /// `table`. Returns a JSON object; does not run the query.
+    fn explain(&self, py: Python<'_>, table: &str, filter: Py<PyAny>) -> PyResult<String> {
+        let value = py_to_value(filter.bind(py))?;
+        let map = value
+            .as_object()
+            .ok_or_else(|| ValidationError::new_err("filter must be an object"))?;
+        let expr = parse_filter(map).map_err(map_err)?;
+        let plan = self.require_db()?.explain(table, &expr).map_err(map_err)?;
+        let json = serde_json::json!({
+            "index_accelerated": plan.index_accelerated,
+            "exact": plan.exact,
+            "pushed_conditions": plan.pushed_conditions,
+        });
+        Ok(json.to_string())
+    }
+
     fn close(&mut self) {
         self.db = None;
     }

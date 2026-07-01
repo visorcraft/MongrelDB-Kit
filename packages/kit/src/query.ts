@@ -589,6 +589,28 @@ function residualPlan(predicate: Predicate): PredicatePlan {
 	return { conditions: [], residual: predicate };
 }
 
+const CONDITION_LABELS: Record<number, string> = {
+	[ConditionKind.Pk]: 'Pk',
+	[ConditionKind.PkInt64]: 'PkInt64',
+	[ConditionKind.BitmapEq]: 'BitmapEq',
+	[ConditionKind.BitmapIn]: 'BitmapIn',
+	[ConditionKind.RangeInt]: 'RangeInt',
+	[ConditionKind.RangeF64]: 'RangeF64',
+	[ConditionKind.FmContains]: 'FmContains',
+	[ConditionKind.FmContainsAll]: 'FmContainsAll',
+	[ConditionKind.IsNull]: 'IsNull',
+	[ConditionKind.IsNotNull]: 'IsNotNull',
+	[ConditionKind.Ann]: 'Ann',
+	[ConditionKind.SparseMatch]: 'SparseMatch'
+};
+
+/** How a `where` predicate would execute: which native conditions push down. */
+export type ExplainPlan = {
+	indexAccelerated: boolean;
+	exact: boolean;
+	pushedConditions: string[];
+};
+
 function compilePredicate(table: TableSpec, predicate: Predicate): PredicatePlan {
 	switch (predicate.kind) {
 		case 'eq': {
@@ -1388,6 +1410,36 @@ export class SelectBuilder<T extends TableSpec, TResult = Row<T>[]> implements S
 			throw new KitError('executeArrow requires a where/annSearch/sparseMatch clause');
 		}
 		return tableFromIPC(db.table(this.table.name).queryArrow(conditions));
+	}
+
+	/**
+	 * Describe how this query's `where`/`annSearch`/`sparseMatch` clause would
+	 * push down to native index conditions — a diagnostic that plans but does
+	 * not run the query. `exact` is true when the whole predicate translated (no
+	 * JS residual re-filtering).
+	 */
+	explain(): ExplainPlan {
+		if (this._source) {
+			return { indexAccelerated: false, exact: false, pushedConditions: [] };
+		}
+		if (this._ann) {
+			return { indexAccelerated: true, exact: false, pushedConditions: ['Ann'] };
+		}
+		if (this._sparse) {
+			return { indexAccelerated: true, exact: false, pushedConditions: ['SparseMatch'] };
+		}
+		if (!this._where) {
+			return { indexAccelerated: false, exact: true, pushedConditions: [] };
+		}
+		const plan = compilePredicate(this.table, this._where);
+		if (plan.alwaysFalse) {
+			return { indexAccelerated: false, exact: true, pushedConditions: [] };
+		}
+		return {
+			indexAccelerated: plan.conditions.length > 0,
+			exact: !plan.residual,
+			pushedConditions: plan.conditions.map((c) => CONDITION_LABELS[c.kind] ?? String(c.kind))
+		};
 	}
 }
 

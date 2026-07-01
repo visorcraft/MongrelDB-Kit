@@ -140,6 +140,13 @@ class Database:
         """Import a TSV document into ``table``; return the rows inserted."""
         return self._handle.import_tsv(table, text)
 
+    def explain(self, table: str, filter: dict[str, Any]) -> dict[str, Any]:
+        """Explain how ``filter`` pushes down against ``table`` (diagnostic only).
+
+        Returns ``{index_accelerated, exact, pushed_conditions}``.
+        """
+        return json.loads(self._handle.explain(table, filter))
+
     def close(self) -> None:
         """Close the database handle and release underlying resources."""
         self._handle.close()

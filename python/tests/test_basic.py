@@ -408,3 +408,16 @@ def test_tsv_export_import_round_trip():
         assert r2["name"] is None
     src.close()
     dst.close()
+
+
+def test_explain_reports_pushdown():
+    db = Database.create(tmp_db(), users_orders_schema())
+    # id is the primary key → equality pushes down exactly.
+    plan = db.explain("users", {"id": 1})
+    assert plan["index_accelerated"] is True
+    assert plan["pushed_conditions"]
+    # A substring match on a non-FM column cannot push down.
+    plan = db.explain("users", {"name": {"contains": "x"}})
+    assert plan["index_accelerated"] is False
+    assert plan["pushed_conditions"] == []
+    db.close()

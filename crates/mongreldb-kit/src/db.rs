@@ -21,6 +21,26 @@ const SCHEMA_FILE: &str = "kit_schema.json";
 /// A named default-value provider registered by the application.
 pub type DefaultProvider = Box<dyn Fn() -> Value + Send + Sync>;
 
+/// The result of [`Database::explain`]: a static description of a predicate's
+/// index push-down, without running the query.
+#[derive(Debug, Clone)]
+pub struct ExplainPlan {
+    /// Whether at least one native index condition pushes down (vs. a full scan).
+    pub index_accelerated: bool,
+    /// Whether the push-down is exact — the whole predicate translated, so no
+    /// Rust-side residual re-filtering is needed.
+    pub exact: bool,
+    /// The kind of each pushed condition (e.g. `BitmapEq`, `RangeInt`, `Ann`).
+    pub pushed_conditions: Vec<String>,
+}
+
+/// Short kind label for a core `Condition` (the variant name), decoupled from
+/// the enum shape via its `Debug` form.
+fn condition_label(c: &mongreldb_core::query::Condition) -> String {
+    let dbg = format!("{c:?}");
+    dbg.split(['(', '{', ' ']).next().unwrap_or("").to_string()
+}
+
 /// A kit database handle.
 ///
 /// Wraps a MongrelDB core database and a kit schema, providing table metadata
@@ -331,6 +351,35 @@ impl Database {
             Ok(())
         })?;
         Ok(n)
+    }
+
+    /// Describe how `predicate` would be executed against `table`: which native
+    /// index conditions push down, whether the push-down is exact (no residual
+    /// re-filtering), and whether any index acceleration applies at all. A pure
+    /// diagnostic — it plans but does not run the query.
+    pub fn explain(
+        &self,
+        table: &str,
+        predicate: &mongreldb_kit_core::query::Expr,
+    ) -> Result<ExplainPlan> {
+        let t = self
+            .schema
+            .tables
+            .iter()
+            .find(|t| t.name == table)
+            .ok_or_else(|| KitError::Validation(format!("unknown table '{table}'")))?;
+        Ok(match crate::pushdown::translate_predicate(t, predicate) {
+            Some(p) => ExplainPlan {
+                index_accelerated: p.can_push(),
+                exact: p.fully_translated,
+                pushed_conditions: p.conditions.iter().map(condition_label).collect(),
+            },
+            None => ExplainPlan {
+                index_accelerated: false,
+                exact: false,
+                pushed_conditions: Vec::new(),
+            },
+        })
     }
 
     /// Return the migrations already recorded in `__kit_schema_migrations`.
