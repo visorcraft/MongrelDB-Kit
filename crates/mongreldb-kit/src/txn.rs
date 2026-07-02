@@ -88,6 +88,19 @@ struct StagedUnique {
     owner_pk: String,
 }
 
+/// Batch-scoped caches for `insert_many` to avoid per-row full scans of the
+/// guard tables. The committed unique-guard rows are loaded once (every row's
+/// `check_unique_constraints` re-reads them otherwise — O(N×M) for a batch of
+/// N rows over M existing guards), and FK parent-existence probes are cached
+/// so repeated parent ids hit the map instead of re-probing the engine.
+/// (Kit P6: bulk-write guard batching.)
+struct BatchGuardCache {
+    /// Preloaded committed `__kit_unique_keys` rows.
+    unique_guards: Vec<CoreRow>,
+    /// Cached FK parent existence: `"table\x00encoded_pk" -> exists`.
+    fk_parents: HashMap<String, bool>,
+}
+
 impl<'a> Transaction<'a> {
     pub(crate) fn new(
         db: &'a crate::db::Database,
@@ -106,7 +119,7 @@ impl<'a> Transaction<'a> {
     /// Insert a row into `table`.
     pub fn insert(&mut self, table: &str, row: Map<String, Value>) -> Result<Row> {
         let t = self.require_table(table)?.clone();
-        self.do_insert(table, &t, row, None)
+        self.do_insert(table, &t, row, None, None)
     }
 
     pub fn insert_returning(
@@ -140,9 +153,26 @@ impl<'a> Transaction<'a> {
         } else {
             None
         };
+        // P6: preload the committed unique-guard rows once for the whole batch
+        // so `check_unique_constraints` doesn't re-scan `__kit_unique_keys`
+        // per row. Also seed an FK parent-existence cache so repeated parent
+        // ids are probed once.
+        let mut batch = if t.unique_constraints.is_empty() && t.foreign_keys.is_empty() {
+            None
+        } else {
+            let unique_guards = if t.unique_constraints.is_empty() {
+                Vec::new()
+            } else {
+                self.internal_rows(UNIQUE_KEYS)?
+            };
+            Some(BatchGuardCache {
+                unique_guards,
+                fk_parents: HashMap::new(),
+            })
+        };
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            out.push(self.do_insert(table, &t, row, pk_seen.as_mut())?);
+            out.push(self.do_insert(table, &t, row, pk_seen.as_mut(), batch.as_mut())?);
         }
         Ok(out)
     }
@@ -157,6 +187,7 @@ impl<'a> Transaction<'a> {
         t: &KitTable,
         mut row: Map<String, Value>,
         pk_seen: Option<&mut HashSet<String>>,
+        batch: Option<&mut BatchGuardCache>,
     ) -> Result<Row> {
         // A primary key is "explicit" when the caller supplied all of its columns
         // in the original input (before defaults are applied); only an explicit PK
@@ -171,10 +202,19 @@ impl<'a> Transaction<'a> {
         }
         mongreldb_kit_core::validation::validate_row(t, &row)?;
 
+        // P6: split the batch cache into its disjoint field borrows so both the
+        // immutable unique-guard slice and the mutable FK-parent map are
+        // available to the `&self` constraint checkers in one pass.
+        let (ug_slice, fk_cache): (Option<&[CoreRow]>, Option<&mut HashMap<String, bool>>) =
+            match batch {
+                Some(b) => (Some(&b.unique_guards[..]), Some(&mut b.fk_parents)),
+                None => (None, None),
+            };
+
         // Validate all constraints before staging any writes.
-        self.check_unique_constraints(t, &row, None)?;
+        self.check_unique_constraints(t, &row, None, ug_slice)?;
         self.check_pk(t, &row, pk_explicit, pk_seen)?;
-        self.check_foreign_keys(t, &row)?;
+        self.check_foreign_keys(t, &row, fk_cache)?;
 
         // Stage guard rows + the application row atomically.
         self.reserve_unique_guards(t, &row, None)?;
@@ -211,8 +251,8 @@ impl<'a> Transaction<'a> {
         }
         self.apply_update_defaults(&mut values, &patch_keys, &t);
         mongreldb_kit_core::validation::validate_row(&t, &values)?;
-        self.check_unique_constraints(&t, &values, Some(&old_row.values))?;
-        self.check_foreign_keys(&t, &values)?;
+        self.check_unique_constraints(&t, &values, Some(&old_row.values), None)?;
+        self.check_foreign_keys(&t, &values, None)?;
 
         // Reserve new unique keys and delete stale ones.
         self.reserve_unique_guards(&t, &values, Some(&old_row.values))?;
@@ -370,8 +410,8 @@ impl<'a> Transaction<'a> {
                 }
                 self.apply_update_defaults(&mut merged, &patch_keys, &t);
                 mongreldb_kit_core::validation::validate_row(&t, &merged)?;
-                self.check_unique_constraints(&t, &merged, Some(&old.values))?;
-                self.check_foreign_keys(&t, &merged)?;
+                self.check_unique_constraints(&t, &merged, Some(&old.values), None)?;
+                self.check_foreign_keys(&t, &merged, None)?;
                 self.reserve_unique_guards(&t, &merged, Some(&old.values))?;
                 self.touch_foreign_key_guards(&t, &merged)?;
 
@@ -400,8 +440,8 @@ impl<'a> Transaction<'a> {
                 )
             }
             (None, on_conflict) => {
-                self.check_unique_constraints(&t, &values, None)?;
-                self.check_foreign_keys(&t, &values)?;
+                self.check_unique_constraints(&t, &values, None, None)?;
+                self.check_foreign_keys(&t, &values, None)?;
                 self.reserve_unique_guards(&t, &values, None)?;
                 let pk_explicit = pk_is_explicit(&t, &values);
                 self.reserve_pk_guard(&t, &values, pk_explicit)?;
@@ -446,8 +486,8 @@ impl<'a> Transaction<'a> {
             }
             self.apply_update_defaults(&mut values, &patch_keys, &t);
             mongreldb_kit_core::validation::validate_row(&t, &values)?;
-            self.check_unique_constraints(&t, &values, Some(&row.values))?;
-            self.check_foreign_keys(&t, &values)?;
+            self.check_unique_constraints(&t, &values, Some(&row.values), None)?;
+            self.check_foreign_keys(&t, &values, None)?;
             self.reserve_unique_guards(&t, &values, Some(&row.values))?;
             self.touch_foreign_key_guards(&t, &values)?;
 
@@ -933,12 +973,22 @@ impl<'a> Transaction<'a> {
         table: &KitTable,
         values: &Map<String, Value>,
         old_values: Option<&Map<String, Value>>,
+        preloaded_guards: Option<&[CoreRow]>,
     ) -> Result<()> {
         if table.unique_constraints.is_empty() {
             return Ok(());
         }
         let owner_pk = encoded_pk_for(table, values);
-        let committed = self.internal_rows(UNIQUE_KEYS)?;
+        // P6: reuse the batch-preloaded committed guards instead of re-scanning
+        // the `__kit_unique_keys` table on every row.
+        let owned;
+        let committed: &[CoreRow] = match preloaded_guards {
+            Some(g) => g,
+            None => {
+                owned = self.internal_rows(UNIQUE_KEYS)?;
+                &owned
+            }
+        };
         for uq in &table.unique_constraints {
             let Some(key) = unique_key(table, uq, values) else {
                 continue;
@@ -949,7 +999,7 @@ impl<'a> Transaction<'a> {
                     continue;
                 }
             }
-            self.assert_key_free(&committed, table, uq, &key, &owner_pk)?;
+            self.assert_key_free(committed, table, uq, &key, &owner_pk)?;
         }
         Ok(())
     }
@@ -1176,7 +1226,12 @@ impl<'a> Transaction<'a> {
 
     // ── foreign keys ───────────────────────────────────────────────────────
 
-    fn check_foreign_keys(&self, table: &KitTable, values: &Map<String, Value>) -> Result<()> {
+    fn check_foreign_keys(
+        &self,
+        table: &KitTable,
+        values: &Map<String, Value>,
+        mut fk_cache: Option<&mut HashMap<String, bool>>,
+    ) -> Result<()> {
         for fk in &table.foreign_keys {
             if fk_values_null(fk, values) {
                 continue;
@@ -1184,9 +1239,27 @@ impl<'a> Transaction<'a> {
             let parent = self.require_table(&fk.references_table)?;
             let parent_pk = parent_pk_value(values, fk, parent)?;
             let parent_pk_map = pk_to_map(&parent_pk, parent)?;
-            if self.parent_exists(&fk.references_table, &parent_pk_map)?
-                || self.staged_row_exists(parent, &parent_pk_map)
-            {
+            // P6: cache parent-existence per `"table\x00encoded_pk"` so repeated
+            // parent ids in a bulk batch probe the engine once.
+            let cache_key = format!(
+                "{}\x00{}",
+                fk.references_table,
+                encode_pk(&pk_components(parent, &parent_pk_map))
+            );
+            let exists = if let Some(cache) = fk_cache.as_mut() {
+                if let Some(&hit) = cache.get(&cache_key) {
+                    hit
+                } else {
+                    let hit = self.parent_exists(&fk.references_table, &parent_pk_map)?
+                        || self.staged_row_exists(parent, &parent_pk_map);
+                    cache.insert(cache_key, hit);
+                    hit
+                }
+            } else {
+                self.parent_exists(&fk.references_table, &parent_pk_map)?
+                    || self.staged_row_exists(parent, &parent_pk_map)
+            };
+            if exists {
                 continue;
             }
             return Err(KitError::ForeignKey(format!(
