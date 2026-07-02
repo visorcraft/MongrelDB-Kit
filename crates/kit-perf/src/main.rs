@@ -1,4 +1,6 @@
-//! Kit (Rust) vs SQLite: single-record insert/update/delete latency at N=100
+#![allow(clippy::field_reassign_with_default)]
+//! Cross-language benchmark: Kit (Rust) vs core-direct vs SQLite.
+//!
 //! and N=1,000,000 rows. Mirrors the methodology of the engine's
 //! `mongreldb-perf` (median of 7 durable single-op timings), but drives every
 //! op through `mongreldb_kit::Database` — begin -> insert/update/delete ->
@@ -194,6 +196,157 @@ fn sqlite(n: i64) -> Times {
     t
 }
 
+// ── Core direct (bypasses Kit validation/guard overhead) ─────────────────
+
+fn core_direct(n: i64) -> Times {
+    use mongreldb_core::schema::{ColumnDef, ColumnFlags, Schema as CoreSchema, TypeId};
+    use mongreldb_core::{Table, Value};
+
+    let dir = tempfile::tempdir().unwrap();
+    let schema = CoreSchema {
+        schema_id: 1,
+        columns: vec![
+            ColumnDef {
+                id: 1,
+                name: "id".into(),
+                ty: TypeId::Int64,
+                flags: ColumnFlags::empty().with(ColumnFlags::PRIMARY_KEY),
+            },
+            ColumnDef {
+                id: 2,
+                name: "name".into(),
+                ty: TypeId::Bytes,
+                flags: ColumnFlags::empty(),
+            },
+            ColumnDef {
+                id: 3,
+                name: "cost".into(),
+                ty: TypeId::Float64,
+                flags: ColumnFlags::empty(),
+            },
+        ],
+        indexes: vec![],
+        colocation: vec![],
+        constraints: Default::default(),
+    };
+    let mut db = Table::create(dir.path(), schema, 1).unwrap();
+    for i in 1..=n {
+        db.put(vec![
+            (1, Value::Int64(i)),
+            (2, Value::Bytes(b"City".to_vec())),
+            (3, Value::Float64(199.99 + i as f64)),
+        ])
+        .unwrap();
+    }
+    db.commit().unwrap();
+
+    let mut t = Times::default();
+    t.single_insert_commit = median(
+        (0..7)
+            .map(|i| {
+                let now = Instant::now();
+                db.put(vec![
+                    (1, Value::Int64(n + 1 + i)),
+                    (2, Value::Bytes(b"CityX".to_vec())),
+                    (3, Value::Float64(1.0)),
+                ])
+                .unwrap();
+                db.commit().unwrap();
+                now.elapsed()
+            })
+            .collect(),
+    );
+    t.single_update_commit = median(
+        (0..7)
+            .map(|i| {
+                let now = Instant::now();
+                db.put(vec![
+                    (1, Value::Int64(i + 1)),
+                    (2, Value::Bytes(b"City".to_vec())),
+                    (3, Value::Float64(99.0 + i as f64)),
+                ])
+                .unwrap();
+                db.commit().unwrap();
+                now.elapsed()
+            })
+            .collect(),
+    );
+    t.delete_one = median(
+        (0..7)
+            .map(|i| {
+                let now = Instant::now();
+                db.delete(mongreldb_core::RowId((n - 6 + i) as u64)).unwrap();
+                db.commit().unwrap();
+                now.elapsed()
+            })
+            .collect(),
+    );
+    t
+}
+
+/// Bulk-ingest throughput (Melem/s) for Kit vs core-direct.
+fn bulk_kit(n: i64) -> f64 {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("db"), users_schema()).unwrap();
+    let seed: Vec<Map<String, Value>> = (1..=n)
+        .map(|i| row(i, "City", 199.99 + i as f64))
+        .collect();
+    let now = Instant::now();
+    let mut txn = db.begin().unwrap();
+    txn.insert_many("users", seed).unwrap();
+    txn.commit().unwrap();
+    let secs = now.elapsed().as_secs_f64();
+    n as f64 / secs / 1e6
+}
+
+fn bulk_core(n: i64) -> f64 {
+    use mongreldb_core::schema::{ColumnDef, ColumnFlags, Schema as CoreSchema, TypeId};
+    use mongreldb_core::{Table, Value};
+
+    let dir = tempfile::tempdir().unwrap();
+    let schema = CoreSchema {
+        schema_id: 1,
+        columns: vec![
+            ColumnDef {
+                id: 1,
+                name: "id".into(),
+                ty: TypeId::Int64,
+                flags: ColumnFlags::empty().with(ColumnFlags::PRIMARY_KEY),
+            },
+            ColumnDef {
+                id: 2,
+                name: "name".into(),
+                ty: TypeId::Bytes,
+                flags: ColumnFlags::empty(),
+            },
+            ColumnDef {
+                id: 3,
+                name: "cost".into(),
+                ty: TypeId::Float64,
+                flags: ColumnFlags::empty(),
+            },
+        ],
+        indexes: vec![],
+        colocation: vec![],
+        constraints: Default::default(),
+    };
+    let mut db = Table::create(dir.path(), schema, 1).unwrap();
+    let batch: Vec<Vec<(u16, Value)>> = (1..=n)
+        .map(|i| {
+            vec![
+                (1, Value::Int64(i)),
+                (2, Value::Bytes(b"City".to_vec())),
+                (3, Value::Float64(199.99 + i as f64)),
+            ]
+        })
+        .collect();
+    let now = Instant::now();
+    db.put_batch(batch).unwrap();
+    db.commit().unwrap();
+    let secs = now.elapsed().as_secs_f64();
+    n as f64 / secs / 1e6
+}
+
 fn row_str(label: &str, t: &Times) -> String {
     format!(
         "| {label} | {} | {} | {} |",
@@ -204,18 +357,27 @@ fn row_str(label: &str, t: &Times) -> String {
 }
 
 fn main() {
-    println!("Kit (Rust) vs SQLite: single-record write latency\n");
-    println!("Notes: both durable (one fsync-backed commit per op). Kit's path is");
+    println!("Cross-language benchmark: Kit (Rust) vs core-direct vs SQLite\n");
+    println!("Notes: all durable (one fsync-backed commit per op). Kit's path is");
     println!("Database::begin -> insert/update/delete -> commit (full per-row");
-    println!("validation + PK/unique/FK guard checks; update is delete+reinsert at");
-    println!("the storage layer, not in-place). SQLite is rusqlite, autocommit.\n");
+    println!("validation + PK/unique/FK guard checks). Core-direct bypasses Kit");
+    println!("(raw Table::put/commit). TS/Python scripts in bench/ts/ and bench/py/.\n");
 
     for &n in &[100i64, 1_000_000] {
         println!("### N = {n} rows (median of 7)\n");
         println!("| engine | single_insert_commit | single_update_commit | delete_one |");
         println!("|---|---:|---:|---:|");
         println!("{}", row_str("Kit (Rust)", &kit(n)));
+        println!("{}", row_str("Core direct", &core_direct(n)));
         println!("{}", row_str("SQLite (rusqlite)", &sqlite(n)));
+        println!();
+
+        let bn = if n == 1_000_000 { 100_000 } else { n };
+        println!("### Bulk ingest throughput (N = {bn})\n");
+        println!("| engine | Melem/s |");
+        println!("|---|---:|");
+        println!("| Kit (Rust) | {:.1} |", bulk_kit(bn));
+        println!("| Core direct | {:.1} |", bulk_core(bn));
         println!();
     }
 }

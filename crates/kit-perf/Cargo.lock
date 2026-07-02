@@ -472,6 +472,7 @@ dependencies = [
 name = "kit-perf"
 version = "0.1.0"
 dependencies = [
+ "mongreldb-core",
  "mongreldb-kit",
  "rusqlite",
  "serde_json",
