@@ -24,12 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: MongrelDB-Kit
 
       - name: Checkout MongrelDB engine (sibling)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: visorcraft/mongreldb
           path: mongreldb
@@ -85,12 +85,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: MongrelDB-Kit
 
       - name: Checkout MongrelDB engine (sibling)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: visorcraft/mongreldb
           path: mongreldb
