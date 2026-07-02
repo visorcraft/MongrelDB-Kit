@@ -1,0 +1,30 @@
+[package]
+name = "kit-perf"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "compare"
+path = "src/main.rs"
+
+[[bin]]
+name = "seed"
+path = "src/seed.rs"
+
+[dependencies]
+mongreldb-kit = { path = "../mongreldb-kit", version = "0.7.3" }
+serde_json = { version = "1", features = ["preserve_order"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tempfile = "3"
+
+# Standalone crate (rusqlite's bundled build is a heavy C compile) — not a
+# workspace member, mirrors mongreldb-perf in the engine repo.
+[workspace]
+
+# Points at the sibling mongreldb checkout's core crate (not yet published to
+# crates.io as of the 1M-row perf fixes) so this harness measures the fixed
+# engine. Once mongreldb-core is released and mongreldb-kit's own dependency
+# is bumped to it, this override becomes redundant and can be removed.
+[patch.crates-io]
+mongreldb-core = { path = "../../../mongreldb/crates/mongreldb-core" }

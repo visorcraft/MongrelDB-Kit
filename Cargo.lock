@@ -806,7 +806,7 @@ name = "conformance-runner"
 version = "0.1.0"
 dependencies = [
  "axum",
- "mongreldb-core",
+ "mongreldb-core 0.19.5",
  "mongreldb-kit",
  "mongreldb-server",
  "serde",
@@ -2656,12 +2656,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "mongreldb-core"
+version = "0.19.5"
+dependencies = [
+ "aes-gcm",
+ "arc-swap",
+ "argon2",
+ "bincode",
+ "bytemuck",
+ "bytes",
+ "crc",
+ "getrandom 0.2.17",
+ "hkdf",
+ "hmac",
+ "lz4_flex 0.11.6",
+ "memmap2",
+ "parking_lot",
+ "rayon",
+ "roaring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "zeroize",
+ "zstd",
+]
+
+[[package]]
 name = "mongreldb-kit"
 version = "0.7.3"
 dependencies = [
  "arrow",
  "bincode",
- "mongreldb-core",
+ "mongreldb-core 0.19.5",
  "mongreldb-kit-core",
  "parking_lot",
  "regex",
@@ -2721,7 +2748,7 @@ dependencies = [
  "async-trait",
  "datafusion",
  "futures",
- "mongreldb-core",
+ "mongreldb-core 0.19.4",
  "parking_lot",
  "serde_json",
  "sqlparser",
@@ -2736,7 +2763,7 @@ source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.19.4#25c0a07728
 dependencies = [
  "arrow",
  "axum",
- "mongreldb-core",
+ "mongreldb-core 0.19.4",
  "mongreldb-query",
  "serde",
  "serde_json",

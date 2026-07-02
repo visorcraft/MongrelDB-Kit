@@ -805,8 +805,39 @@ impl<'a> Transaction<'a> {
     }
 
     /// Commit the transaction.
+    ///
+    /// A transaction that staged a large batch on some table (typically via
+    /// [`Self::insert_many`]) flushes that table afterward. Without this, a
+    /// committed-but-unflushed batch exists only as WAL records: every
+    /// subsequent `Database::open` (there is no warm/daemon mode for the CLI,
+    /// and any short-lived process pays this on every invocation) must fully
+    /// replay and re-index the whole batch just to open the table, which is
+    /// far more expensive than the one-time flush. Below the threshold this
+    /// is a no-op cost (the loop below runs over `self.staged`, already in
+    /// memory) so ordinary interactive transactions are unaffected.
     pub fn commit(self) -> Result<()> {
-        self.core.commit().map_err(KitError::from).map(|_| ())
+        const FLUSH_AFTER_ROWS: usize = 1000;
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for op in &self.staged {
+            let table = match op {
+                StagedOp::Insert { table, .. }
+                | StagedOp::Update { table, .. }
+                | StagedOp::Delete { table, .. }
+                | StagedOp::Truncate { table } => table.as_str(),
+            };
+            *counts.entry(table).or_default() += 1;
+        }
+        let tables_to_flush: Vec<&str> = counts
+            .into_iter()
+            .filter(|&(_, n)| n >= FLUSH_AFTER_ROWS)
+            .map(|(table, _)| table)
+            .collect();
+        let db = self.db;
+        self.core.commit().map_err(KitError::from)?;
+        for table in tables_to_flush {
+            let _ = db.flush_table(table);
+        }
+        Ok(())
     }
 
     /// Roll back the transaction.
@@ -903,6 +934,9 @@ impl<'a> Transaction<'a> {
         values: &Map<String, Value>,
         old_values: Option<&Map<String, Value>>,
     ) -> Result<()> {
+        if table.unique_constraints.is_empty() {
+            return Ok(());
+        }
         let owner_pk = encoded_pk_for(table, values);
         let committed = self.internal_rows(UNIQUE_KEYS)?;
         for uq in &table.unique_constraints {
@@ -1240,9 +1274,15 @@ impl<'a> Transaction<'a> {
         if !self.touched_guards.insert(guard_key.clone()) {
             return Ok(());
         }
-        // Replace any existing committed guard, bumping the version.
+        // Replace any existing committed guard, bumping the version. `RG_ENCODED`
+        // is `ROW_GUARDS`' primary key, so an indexed point lookup (matching at
+        // most one row) replaces the full-table scan `internal_rows` would do.
         let mut version = 1i64;
-        let committed = self.internal_rows(ROW_GUARDS)?;
+        let committed = self.db.query_core_rows_at(
+            ROW_GUARDS,
+            &[Condition::Pk(guard_key.as_bytes().to_vec())],
+            self.core.read_snapshot(),
+        )?;
         for guard in &committed {
             if internal_bytes(guard, cols::RG_ENCODED).as_deref() == Some(guard_key.as_str()) {
                 if let Some(CoreValue::Int64(v)) = guard.columns.get(&cols::RG_VERSION) {

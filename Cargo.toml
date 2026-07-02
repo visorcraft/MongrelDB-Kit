@@ -8,10 +8,16 @@ members = [
 ]
 resolver = "2"
 
-# Dev-only: unify `mongreldb-core` (consumed from crates.io by the kit) with the
-# same git tag the conformance runner's `mongreldb-server` dev-dependency pulls,
-# so `build_app(Arc<Database>)` shares one `mongreldb-core` type instance.
-# `[patch.crates-io]` is stripped by `cargo publish`, so published kits are
-# unaffected.
+# Dev-only: unify `mongreldb-core` (consumed from crates.io by the kit) with a
+# single checkout, so `build_app(Arc<Database>)` shares one `mongreldb-core`
+# type instance. `[patch.crates-io]` is stripped by `cargo publish`, so
+# published kits are unaffected.
+#
+# Currently points at the sibling mongreldb checkout (not the v0.19.4 git tag)
+# because the 1M-row perf fixes (`Table::approx_aggregate` becoming `&mut
+# self`, among others) aren't released yet — `mongreldb-kit`'s own fixes for
+# this session depend on that core API. Once mongreldb-core ships the fix and
+# this repo's `mongreldb-core` dependency is bumped to it, point this back at
+# that release tag (or drop the override; the path below is this-machine-only).
 [patch.crates-io]
-mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.19.4" }
+mongreldb-core = { path = "../mongreldb/crates/mongreldb-core" }

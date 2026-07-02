@@ -178,6 +178,7 @@ impl Database {
         let schema = load_schema(path)?;
         // Ensure reserved tables exist for databases created by older versions.
         ensure_internal_tables(&inner)?;
+        reap_rotated_wal_segments(&inner);
         Ok(Self {
             inner,
             schema,
@@ -191,6 +192,7 @@ impl Database {
         let inner = CoreDatabase::open_encrypted(path, passphrase)?;
         let schema = load_schema(path)?;
         ensure_internal_tables(&inner)?;
+        reap_rotated_wal_segments(&inner);
         Ok(Self {
             inner,
             schema,
@@ -564,7 +566,7 @@ impl Database {
             ApproxAggKind::Avg => ApproxAgg::Avg,
         };
         let handle = self.inner.table(table).map_err(KitError::from)?;
-        let guard = handle.lock();
+        let mut guard = handle.lock();
         let res = guard
             .approx_aggregate(&[], cid, core_agg, z)
             .map_err(KitError::from)?;
@@ -870,6 +872,19 @@ impl Database {
         guard.query(&q).map_err(KitError::from)
     }
 
+    /// Drain `table`'s memtable into the mutable-run tier, spilling to a
+    /// durable, checkpointed `.sr` run once the tier crosses its watermark.
+    /// Called after a large batch commit (see `Transaction::commit`) so a
+    /// short-lived process (the CLI, or any fresh `Database::open`) isn't
+    /// stuck replaying the whole batch from the WAL on its next invocation —
+    /// without a flush, committed-but-unflushed writes only exist as WAL
+    /// records and must be fully replayed to rebuild the in-memory indexes.
+    pub(crate) fn flush_table(&self, table_name: &str) -> Result<()> {
+        let handle = self.inner.table(table_name).map_err(KitError::from)?;
+        handle.lock().flush().map_err(KitError::from)?;
+        Ok(())
+    }
+
     /// Count visible rows matching `conditions` without materializing them
     /// (Kit Priority 7 pushdown). Returns `None` when the conditions cannot be
     /// served by indexes, or when `snapshot` is not the latest committed epoch
@@ -969,6 +984,24 @@ pub(crate) fn internal_bytes(row: &CoreRow, col_id: u16) -> Option<String> {
         Some(CoreValue::Bytes(b)) => String::from_utf8(b.clone()).ok(),
         _ => None,
     }
+}
+
+/// Best-effort: reap any WAL segments a previous session left rotated but
+/// unreaped, now that this `open()` has minted a fresh active segment
+/// (`SharedWal::open` never truncates prior segments on its own —
+/// [`CoreDatabase::gc`] does, but only once every mounted table's data is
+/// durable in runs). Called before any write in *this* session, so that
+/// check reflects exactly what the previous session left behind: if that
+/// session ended with everything flushed (e.g. a bulk `insert_many`
+/// followed by `Transaction::commit`'s large-batch auto-flush), this is the
+/// one moment the now-inactive segment holding that batch is actually
+/// eligible for cleanup. Without it, a short-lived process (the CLI has no
+/// daemon mode; every invocation opens cold) keeps paying to read and
+/// deserialize that segment's records on every subsequent open, even though
+/// none of them still need replaying. Errors are ignored — this is a
+/// disk-usage/reopen-latency optimization, never a correctness requirement.
+fn reap_rotated_wal_segments(db: &CoreDatabase) {
+    let _ = db.gc();
 }
 
 pub(crate) fn load_schema(path: &Path) -> Result<KitSchema> {
