@@ -486,33 +486,221 @@ fn fk_join_condition(
     })
 }
 
+/// Flatten an `Expr::And` chain into its conjuncts. A non-And expr yields a
+/// single-element vec.
+fn conjuncts(expr: &Expr) -> Vec<&Expr> {
+    match expr {
+        Expr::And(parts) => parts.iter().flat_map(conjuncts).collect(),
+        other => vec![other],
+    }
+}
+
+/// Collect every `alias.column` alias referenced in `expr`. Bare column names
+/// contribute no alias (they're ambiguous in a join context).
+fn collect_aliases(expr: &Expr, out: &mut HashSet<String>) {
+    match expr {
+        Expr::Column(name) => {
+            if let Some((alias, _)) = name.split_once('.') {
+                out.insert(alias.to_string());
+            }
+        }
+        Expr::And(parts) | Expr::Or(parts) => {
+            for p in parts {
+                collect_aliases(p, out);
+            }
+        }
+        Expr::Not(e) => collect_aliases(e, out),
+        Expr::Eq(a, b) | Expr::Ne(a, b) | Expr::Gt(a, b) | Expr::Gte(a, b) | Expr::Lt(a, b)
+        | Expr::Lte(a, b) => {
+            collect_aliases(a, out);
+            collect_aliases(b, out);
+        }
+        Expr::In(a, _) | Expr::NotIn(a, _) | Expr::Like(a, _) | Expr::Contains(a, _)
+        | Expr::IsNull(a) | Expr::IsNotNull(a) => collect_aliases(a, out),
+        Expr::InSubquery(a, _) => collect_aliases(a, out),
+        Expr::Exists(_) | Expr::NotExists(_) => {
+            out.insert("__subquery__".to_string());
+        }
+        Expr::Literal(_) => {}
+    };
+}
+
+/// If `expr` references columns from exactly one alias (all `alias.column`
+/// for the same alias), return that alias. Conjuncts with bare column names
+/// or subqueries return `None` (conservative — left as post-join residuals).
+fn single_alias(expr: &Expr) -> Option<String> {
+    let mut set = HashSet::new();
+    collect_aliases(expr, &mut set);
+    if set.len() == 1 {
+        return set.into_iter().next();
+    }
+    None
+}
+
+/// Rewrite `alias.column` → `column` in a cloned expression tree, so the
+/// conjunct can be translated against a flat table row / `translate_predicate`.
+fn strip_alias_prefix(expr: &Expr, alias: &str) -> Expr {
+    match expr {
+        Expr::Column(name) => match name.split_once('.') {
+            Some((a, col)) if a == alias => Expr::Column(col.to_string()),
+            _ => Expr::Column(name.clone()),
+        },
+        Expr::And(parts) => {
+            Expr::And(parts.iter().map(|p| strip_alias_prefix(p, alias)).collect())
+        }
+        Expr::Or(parts) => Expr::Or(parts.iter().map(|p| strip_alias_prefix(p, alias)).collect()),
+        Expr::Not(e) => Expr::Not(Box::new(strip_alias_prefix(e, alias))),
+        Expr::Eq(a, b) => Expr::Eq(
+            Box::new(strip_alias_prefix(a, alias)),
+            Box::new(strip_alias_prefix(b, alias)),
+        ),
+        Expr::Ne(a, b) => Expr::Ne(
+            Box::new(strip_alias_prefix(a, alias)),
+            Box::new(strip_alias_prefix(b, alias)),
+        ),
+        Expr::Gt(a, b) => Expr::Gt(
+            Box::new(strip_alias_prefix(a, alias)),
+            Box::new(strip_alias_prefix(b, alias)),
+        ),
+        Expr::Gte(a, b) => Expr::Gte(
+            Box::new(strip_alias_prefix(a, alias)),
+            Box::new(strip_alias_prefix(b, alias)),
+        ),
+        Expr::Lt(a, b) => Expr::Lt(
+            Box::new(strip_alias_prefix(a, alias)),
+            Box::new(strip_alias_prefix(b, alias)),
+        ),
+        Expr::Lte(a, b) => Expr::Lte(
+            Box::new(strip_alias_prefix(a, alias)),
+            Box::new(strip_alias_prefix(b, alias)),
+        ),
+        Expr::In(a, list) => Expr::In(Box::new(strip_alias_prefix(a, alias)), list.clone()),
+        Expr::NotIn(a, list) => Expr::NotIn(Box::new(strip_alias_prefix(a, alias)), list.clone()),
+        Expr::IsNull(a) => Expr::IsNull(Box::new(strip_alias_prefix(a, alias))),
+        Expr::IsNotNull(a) => Expr::IsNotNull(Box::new(strip_alias_prefix(a, alias))),
+        Expr::Like(a, pat) => Expr::Like(Box::new(strip_alias_prefix(a, alias)), pat.clone()),
+        Expr::Contains(a, needle) => {
+            Expr::Contains(Box::new(strip_alias_prefix(a, alias)), needle.clone())
+        }
+        Expr::InSubquery(a, sub) => Expr::InSubquery(
+            Box::new(strip_alias_prefix(a, alias)),
+            sub.clone(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Split a join filter into per-alias groups. Returns:
+/// - `side_filters`: conjuncts pushable to a single alias (stripped of prefix).
+/// - `residual`: conjuncts that span multiple aliases (or have bare refs /
+///   subqueries) — must be evaluated post-join.
+fn split_join_filter(
+    filter: Option<&Expr>,
+) -> (
+    HashMap<String, Vec<Expr>>,
+    Vec<&Expr>,
+) {
+    let mut side_filters: HashMap<String, Vec<Expr>> = HashMap::new();
+    let mut residual: Vec<&Expr> = Vec::new();
+    let parts = match filter {
+        Some(f) => conjuncts(f),
+        None => return (side_filters, residual),
+    };
+    for c in parts {
+        match single_alias(c) {
+            Some(alias) => {
+                let stripped = strip_alias_prefix(c, &alias);
+                side_filters.entry(alias).or_default().push(stripped);
+            }
+            None => residual.push(c),
+        }
+    }
+    (side_filters, residual)
+}
+
+/// Translate a group of stripped conjuncts for `table` into native Conditions
+/// (for engine pushdown). Returns the combined conditions (may be partial —
+/// the caller should still re-evaluate the conjuncts in Rust).
+fn side_conditions(ctx: &ExecCtx, table: &str, conjuncts: &[Expr]) -> Vec<Condition> {
+    let Some(t) = ctx.table_def(table) else {
+        return Vec::new();
+    };
+    conjuncts
+        .iter()
+        .filter_map(|c| crate::pushdown::translate_predicate(t, c))
+        .flat_map(|p| p.conditions)
+        .collect()
+}
+
+/// Apply a group of stripped conjuncts in Rust against a flat row.
+fn passes_side_filter(conjuncts: &[Expr], row: &Map<String, Value>, ctx: &ExecCtx) -> Result<bool> {
+    if conjuncts.is_empty() {
+        return Ok(true);
+    }
+    let scope = FlatScope(row);
+    for c in conjuncts {
+        if !eval_pred(c, &scope, ctx)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub(crate) fn run_join(ctx: &ExecCtx, query: &JoinQuery) -> Result<Vec<JoinRow>> {
     let base_alias = query.alias.clone().unwrap_or_else(|| query.table.clone());
-    let mut acc: Vec<JoinRow> = ctx
-        .table_rows(&query.table)?
-        .into_iter()
-        .map(|r| {
+
+    // P5: split the post-join filter into per-alias groups. Single-alias
+    // conjuncts are pushed to the engine (via Conditions) AND re-applied in
+    // Rust on the fetched rows; multi-alias conjuncts stay as post-join
+    // residuals. This avoids materializing rows that the filter would drop.
+    let (side_filters, residual) = split_join_filter(query.filter.as_ref());
+
+    // ── base side ─────────────────────────────────────────────────────────
+    let base_conjuncts = side_filters.get(&base_alias).cloned().unwrap_or_default();
+    let base_conds = side_conditions(ctx, &query.table, &base_conjuncts);
+    let base_rows = if base_conds.is_empty() {
+        ctx.table_rows(&query.table)?
+    } else {
+        ctx.table_rows_filtered(&query.table, &base_conds)?
+    };
+    let mut acc: Vec<JoinRow> = Vec::with_capacity(base_rows.len());
+    for r in base_rows {
+        if passes_side_filter(&base_conjuncts, &r.values, ctx)? {
             let mut m = Map::new();
             m.insert(base_alias.clone(), Value::Object(r.values));
-            m
-        })
-        .collect();
+            acc.push(m);
+        }
+    }
 
     for join in &query.joins {
         let right_alias = join.alias.clone().unwrap_or_else(|| join.table.clone());
+        // P5: push right-side filter conjuncts alongside the FK-equality probe.
+        let right_conjuncts = side_filters.get(&right_alias).cloned().unwrap_or_default();
+        let mut right_conds = side_conditions(ctx, &join.table, &right_conjuncts);
         // For an FK-equality ON with a bitmap-indexed right column, probe the
         // right table by `BitmapIn` over the accumulated left keys instead of a
         // full scan; otherwise fall back to the full scan.
-        let right_rows = match (join.kind, join.on.as_ref()) {
-            (JoinKind::Cross, _) | (_, None) => ctx.table_rows(&join.table)?,
-            (_, Some(on)) => match ctx
+        let fk_cond = match (join.kind, join.on.as_ref()) {
+            (JoinKind::Cross, _) | (_, None) => None,
+            (_, Some(on)) => ctx
                 .table_def(&join.table)
-                .and_then(|t| fk_join_condition(t, &right_alias, on, &acc))
-            {
-                Some(cond) => ctx.table_rows_filtered(&join.table, &[cond])?,
-                None => ctx.table_rows(&join.table)?,
-            },
+                .and_then(|t| fk_join_condition(t, &right_alias, on, &acc)),
         };
+        if let Some(c) = fk_cond {
+            right_conds.push(c);
+        }
+        let right_rows_fetched = if right_conds.is_empty() {
+            ctx.table_rows(&join.table)?
+        } else {
+            ctx.table_rows_filtered(&join.table, &right_conds)?
+        };
+        // Apply right-side conjuncts in Rust (handles partial translation).
+        let mut right_rows: Vec<Row> = Vec::with_capacity(right_rows_fetched.len());
+        for r in right_rows_fetched {
+            if passes_side_filter(&right_conjuncts, &r.values, ctx)? {
+                right_rows.push(r);
+            }
+        }
         let mut next = Vec::new();
         for left in acc {
             let mut matched = false;
@@ -540,10 +728,14 @@ pub(crate) fn run_join(ctx: &ExecCtx, query: &JoinQuery) -> Result<Vec<JoinRow>>
         acc = next;
     }
 
-    if let Some(filter) = &query.filter {
+    // P5: only multi-alias conjuncts remain as post-join residuals.
+    if !residual.is_empty() {
         let mut kept = Vec::with_capacity(acc.len());
         for row in acc {
-            if eval_pred(filter, &JoinScope(&row), ctx)? {
+            let ok = residual.iter().try_fold(true, |acc, c| {
+                eval_pred(c, &JoinScope(&row), ctx).map(|v| acc && v)
+            })?;
+            if ok {
                 kept.push(row);
             }
         }
