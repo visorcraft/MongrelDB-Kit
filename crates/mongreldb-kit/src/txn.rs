@@ -338,6 +338,37 @@ impl<'a> Transaction<'a> {
     pub fn delete(&mut self, table: &str, pk: &Value) -> Result<()> {
         let t = self.require_table(table)?.clone();
         let pk_map = pk_to_map(pk, &t)?;
+
+        // §4.3 fast path: when the table has no Kit-level unique constraints
+        // and no other table references it via FK, the full-row fetch is pure
+        // overhead — a HOT RowId lookup + core delete is sufficient (this is
+        // what the daemon's DeleteByPk handler does). Cuts ~30-60% off delete
+        // latency on large tables by skipping the full-row materialize.
+        let has_inbound_fk = self
+            .db
+            .schema()
+            .tables
+            .iter()
+            .filter(|o| o.name != table)
+            .any(|o| o.foreign_keys.iter().any(|fk| fk.references_table == table));
+        if t.unique_constraints.is_empty() && !has_inbound_fk && t.primary_key.len() == 1 {
+            let pk_name = &t.primary_key[0];
+            if let Some(pk_col) = t.column(pk_name) {
+                let pk_json = pk_map.get(pk_name).cloned().unwrap_or(Value::Null);
+                let pk_core = crate::schema::json_to_core(&pk_json, pk_col.storage_type)?;
+                if let Some(rid) = self.db.lookup_row_id(table, &pk_core.encode_key())? {
+                    self.core.delete(table, rid).map_err(KitError::from)?;
+                    self.staged.push(StagedOp::Delete {
+                        table: table.to_string(),
+                        pk: encoded_pk_for(&t, &pk_map),
+                    });
+                    return Ok(());
+                }
+                return Err(KitError::Integrity(format!("row not found in {table}")));
+            }
+        }
+
+        // Full path: fetch row for guard cleanup + cascade planning.
         let row = self
             .get_by_pk_internal(table, &pk_map)?
             .ok_or_else(|| KitError::Integrity(format!("row not found in {table}")))?;

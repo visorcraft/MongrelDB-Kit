@@ -8,7 +8,7 @@ use mongreldb_core::memtable::Row as CoreRow;
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::Schema as CoreSchema;
 use mongreldb_core::Database as CoreDatabase;
-use mongreldb_core::{AggState, ApproxAgg, NativeAgg, NativeAggResult};
+use mongreldb_core::{AggState, ApproxAgg, NativeAgg, NativeAggResult, RowId};
 use mongreldb_kit_core::schema::IndexKind as KitIndexKind;
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
@@ -830,6 +830,16 @@ impl Database {
 
     pub(crate) fn core_db(&self) -> &CoreDatabase {
         &self.inner
+    }
+
+    /// Direct HOT (PK → RowId) lookup via the core engine — no full-row
+    /// materialization. Used by the §4.3 delete fast path when the table
+    /// has no Kit-level constraints requiring guard cleanup.
+    pub(crate) fn lookup_row_id(&self, table: &str, key: &[u8]) -> Result<Option<RowId>> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let mut guard = handle.lock();
+        guard.ensure_indexes_complete()?;
+        Ok(guard.lookup_pk(key))
     }
 
     pub(crate) fn root(&self) -> &Path {
