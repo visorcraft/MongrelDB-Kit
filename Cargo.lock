@@ -806,7 +806,7 @@ name = "conformance-runner"
 version = "0.1.0"
 dependencies = [
  "axum",
- "mongreldb-core 0.19.5",
+ "mongreldb-core",
  "mongreldb-kit",
  "mongreldb-server",
  "serde",
@@ -2629,35 +2629,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.19.4"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.19.4#25c0a077282fd33d0232ec2b75b3eced7de656ea"
-dependencies = [
- "aes-gcm",
- "arc-swap",
- "argon2",
- "bincode",
- "bytemuck",
- "bytes",
- "crc",
- "getrandom 0.2.17",
- "hkdf",
- "hmac",
- "lz4_flex 0.11.6",
- "memmap2",
- "parking_lot",
- "rayon",
- "roaring",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 1.0.69",
- "zeroize",
- "zstd",
-]
-
-[[package]]
-name = "mongreldb-core"
-version = "0.19.5"
+version = "0.20.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.20.0#51d4262d66832ae9b6f00104fe61b6e0036bbfdb"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2688,7 +2661,7 @@ version = "0.7.3"
 dependencies = [
  "arrow",
  "bincode",
- "mongreldb-core 0.19.5",
+ "mongreldb-core",
  "mongreldb-kit-core",
  "parking_lot",
  "regex",
@@ -2741,14 +2714,14 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-query"
-version = "0.19.4"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.19.4#25c0a077282fd33d0232ec2b75b3eced7de656ea"
+version = "0.20.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.20.0#51d4262d66832ae9b6f00104fe61b6e0036bbfdb"
 dependencies = [
  "arrow",
  "async-trait",
  "datafusion",
  "futures",
- "mongreldb-core 0.19.4",
+ "mongreldb-core",
  "parking_lot",
  "serde_json",
  "sqlparser",
@@ -2758,12 +2731,12 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-server"
-version = "0.19.4"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.19.4#25c0a077282fd33d0232ec2b75b3eced7de656ea"
+version = "0.20.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.20.0#51d4262d66832ae9b6f00104fe61b6e0036bbfdb"
 dependencies = [
  "arrow",
  "axum",
- "mongreldb-core 0.19.4",
+ "mongreldb-core",
  "mongreldb-query",
  "serde",
  "serde_json",

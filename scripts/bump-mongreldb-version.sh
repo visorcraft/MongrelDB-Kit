@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Point MongrelDB Kit at a different MongrelDB engine release: the dev-only
 # [patch.crates-io] git tag (root Cargo.toml), the mongreldb-core version
-# constraint in crates/mongreldb-kit/Cargo.toml, and the mongreldb-server git
-# tag used by the Rust conformance runner. Then regenerates Cargo.lock.
+# constraint in crates/mongreldb-kit/Cargo.toml, the mongreldb-core version
+# constraint in tests/conformance/rust/Cargo.toml, and the mongreldb-server
+# git tag used by the Rust conformance runner. Then regenerates Cargo.lock.
 #
 # Usage: scripts/bump-mongreldb-version.sh NEW_VERSION
 # Example: scripts/bump-mongreldb-version.sh 0.19.5
@@ -12,9 +13,17 @@
 # you want the kit to build against it; the tag must already exist upstream
 # (the `cargo check` below fails clearly if it doesn't).
 #
-# The loose `mongreldb-core = "0.19.0"` range in
-# tests/conformance/rust/Cargo.toml is left alone deliberately -- it already
-# permits any 0.19.x, and tightening it isn't required for this to work.
+# tests/conformance/rust/Cargo.toml's bare `mongreldb-core = "X.Y.Z"` used to
+# be left as a loose "0.19.0" range on the theory that it "already permits
+# any 0.19.x". That's true within a minor version, but Cargo's default caret
+# match on a 0.x version (`^0.19.0` = `>=0.19.0, <0.20.0`) stops matching the
+# moment the engine crosses a minor bump -- at that point `[patch.crates-io]`
+# can't satisfy this one caller (the patch source's own version is outside
+# its range), so Cargo falls back to whatever's newest on crates.io within
+# 0.19.x instead, landing two different mongreldb-core sources in the same
+# build (`error[E0308]: mismatched types` / "multiple different versions of
+# crate mongreldb_core"). Pin it to the exact version instead, same as the
+# other two references, so it can never silently drift out of range again.
 #
 # This does NOT rebuild the sibling MongrelDB repo's Node addon that
 # packages/kit/node_modules/@visorcraft/mongreldb symlinks to. After running
@@ -41,6 +50,8 @@ sed -i "s/tag = \"v$OLD\"/tag = \"v$NEW\"/" Cargo.toml
 sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$NEW\"/" \
   crates/mongreldb-kit/Cargo.toml
 sed -i "s/tag = \"v$OLD\"/tag = \"v$NEW\"/" tests/conformance/rust/Cargo.toml
+sed -i "s/mongreldb-core = \"[0-9.]*\"/mongreldb-core = \"$NEW\"/" \
+  tests/conformance/rust/Cargo.toml
 
 echo "Regenerating lockfile (fetches mongreldb-core from the git tag)..."
 cargo check --workspace >/dev/null
