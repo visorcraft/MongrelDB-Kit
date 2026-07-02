@@ -82,12 +82,48 @@ fn setup() -> Database {
     let dir = temp_dir();
     let schema = Schema::new(vec![users_table(), orders_table()]).unwrap();
     let db = Database::create(&dir, schema).unwrap();
-    insert(&db, "users", &[("id", json!(1)), ("email", json!("a@x.com"))]);
-    insert(&db, "users", &[("id", json!(2)), ("email", json!("b@x.com"))]);
-    insert(&db, "users", &[("id", json!(3)), ("email", json!("c@x.com"))]);
-    insert(&db, "orders", &[("id", json!(1)), ("user_id", json!(1)), ("total", json!(10.0))]);
-    insert(&db, "orders", &[("id", json!(2)), ("user_id", json!(1)), ("total", json!(30.0))]);
-    insert(&db, "orders", &[("id", json!(3)), ("user_id", json!(2)), ("total", json!(50.0))]);
+    insert(
+        &db,
+        "users",
+        &[("id", json!(1)), ("email", json!("a@x.com"))],
+    );
+    insert(
+        &db,
+        "users",
+        &[("id", json!(2)), ("email", json!("b@x.com"))],
+    );
+    insert(
+        &db,
+        "users",
+        &[("id", json!(3)), ("email", json!("c@x.com"))],
+    );
+    insert(
+        &db,
+        "orders",
+        &[
+            ("id", json!(1)),
+            ("user_id", json!(1)),
+            ("total", json!(10.0)),
+        ],
+    );
+    insert(
+        &db,
+        "orders",
+        &[
+            ("id", json!(2)),
+            ("user_id", json!(1)),
+            ("total", json!(30.0)),
+        ],
+    );
+    insert(
+        &db,
+        "orders",
+        &[
+            ("id", json!(3)),
+            ("user_id", json!(2)),
+            ("total", json!(50.0)),
+        ],
+    );
     db
 }
 
@@ -116,7 +152,9 @@ fn join_base_side_filter_pushdown() {
     let txn = db.begin().unwrap();
     let q = join_query(Some(Expr::Eq(
         Box::new(col("u.email")),
-        Box::new(Expr::Literal(mongreldb_kit::Literal::Text("b@x.com".into()))),
+        Box::new(Expr::Literal(mongreldb_kit::Literal::Text(
+            "b@x.com".into(),
+        ))),
     )));
     let rows = txn.join(&q).unwrap();
     assert_eq!(rows.len(), 1);
@@ -151,7 +189,9 @@ fn join_mixed_filter_splits_correctly() {
         ),
         Expr::Eq(
             Box::new(col("u.email")),
-            Box::new(Expr::Literal(mongreldb_kit::Literal::Text("a@x.com".into()))),
+            Box::new(Expr::Literal(mongreldb_kit::Literal::Text(
+                "a@x.com".into(),
+            ))),
         ),
     ])));
     let rows = txn.join(&q).unwrap();
@@ -168,7 +208,9 @@ fn join_bare_column_filter_stays_residual() {
     let txn = db.begin().unwrap();
     let q = join_query(Some(Expr::Eq(
         Box::new(col("email")), // bare — no alias
-        Box::new(Expr::Literal(mongreldb_kit::Literal::Text("c@x.com".into()))),
+        Box::new(Expr::Literal(mongreldb_kit::Literal::Text(
+            "c@x.com".into(),
+        ))),
     )));
     let rows = txn.join(&q).unwrap();
     // user c@x.com has no orders → inner join returns 0 rows.

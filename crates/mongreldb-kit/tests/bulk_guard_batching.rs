@@ -4,7 +4,7 @@
 //! of re-scanning the guard tables for every row.
 
 use mongreldb_kit::{
-    AggregateQuery, Aggregate as Agg, AggFunc, Column, ColumnType, Database, ForeignKey, KitError,
+    AggFunc, Aggregate as Agg, AggregateQuery, Column, ColumnType, Database, ForeignKey, KitError,
     Schema, Table, UniqueConstraint,
 };
 use serde_json::{json, Map, Value};
@@ -75,8 +75,11 @@ fn bulk_insert_detects_committed_unique_conflict() {
     let db = db_with_users_and_orders();
 
     let mut txn = db.begin().unwrap();
-    txn.insert("users", row(&[("id", json!(1)), ("email", json!("a@x.com"))]))
-        .unwrap();
+    txn.insert(
+        "users",
+        row(&[("id", json!(1)), ("email", json!("a@x.com"))]),
+    )
+    .unwrap();
     txn.commit().unwrap();
 
     let mut txn = db.begin().unwrap();
@@ -148,8 +151,11 @@ fn bulk_insert_fk_rejects_missing_parent() {
     let db = db_with_users_and_orders();
 
     let mut txn = db.begin().unwrap();
-    txn.insert("users", row(&[("id", json!(1)), ("email", json!("a@x.com"))]))
-        .unwrap();
+    txn.insert(
+        "users",
+        row(&[("id", json!(1)), ("email", json!("a@x.com"))]),
+    )
+    .unwrap();
     txn.commit().unwrap();
 
     let mut txn = db.begin().unwrap();
@@ -157,7 +163,7 @@ fn bulk_insert_fk_rejects_missing_parent() {
         .insert_many(
             "orders",
             vec![
-                row(&[("id", json!(1)), ("user_id", json!(1))]),  // ok
+                row(&[("id", json!(1)), ("user_id", json!(1))]), // ok
                 row(&[("id", json!(2)), ("user_id", json!(99))]), // missing parent
             ],
         )
@@ -172,8 +178,11 @@ fn bulk_insert_fk_repeated_parent_succeeds() {
     let db = db_with_users_and_orders();
 
     let mut txn = db.begin().unwrap();
-    txn.insert("users", row(&[("id", json!(1)), ("email", json!("a@x.com"))]))
-        .unwrap();
+    txn.insert(
+        "users",
+        row(&[("id", json!(1)), ("email", json!("a@x.com"))]),
+    )
+    .unwrap();
     txn.commit().unwrap();
 
     let mut txn = db.begin().unwrap();

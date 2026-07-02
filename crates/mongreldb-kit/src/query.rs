@@ -510,13 +510,21 @@ fn collect_aliases(expr: &Expr, out: &mut HashSet<String>) {
             }
         }
         Expr::Not(e) => collect_aliases(e, out),
-        Expr::Eq(a, b) | Expr::Ne(a, b) | Expr::Gt(a, b) | Expr::Gte(a, b) | Expr::Lt(a, b)
+        Expr::Eq(a, b)
+        | Expr::Ne(a, b)
+        | Expr::Gt(a, b)
+        | Expr::Gte(a, b)
+        | Expr::Lt(a, b)
         | Expr::Lte(a, b) => {
             collect_aliases(a, out);
             collect_aliases(b, out);
         }
-        Expr::In(a, _) | Expr::NotIn(a, _) | Expr::Like(a, _) | Expr::Contains(a, _)
-        | Expr::IsNull(a) | Expr::IsNotNull(a) => collect_aliases(a, out),
+        Expr::In(a, _)
+        | Expr::NotIn(a, _)
+        | Expr::Like(a, _)
+        | Expr::Contains(a, _)
+        | Expr::IsNull(a)
+        | Expr::IsNotNull(a) => collect_aliases(a, out),
         Expr::InSubquery(a, _) => collect_aliases(a, out),
         Expr::Exists(_) | Expr::NotExists(_) => {
             out.insert("__subquery__".to_string());
@@ -545,9 +553,7 @@ fn strip_alias_prefix(expr: &Expr, alias: &str) -> Expr {
             Some((a, col)) if a == alias => Expr::Column(col.to_string()),
             _ => Expr::Column(name.clone()),
         },
-        Expr::And(parts) => {
-            Expr::And(parts.iter().map(|p| strip_alias_prefix(p, alias)).collect())
-        }
+        Expr::And(parts) => Expr::And(parts.iter().map(|p| strip_alias_prefix(p, alias)).collect()),
         Expr::Or(parts) => Expr::Or(parts.iter().map(|p| strip_alias_prefix(p, alias)).collect()),
         Expr::Not(e) => Expr::Not(Box::new(strip_alias_prefix(e, alias))),
         Expr::Eq(a, b) => Expr::Eq(
@@ -582,10 +588,9 @@ fn strip_alias_prefix(expr: &Expr, alias: &str) -> Expr {
         Expr::Contains(a, needle) => {
             Expr::Contains(Box::new(strip_alias_prefix(a, alias)), needle.clone())
         }
-        Expr::InSubquery(a, sub) => Expr::InSubquery(
-            Box::new(strip_alias_prefix(a, alias)),
-            sub.clone(),
-        ),
+        Expr::InSubquery(a, sub) => {
+            Expr::InSubquery(Box::new(strip_alias_prefix(a, alias)), sub.clone())
+        }
         other => other.clone(),
     }
 }
@@ -594,12 +599,7 @@ fn strip_alias_prefix(expr: &Expr, alias: &str) -> Expr {
 /// - `side_filters`: conjuncts pushable to a single alias (stripped of prefix).
 /// - `residual`: conjuncts that span multiple aliases (or have bare refs /
 ///   subqueries) — must be evaluated post-join.
-fn split_join_filter(
-    filter: Option<&Expr>,
-) -> (
-    HashMap<String, Vec<Expr>>,
-    Vec<&Expr>,
-) {
+fn split_join_filter(filter: Option<&Expr>) -> (HashMap<String, Vec<Expr>>, Vec<&Expr>) {
     let mut side_filters: HashMap<String, Vec<Expr>> = HashMap::new();
     let mut residual: Vec<&Expr> = Vec::new();
     let parts = match filter {
