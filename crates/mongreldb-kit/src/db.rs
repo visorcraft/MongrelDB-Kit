@@ -832,6 +832,14 @@ impl Database {
         &self.inner
     }
 
+    /// Best-effort flush-on-close (§4.4): force-flush pending writes on every
+    /// table to `.sr` sorted runs so WAL segments stay bounded across repeated
+    /// short-lived process invocations (e.g. the CLI). Call as the last action
+    /// before exit. The daemon does not need this (auto-compactor handles it).
+    pub fn close(&self) -> Result<()> {
+        self.inner.close().map_err(KitError::from)
+    }
+
     /// Direct HOT (PK → RowId) lookup via the core engine — no full-row
     /// materialization. Used by the §4.3 delete fast path when the table
     /// has no Kit-level constraints requiring guard cleanup.

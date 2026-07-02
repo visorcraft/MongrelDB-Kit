@@ -390,6 +390,7 @@ fn cmd_truncate(path: &Path, table: &str) -> Result<()> {
     txn.truncate(table)
         .context(format!("failed to truncate {table}"))?;
     txn.commit().context("failed to commit transaction")?;
+    let _ = db.close(); // §4.4: flush-on-close
     println!("table {table} truncated");
     Ok(())
 }
@@ -557,6 +558,7 @@ fn cmd_insert(path: &Path, table: &str, row: &str) -> Result<()> {
         .insert(table, parse_object(row, "row")?)
         .context(format!("failed to insert into {table}"))?;
     txn.commit().context("failed to commit transaction")?;
+    let _ = db.close(); // §4.4: flush-on-close
     println!(
         "{}",
         serde_json::to_string_pretty(&Value::Object(inserted.values))?
@@ -571,6 +573,7 @@ fn cmd_update(path: &Path, table: &str, pk: &str, patch: &str) -> Result<()> {
         .update(table, &parse_scalar(pk), parse_object(patch, "patch")?)
         .context(format!("failed to update {table}"))?;
     txn.commit().context("failed to commit transaction")?;
+    let _ = db.close(); // §4.4: flush-on-close
     println!(
         "{}",
         serde_json::to_string_pretty(&Value::Object(updated.values))?
@@ -584,6 +587,7 @@ fn cmd_delete(path: &Path, table: &str, pk: &str) -> Result<()> {
     txn.delete(table, &parse_scalar(pk))
         .context(format!("failed to delete from {table}"))?;
     txn.commit().context("failed to commit transaction")?;
+    let _ = db.close(); // §4.4: flush-on-close
     println!("deleted");
     Ok(())
 }
@@ -602,6 +606,7 @@ fn cmd_upsert(path: &Path, table: &str, row: &str, update: bool) -> Result<()> {
         .upsert(table, row_map, on_conflict, returning)
         .context(format!("failed to upsert into {table}"))?;
     txn.commit().context("failed to commit transaction")?;
+    let _ = db.close(); // §4.4: flush-on-close
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }
@@ -1285,6 +1290,7 @@ fn cmd_fixture_create(path: &Path, tables: &[String]) -> Result<()> {
         out.insert(name.clone(), Value::Array(values));
     }
     txn.commit().context("failed to commit transaction")?;
+    let _ = db.close(); // §4.4: flush-on-close
 
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
@@ -1313,6 +1319,7 @@ fn cmd_fixture_load(path: &Path, fixture_path: &Path) -> Result<()> {
         }
     }
     txn.commit().context("failed to commit transaction")?;
+    let _ = db.close(); // §4.4: flush-on-close
     println!("loaded {}", fixture_path.display());
     Ok(())
 }
