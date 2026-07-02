@@ -1,11 +1,21 @@
-# Publishes @visorcraft/mongreldb-kit to npm on a version tag.
+# Publishes @visorcraft/mongreldb-kit to npm, and mongreldb-kit-core +
+# mongreldb-kit to crates.io, on a version tag.
 #
-# Order matters: publish the engine (@visorcraft/mongreldb) FIRST, because this
-# job installs it from npm to satisfy the peer dependency and typecheck/build.
-# Cut a kit release by pushing a tag, e.g. `git tag v0.7.0 && git push --tags`.
+# Order matters: publish the engine (@visorcraft/mongreldb / mongreldb-core)
+# FIRST, in the MongrelDB repo — the npm job installs it from the registry to
+# satisfy the peer dependency and typecheck/build, and the crates.io job
+# resolves mongreldb-core = "x.y.z" from the registry once the path dep is
+# stripped at publish time. Cut a kit release by pushing a tag, e.g.
+# `git tag v0.7.0 && git push --tags`.
 #
-# Requires repo secret NPM_TOKEN: a granular npm access token with
-# write access to the @visorcraft scope.
+# mongreldb-kit-cli and mongreldb-kit-python are not published here:
+# mongreldb-kit-cli has never been published (a first publish is a separate,
+# deliberate decision); mongreldb-kit-python is a PyO3 cdylib meant for PyPI
+# via maturin, not crates.io.
+#
+# Requires repo secrets:
+#   NPM_TOKEN            — granular npm access token, write access to @visorcraft
+#   CARGO_REGISTRY_TOKEN — crates.io API token, publish scope
 name: Release
 
 on:
@@ -47,3 +57,23 @@ jobs:
       - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-crates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # mongreldb-kit depends on mongreldb-kit-core by path+version; crates.io
+      # publish strips the path, so mongreldb-kit-core must already be live on
+      # the registry before mongreldb-kit's publish can resolve it.
+      - run: cargo publish -p mongreldb-kit-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - run: cargo publish -p mongreldb-kit
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

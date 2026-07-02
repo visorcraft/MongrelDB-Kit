@@ -14,7 +14,7 @@ tempfile = "3"
 # and not on crates.io); unified with the kit's mongreldb-core via the workspace
 # [patch.crates-io]. These are regular deps because `src/remote.rs` is library
 # code (dev-dependencies are not visible to a crate's own lib).
-mongreldb-server = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.19.2" }
+mongreldb-server = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.19.4" }
 mongreldb-core = "0.19.0"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 axum = "0.8"

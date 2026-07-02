@@ -936,7 +936,7 @@ impl Database {
         snapshot: Snapshot,
     ) -> Result<Option<u64>> {
         let handle = self.inner.table(table_name).map_err(KitError::from)?;
-        let guard = handle.lock();
+        let mut guard = handle.lock();
         if guard.snapshot().epoch != snapshot.epoch {
             return Ok(None); // stale read snapshot ⇒ caller scans
         }
