@@ -12,12 +12,17 @@ path = "src/main.rs"
 name = "seed"
 path = "src/seed.rs"
 
+[[bin]]
+name = "bench-daemon"
+path = "src/bench_daemon.rs"
+
 [dependencies]
 mongreldb-core = { version = "0.20.0" }
 mongreldb-kit = { path = "../mongreldb-kit", version = "0.8.0" }
 serde_json = { version = "1", features = ["preserve_order"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = "3"
+ureq = "2"
 
 # Standalone crate (rusqlite's bundled build is a heavy C compile) — not a
 # workspace member, mirrors mongreldb-perf in the engine repo.
