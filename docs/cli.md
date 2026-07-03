@@ -39,6 +39,7 @@ the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 | `fixture create <path> <tables...>` | Dump selected table rows to JSON |
 | `fixture load <path> <fixture.json>` | Load rows from a JSON fixture |
 | `truncate <path> <table>` | Remove all rows from a table |
+| `compact <path>` | Merge all tables' sorted runs into one (maintenance) |
 
 `mongreldb-kit --help` and `mongreldb-kit <command> --help` print the same
 information at the terminal.
@@ -76,6 +77,22 @@ mongreldb-kit doctor ./store.kitdb
 # [ok] 0 applied migration(s)
 # doctor: no problems found
 ```
+
+## compact
+
+Merge every table's sorted runs into a single clean run so query latency
+stays flat. Tables with fewer than two runs are skipped. Safe to run at
+any time — readers pin their own snapshot and are unaffected.
+
+```sh
+mongreldb-kit compact ./store.kitdb
+# compacted 3 table(s), skipped 1
+```
+
+This is the recommended cron-job entry for non-daemon deployments. For
+daemon deployments, the background auto-compactor (every 30s) already
+handles this. See the engine's [Maintenance & Operations](https://github.com/visorcraft/MongrelDB/blob/main/docs/09-maintenance.md)
+doc for details.
 
 ## schema print
 
