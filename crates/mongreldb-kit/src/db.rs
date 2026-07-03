@@ -840,6 +840,20 @@ impl Database {
         self.inner.close().map_err(KitError::from)
     }
 
+    /// Compact all tables: merge sorted runs into one clean run each so query
+    /// latency stays flat. Returns `(compacted, skipped)`. Safe to run at any
+    /// time — honors snapshot retention. The daemon's background auto-compactor
+    /// already does this periodically; this is for manual/cron use.
+    pub fn compact_all(&self) -> Result<(usize, usize)> {
+        self.inner.compact().map_err(KitError::from)
+    }
+
+    /// Compact a single table by name. Returns `true` if compacted, `false` if
+    /// skipped (< 2 runs).
+    pub fn compact_table(&self, name: &str) -> Result<bool> {
+        self.inner.compact_table(name).map_err(KitError::from)
+    }
+
     /// Direct HOT (PK → RowId) lookup via the core engine — no full-row
     /// materialization. Used by the §4.3 delete fast path when the table
     /// has no Kit-level constraints requiring guard cleanup.

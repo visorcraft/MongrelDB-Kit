@@ -355,6 +355,18 @@ impl PyDatabase {
         self.require_db()?.flush().map_err(map_err)
     }
 
+    /// Compact every table's sorted runs into one clean run so query latency
+    /// stays flat. Returns `(compacted, skipped)`. Safe at any time.
+    fn compact_all(&self) -> PyResult<(usize, usize)> {
+        self.require_db()?.compact_all().map_err(map_err)
+    }
+
+    /// Compact a single table by name. Returns `True` if compacted, `False`
+    /// if skipped (fewer than 2 runs).
+    fn compact_table(&self, name: &str) -> PyResult<bool> {
+        self.require_db()?.compact_table(name).map_err(map_err)
+    }
+
     /// Incrementally-maintained aggregate (`count`/`sum`/`min`/`max`/`avg`) over
     /// `table`, optionally filtered by the friendly `filter` object (which must
     /// translate exactly to index conditions). Returns a dict

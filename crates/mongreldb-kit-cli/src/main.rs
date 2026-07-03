@@ -225,6 +225,8 @@ enum Command {
     /// Fixture commands.
     #[command(subcommand)]
     Fixture(FixtureCmd),
+    /// Compact all tables — merge sorted runs into one for flat query latency.
+    Compact { path: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -338,6 +340,7 @@ fn main() -> Result<()> {
             FixtureCmd::Create { path, tables } => cmd_fixture_create(&path, &tables),
             FixtureCmd::Load { path, fixture } => cmd_fixture_load(&path, &fixture),
         },
+        Command::Compact { path } => cmd_compact(&path),
     }
 }
 
@@ -353,6 +356,13 @@ fn cmd_check(path: &Path) -> Result<()> {
     db.check_internal_tables()
         .context("internal table check failed")?;
     println!("OK: {}", path.display());
+    Ok(())
+}
+
+fn cmd_compact(path: &Path) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let (compacted, skipped) = db.compact_all().context("compaction failed")?;
+    println!("compacted {compacted} table(s), skipped {skipped}");
     Ok(())
 }
 

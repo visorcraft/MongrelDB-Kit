@@ -405,6 +405,18 @@ export class KitDatabase {
 		}
 	}
 
+	/** Compact every table: merge sorted runs into one clean run each so
+	 * query latency stays flat. Returns `{compacted, skipped}`. */
+	compactAll(): { compacted: number; skipped: number } {
+		return this.db.compactAll();
+	}
+
+	/** Compact a single table by name. Returns `true` if compacted, `false`
+	 * if skipped (fewer than two runs). */
+	compactTable(table: string): boolean {
+		return this.db.compactTable(table);
+	}
+
 	/** The current visible commit epoch (monotonically increasing version). */
 	snapshotEpoch(): bigint {
 		return this.db.snapshotEpoch();
