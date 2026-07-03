@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::error::{KitError, Result};
+use mongreldb_kit_core::ProcedureSpec;
 
 const EC_UNIQUE: &str = "UNIQUE_VIOLATION";
 const EC_FK: &str = "FK_VIOLATION";
@@ -142,6 +143,46 @@ impl RemoteDatabase {
 
     pub fn table_names(&self) -> Vec<String> {
         self.schemas.keys().cloned().collect()
+    }
+
+    pub fn create_procedure(&self, spec: &ProcedureSpec) -> Result<Value> {
+        let resp = self
+            .client
+            .post(self.url("/procedures"))
+            .json(&json!({ "procedure": spec.json }))
+            .send()
+            .map_err(ioe)?;
+        decode(resp)
+    }
+
+    pub fn replace_procedure(&self, name: &str, spec: &ProcedureSpec) -> Result<Value> {
+        let resp = self
+            .client
+            .put(self.url(&format!("/procedures/{name}")))
+            .json(&json!({ "procedure": spec.json }))
+            .send()
+            .map_err(ioe)?;
+        decode(resp)
+    }
+
+    pub fn drop_procedure(&self, name: &str) -> Result<()> {
+        let resp = self
+            .client
+            .delete(self.url(&format!("/procedures/{name}")))
+            .send()
+            .map_err(ioe)?;
+        let _: Value = decode(resp)?;
+        Ok(())
+    }
+
+    pub fn call_procedure(&self, name: &str, args: Map<String, Value>) -> Result<Value> {
+        let resp = self
+            .client
+            .post(self.url(&format!("/kit/procedures/{name}/call")))
+            .json(&json!({ "args": args }))
+            .send()
+            .map_err(ioe)?;
+        decode(resp)
     }
 
     fn url(&self, path: &str) -> String {

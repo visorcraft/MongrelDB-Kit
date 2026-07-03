@@ -11,6 +11,7 @@ import { validateRow } from './validation.js';
 import { KIT_KEY_VERSION, encodedPk, encodeRowGuardKey, encodeUniqueKey } from './keys.js';
 
 import { KitMigrationError, KitSchemaDriftError, KitForeignKeyError } from './errors.js';
+import { procedureJson, type ProcedureSpec } from './procedure.js';
 import {
 	kitSchemaMigrations,
 	kitSchemaCatalog,
@@ -88,6 +89,9 @@ export type MigrationOp =
 	| { kind: 'dropForeignKey'; table: string; constraint: string }
 	| { kind: 'addCheck'; table: string; constraint: string }
 	| { kind: 'dropCheck'; table: string; constraint: string }
+	| { kind: 'createProcedure'; name: string; procedure: ProcedureSpec }
+	| { kind: 'replaceProcedure'; name: string; procedure: ProcedureSpec }
+	| { kind: 'dropProcedure'; name: string }
 	| { kind: 'rawSql'; sql: string };
 
 export interface Migration {
@@ -301,6 +305,12 @@ function canonicalOp(op: MigrationOp): string {
 			return `{"op":"add_check","table":${s(op.table)},"constraint":${s(op.constraint)}}`;
 		case 'dropCheck':
 			return `{"op":"drop_check","table":${s(op.table)},"constraint":${s(op.constraint)}}`;
+		case 'createProcedure':
+			return `{"op":"create_procedure","name":${s(op.name)},"procedure":${procedureJson(op.procedure)}}`;
+		case 'replaceProcedure':
+			return `{"op":"replace_procedure","name":${s(op.name)},"procedure":${procedureJson(op.procedure)}}`;
+		case 'dropProcedure':
+			return `{"op":"drop_procedure","name":${s(op.name)}}`;
 		case 'rawSql':
 			return `{"op":"raw_sql","sql":${s(op.sql)}}`;
 		default: {

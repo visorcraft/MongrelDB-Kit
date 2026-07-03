@@ -236,6 +236,39 @@ impl PyDatabase {
         Ok(self.require_db()?.snapshot_epoch())
     }
 
+    fn create_procedure(&self, procedure_json: &str) -> PyResult<String> {
+        let value: Value = serde_json::from_str(procedure_json).map_err(py_json_err)?;
+        let spec = mongreldb_kit_core::ProcedureSpec::new(value);
+        let procedure = self
+            .require_db()?
+            .create_procedure(&spec)
+            .map_err(map_err)?;
+        serde_json::to_string(&procedure).map_err(py_json_err)
+    }
+
+    fn replace_procedure(&self, procedure_json: &str) -> PyResult<String> {
+        let value: Value = serde_json::from_str(procedure_json).map_err(py_json_err)?;
+        let spec = mongreldb_kit_core::ProcedureSpec::new(value);
+        let procedure = self
+            .require_db()?
+            .replace_procedure(&spec)
+            .map_err(map_err)?;
+        serde_json::to_string(&procedure).map_err(py_json_err)
+    }
+
+    fn drop_procedure(&self, name: &str) -> PyResult<()> {
+        self.require_db()?.drop_procedure(name).map_err(map_err)
+    }
+
+    fn call_procedure(&self, name: &str, args_json: &str) -> PyResult<String> {
+        let args: Map<String, Value> = serde_json::from_str(args_json).map_err(py_json_err)?;
+        let result = self
+            .require_db()?
+            .call_procedure(name, args)
+            .map_err(map_err)?;
+        serde_json::to_string(&result).map_err(py_json_err)
+    }
+
     /// Export every visible row of `table` as a TSV document.
     fn export_tsv(&self, table: &str) -> PyResult<String> {
         self.require_db()?.export_tsv(table).map_err(map_err)

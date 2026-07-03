@@ -127,6 +127,15 @@ class RemoteDatabase:
         self.refresh()
         return int(env.get("table_id", 0))
 
+    def create_procedure(self, procedure: Dict[str, Any]) -> Dict[str, Any]:
+        return self._post_json("/procedures", {"procedure": procedure})
+
+    def drop_procedure(self, name: str) -> None:
+        self._open("DELETE", f"/procedures/{name}", body=None).close()
+
+    def call_procedure(self, name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self._post_json(f"/kit/procedures/{name}/call", {"args": args or {}})
+
     # ── HTTP plumbing ─────────────────────────────────────────────────────
 
     def _get_json(self, path: str) -> Any:

@@ -10,6 +10,7 @@ use mongreldb_kit::{
     Table,
 };
 use mongreldb_kit_core::migrations::plan_migrations;
+use mongreldb_kit_core::ProcedureSpec;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -74,6 +75,17 @@ enum CliMigrationOp {
         table: String,
         constraint: String,
     },
+    CreateProcedure {
+        name: String,
+        procedure: Value,
+    },
+    ReplaceProcedure {
+        name: String,
+        procedure: Value,
+    },
+    DropProcedure {
+        name: String,
+    },
     RawSql(String),
 }
 
@@ -109,6 +121,15 @@ impl From<CliMigrationOp> for MigrationOp {
             CliMigrationOp::DropCheck { table, constraint } => {
                 MigrationOp::DropCheck { table, constraint }
             }
+            CliMigrationOp::CreateProcedure { name, procedure } => MigrationOp::CreateProcedure {
+                name,
+                procedure: ProcedureSpec::new(procedure),
+            },
+            CliMigrationOp::ReplaceProcedure { name, procedure } => MigrationOp::ReplaceProcedure {
+                name,
+                procedure: ProcedureSpec::new(procedure),
+            },
+            CliMigrationOp::DropProcedure { name } => MigrationOp::DropProcedure { name },
             CliMigrationOp::RawSql(sql) => MigrationOp::RawSql(sql),
         }
     }
@@ -225,6 +246,9 @@ enum Command {
     /// Fixture commands.
     #[command(subcommand)]
     Fixture(FixtureCmd),
+    /// Stored procedure commands.
+    #[command(subcommand)]
+    Procedure(ProcedureCmd),
     /// Compact all tables — merge sorted runs into one for flat query latency.
     Compact { path: PathBuf },
 }
@@ -273,6 +297,25 @@ enum FixtureCmd {
     Create { path: PathBuf, tables: Vec<String> },
     /// Load rows from a JSON fixture into the database.
     Load { path: PathBuf, fixture: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum ProcedureCmd {
+    /// Install a procedure from a JSON file.
+    Install { path: PathBuf, procedure: PathBuf },
+    /// Drop a stored procedure.
+    Drop { path: PathBuf, name: String },
+    /// List stored procedures.
+    List { path: PathBuf },
+    /// Print one stored procedure as JSON.
+    Describe { path: PathBuf, name: String },
+    /// Call a stored procedure with optional JSON args.
+    Call {
+        path: PathBuf,
+        name: String,
+        #[arg(long)]
+        args: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -340,6 +383,15 @@ fn main() -> Result<()> {
             FixtureCmd::Create { path, tables } => cmd_fixture_create(&path, &tables),
             FixtureCmd::Load { path, fixture } => cmd_fixture_load(&path, &fixture),
         },
+        Command::Procedure(cmd) => match cmd {
+            ProcedureCmd::Install { path, procedure } => cmd_procedure_install(&path, &procedure),
+            ProcedureCmd::Drop { path, name } => cmd_procedure_drop(&path, &name),
+            ProcedureCmd::List { path } => cmd_procedure_list(&path),
+            ProcedureCmd::Describe { path, name } => cmd_procedure_describe(&path, &name),
+            ProcedureCmd::Call { path, name, args } => {
+                cmd_procedure_call(&path, &name, args.as_deref())
+            }
+        },
         Command::Compact { path } => cmd_compact(&path),
     }
 }
@@ -363,6 +415,56 @@ fn cmd_compact(path: &Path) -> Result<()> {
     let db = Database::open(path).context("failed to open database")?;
     let (compacted, skipped) = db.compact_all().context("compaction failed")?;
     println!("compacted {compacted} table(s), skipped {skipped}");
+    Ok(())
+}
+
+fn cmd_procedure_install(path: &Path, procedure_path: &Path) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let value: Value = serde_json::from_reader(fs::File::open(procedure_path)?)
+        .context("failed to read procedure JSON")?;
+    let spec = ProcedureSpec::new(value);
+    let proc = db
+        .replace_procedure(&spec)
+        .context("failed to install procedure")?;
+    println!("{}", serde_json::to_string_pretty(&proc)?);
+    Ok(())
+}
+
+fn cmd_procedure_drop(path: &Path, name: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.drop_procedure(name)
+        .context("failed to drop procedure")?;
+    println!("dropped {name}");
+    Ok(())
+}
+
+fn cmd_procedure_list(path: &Path) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let names: Vec<String> = db.raw().procedures().into_iter().map(|p| p.name).collect();
+    println!("{}", serde_json::to_string_pretty(&names)?);
+    Ok(())
+}
+
+fn cmd_procedure_describe(path: &Path, name: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let proc = db
+        .raw()
+        .procedure(name)
+        .with_context(|| format!("procedure {name:?} not found"))?;
+    println!("{}", serde_json::to_string_pretty(&proc)?);
+    Ok(())
+}
+
+fn cmd_procedure_call(path: &Path, name: &str, args: Option<&str>) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let args: Map<String, Value> = match args {
+        Some(args) => serde_json::from_str(args).context("failed to parse args JSON")?,
+        None => Map::new(),
+    };
+    let result = db
+        .call_procedure(name, args)
+        .context("failed to call procedure")?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }
 

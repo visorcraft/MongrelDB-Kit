@@ -1,0 +1,53 @@
+{
+  "procedures": [
+    {
+      "name": "read_users",
+      "version": 1,
+      "mode": "read_only",
+      "params": [],
+      "body": {
+        "steps": [
+          {
+            "kind": "native_query",
+            "id": "read",
+            "table": "users",
+            "conditions": [],
+            "projection": [1, 2],
+            "limit": 10
+          }
+        ],
+        "return_value": { "kind": "step_rows", "value": "read" }
+      },
+      "checksum": "",
+      "created_epoch": 0,
+      "updated_epoch": 0
+    },
+    {
+      "name": "insert_user",
+      "version": 1,
+      "mode": "read_write",
+      "params": [
+        { "name": "id", "ty": { "kind": "int64" }, "nullable": false },
+        { "name": "status", "ty": { "kind": "bytes" }, "nullable": false }
+      ],
+      "body": {
+        "steps": [
+          {
+            "kind": "put",
+            "id": "put",
+            "table": "users",
+            "cells": [
+              { "column_id": 1, "value": { "kind": "param", "value": "id" } },
+              { "column_id": 2, "value": { "kind": "param", "value": "status" } }
+            ],
+            "returning": true
+          }
+        ],
+        "return_value": { "kind": "step_row", "value": "put" }
+      },
+      "checksum": "",
+      "created_epoch": 0,
+      "updated_epoch": 0
+    }
+  ]
+}

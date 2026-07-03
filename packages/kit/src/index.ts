@@ -10,3 +10,4 @@ export * from './db.js';
 export * from './query.js';
 export * from './migrate.js';
 export * from './remote.js';
+export * from './procedure.js';

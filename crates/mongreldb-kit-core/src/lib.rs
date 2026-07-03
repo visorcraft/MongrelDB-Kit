@@ -8,6 +8,7 @@ pub mod check;
 pub mod keys;
 pub mod migrations;
 pub mod planner;
+pub mod procedure;
 pub mod query;
 pub mod schema;
 pub mod validation;
@@ -21,6 +22,7 @@ pub use migrations::{migration_checksum, plan_migrations, Migration, MigrationOp
 pub use planner::{
     plan_delete, DeletePlan, PlannerError, RestrictedConstraint, RowRef, SetNullUpdate,
 };
+pub use procedure::ProcedureSpec;
 pub use query::{
     AggFunc, Aggregate, AggregateQuery, Cte, Delete, Direction, Expr, Insert, Join, JoinKind,
     JoinQuery, Literal, OnConflict, OrderBy, Query, Select, Update, Upsert,

@@ -12,6 +12,7 @@ use mongreldb_core::{AggState, ApproxAgg, NativeAgg, NativeAggResult, RowId};
 use mongreldb_kit_core::schema::IndexKind as KitIndexKind;
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
+use mongreldb_kit_core::ProcedureSpec;
 use serde_json::Value;
 
 use std::collections::HashMap;
@@ -272,6 +273,44 @@ impl Database {
             .map(|t| t.name.clone())
             .filter(|n| !n.starts_with("__kit_"))
             .collect()
+    }
+
+    pub fn create_procedure(
+        &self,
+        spec: &ProcedureSpec,
+    ) -> Result<mongreldb_core::StoredProcedure> {
+        let procedure = core_procedure(spec)?;
+        self.inner
+            .create_procedure(procedure)
+            .map_err(KitError::from)
+    }
+
+    pub fn replace_procedure(
+        &self,
+        spec: &ProcedureSpec,
+    ) -> Result<mongreldb_core::StoredProcedure> {
+        let procedure = core_procedure(spec)?;
+        self.inner
+            .create_or_replace_procedure(procedure)
+            .map_err(KitError::from)
+    }
+
+    pub fn drop_procedure(&self, name: &str) -> Result<()> {
+        self.inner.drop_procedure(name).map_err(KitError::from)
+    }
+
+    pub fn call_procedure(
+        &self,
+        name: &str,
+        args: serde_json::Map<String, Value>,
+    ) -> Result<mongreldb_core::ProcedureCallResult> {
+        let args = args
+            .iter()
+            .map(|(key, value)| Ok((key.clone(), json_to_core_value(value)?)))
+            .collect::<Result<HashMap<_, _>>>()?;
+        self.inner
+            .call_procedure(name, args)
+            .map_err(KitError::from)
     }
 
     /// Allocate `count` values from the named sequence, returning the first
@@ -1008,6 +1047,33 @@ pub(crate) fn create_core_table(db: &CoreDatabase, name: &str, schema: CoreSchem
     }
     db.create_table(name, schema).map_err(KitError::from)?;
     Ok(())
+}
+
+fn core_procedure(spec: &ProcedureSpec) -> Result<mongreldb_core::StoredProcedure> {
+    let parsed: mongreldb_core::StoredProcedure =
+        serde_json::from_value(spec.json.clone()).map_err(KitError::from)?;
+    mongreldb_core::StoredProcedure::new(parsed.name, parsed.mode, parsed.params, parsed.body, 0)
+        .map_err(KitError::from)
+}
+
+fn json_to_core_value(value: &Value) -> Result<CoreValue> {
+    match value {
+        Value::Null => Ok(CoreValue::Null),
+        Value::Bool(value) => Ok(CoreValue::Bool(*value)),
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(CoreValue::Int64(value))
+            } else if let Some(value) = value.as_f64() {
+                Ok(CoreValue::Float64(value))
+            } else {
+                Err(KitError::Validation("unsupported JSON number".into()))
+            }
+        }
+        Value::String(value) => Ok(CoreValue::Bytes(value.as_bytes().to_vec())),
+        Value::Array(_) | Value::Object(_) => Err(KitError::Validation(
+            "procedure args only support scalar JSON values".into(),
+        )),
+    }
 }
 
 /// Read a `Bytes` column from an internal-table core row as a UTF-8 string.

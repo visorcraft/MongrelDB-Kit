@@ -15,6 +15,7 @@ import {
 	kitSchemaCatalog
 } from './internalTables.js';
 import type { TableSpec, ColumnStorageType, CheckSpec } from './types.js';
+import { procedureJson, type ProcedureCallOptions, type ProcedureCallResult, type ProcedureSpec } from './procedure.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
 import { isReferencedTable, deleteGuardsForTable, type ConstraintKit } from './constraints.js';
 import { KitError, isRetryableConflict } from './errors.js';
@@ -67,6 +68,12 @@ type MongrelDatabase = NativeDatabase & {
 		opts?: { maxRetries?: number; baseDelayMs?: number }
 	): Promise<bigint>;
 	alterColumn(table: string, columnName: string, column: MongrelColumnSpec): bigint;
+	createProcedure(spec: { json: string }): bigint;
+	createOrReplaceProcedure(spec: { json: string }): bigint;
+	dropProcedure(name: string): void;
+	procedures(): { json: string }[];
+	procedure(name: string): { json: string } | null;
+	callProcedure(name: string, opts?: { argsJson?: string; idempotencyKey?: string }): { epoch?: bigint; resultJson: string };
 };
 
 type MongrelModule = {
@@ -382,6 +389,38 @@ export class KitDatabase {
 
 	tableNames(): string[] {
 		return this.db.tableNames().filter((name) => !name.startsWith('__kit_'));
+	}
+
+	createProcedureSync(spec: ProcedureSpec): bigint {
+		return this.db.createProcedure({ json: procedureJson(spec) });
+	}
+
+	createOrReplaceProcedureSync(spec: ProcedureSpec): bigint {
+		return this.db.createOrReplaceProcedure({ json: procedureJson(spec) });
+	}
+
+	dropProcedureSync(name: string): void {
+		this.db.dropProcedure(name);
+	}
+
+	procedures(): ProcedureSpec[] {
+		return this.db.procedures().map((p) => JSON.parse(p.json) as ProcedureSpec);
+	}
+
+	procedure(name: string): ProcedureSpec | null {
+		const proc = this.db.procedure(name);
+		return proc ? (JSON.parse(proc.json) as ProcedureSpec) : null;
+	}
+
+	callProcedureSync(name: string, opts: ProcedureCallOptions = {}): ProcedureCallResult {
+		const result = this.db.callProcedure(name, {
+			argsJson: JSON.stringify(opts.args ?? {}),
+			idempotencyKey: opts.idempotencyKey
+		});
+		return {
+			epoch: result.epoch,
+			result: JSON.parse(result.resultJson)
+		};
 	}
 
 	/** Verify run footer checksums; returns integrity issues grouped by table. */

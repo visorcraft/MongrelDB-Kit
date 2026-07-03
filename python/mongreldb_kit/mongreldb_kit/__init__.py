@@ -135,6 +135,21 @@ class Database:
         """The current visible commit epoch (monotonically increasing version)."""
         return self._handle.snapshot_epoch()
 
+    def create_procedure(self, procedure: Any) -> dict[str, Any]:
+        procedure_json = procedure if isinstance(procedure, str) else json.dumps(procedure)
+        return json.loads(self._handle.create_procedure(procedure_json))
+
+    def replace_procedure(self, procedure: Any) -> dict[str, Any]:
+        procedure_json = procedure if isinstance(procedure, str) else json.dumps(procedure)
+        return json.loads(self._handle.replace_procedure(procedure_json))
+
+    def drop_procedure(self, name: str) -> None:
+        self._handle.drop_procedure(name)
+
+    def call_procedure(self, name: str, args: Any | None = None) -> dict[str, Any]:
+        args_json = "{}" if args is None else (args if isinstance(args, str) else json.dumps(args))
+        return json.loads(self._handle.call_procedure(name, args_json))
+
     def export_tsv(self, table: str) -> str:
         """Export every visible row of ``table`` as a TSV document."""
         return self._handle.export_tsv(table)

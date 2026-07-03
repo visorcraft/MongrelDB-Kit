@@ -144,6 +144,36 @@ fn apply_migration_ops(
                 // schema, so there is no catalog or guard mutation to perform
                 // here.
             }
+            MigrationOp::CreateProcedure { procedure, .. } => {
+                let parsed: mongreldb_core::StoredProcedure =
+                    serde_json::from_value(procedure.json.clone()).map_err(KitError::from)?;
+                let procedure = mongreldb_core::StoredProcedure::new(
+                    parsed.name,
+                    parsed.mode,
+                    parsed.params,
+                    parsed.body,
+                    0,
+                )
+                .map_err(KitError::from)?;
+                core.create_procedure(procedure).map_err(KitError::from)?;
+            }
+            MigrationOp::ReplaceProcedure { name: _, procedure } => {
+                let parsed: mongreldb_core::StoredProcedure =
+                    serde_json::from_value(procedure.json.clone()).map_err(KitError::from)?;
+                let procedure = mongreldb_core::StoredProcedure::new(
+                    parsed.name,
+                    parsed.mode,
+                    parsed.params,
+                    parsed.body,
+                    0,
+                )
+                .map_err(KitError::from)?;
+                core.create_or_replace_procedure(procedure)
+                    .map_err(KitError::from)?;
+            }
+            MigrationOp::DropProcedure { name } => {
+                let _ = core.drop_procedure(name);
+            }
             MigrationOp::DropColumn { table, column } => {
                 let target = schema.table(table).ok_or_else(|| {
                     KitError::Migration(format!("drop_column: table {table} not found in schema"))

@@ -3,23 +3,73 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::procedure::ProcedureSpec;
+
 /// A single schema-migration operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MigrationOp {
-    CreateTable { name: String },
-    DropTable { name: String },
-    AddColumn { table: String, column: String },
-    DropColumn { table: String, column: String },
-    AlterColumn { table: String, column: String },
-    AddIndex { table: String, index: String },
-    DropIndex { table: String, index: String },
-    AddUnique { table: String, constraint: String },
-    DropUnique { table: String, constraint: String },
-    AddForeignKey { table: String, constraint: String },
-    DropForeignKey { table: String, constraint: String },
-    AddCheck { table: String, constraint: String },
-    DropCheck { table: String, constraint: String },
+    CreateTable {
+        name: String,
+    },
+    DropTable {
+        name: String,
+    },
+    AddColumn {
+        table: String,
+        column: String,
+    },
+    DropColumn {
+        table: String,
+        column: String,
+    },
+    AlterColumn {
+        table: String,
+        column: String,
+    },
+    AddIndex {
+        table: String,
+        index: String,
+    },
+    DropIndex {
+        table: String,
+        index: String,
+    },
+    AddUnique {
+        table: String,
+        constraint: String,
+    },
+    DropUnique {
+        table: String,
+        constraint: String,
+    },
+    AddForeignKey {
+        table: String,
+        constraint: String,
+    },
+    DropForeignKey {
+        table: String,
+        constraint: String,
+    },
+    AddCheck {
+        table: String,
+        constraint: String,
+    },
+    DropCheck {
+        table: String,
+        constraint: String,
+    },
+    CreateProcedure {
+        name: String,
+        procedure: ProcedureSpec,
+    },
+    ReplaceProcedure {
+        name: String,
+        procedure: ProcedureSpec,
+    },
+    DropProcedure {
+        name: String,
+    },
     RawSql(String),
 }
 
@@ -107,6 +157,19 @@ fn canonical_op(op: &MigrationOp) -> String {
             json_string(table),
             json_string(constraint)
         ),
+        MigrationOp::CreateProcedure { name, procedure } => format!(
+            r#"{{"op":"create_procedure","name":{},"procedure":{}}}"#,
+            json_string(name),
+            procedure.canonical_json()
+        ),
+        MigrationOp::ReplaceProcedure { name, procedure } => format!(
+            r#"{{"op":"replace_procedure","name":{},"procedure":{}}}"#,
+            json_string(name),
+            procedure.canonical_json()
+        ),
+        MigrationOp::DropProcedure { name } => {
+            format!(r#"{{"op":"drop_procedure","name":{}}}"#, json_string(name))
+        }
         MigrationOp::RawSql(sql) => {
             format!(r#"{{"op":"raw_sql","sql":{}}}"#, json_string(sql))
         }

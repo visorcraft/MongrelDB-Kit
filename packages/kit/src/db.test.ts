@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { KitDatabase } from './db.js';
 import { Schema, table, int, text, real, json, index } from './schema.js';
 import { eq, gt, gte } from './query.js';
+import { procedure } from './procedure.js';
 
 function makeTempDir(): string {
 	return mkdtempSync(join(tmpdir(), 'kit-db-test-'));
@@ -171,6 +172,45 @@ describe('KitDatabase', () => {
 
 			expect(db.setSimilarity('t', 'tags', ['a', 'b', 'c'], 1)).toHaveLength(1);
 			expect(() => db.setSimilarity('t', 'missing', ['a'], 1)).toThrow();
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('stored procedure installs and calls through TypeScript Kit', () => {
+		const users = table('users', {
+			columns: [int('id', { primaryKey: true }), text('status')],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([users]));
+		try {
+			db.insertInto(users).values({ id: 1n, status: 'active' }).executeSync();
+			db.createProcedureSync(
+				procedure({
+					name: 'read_users',
+					mode: 'read_only',
+					body: {
+						steps: [
+							{
+								kind: 'native_query',
+								id: 'read',
+								table: 'users',
+								conditions: [],
+								projection: [1, 2],
+								limit: 10
+							}
+						],
+						return_value: { kind: 'step_rows', value: 'read' }
+					}
+				})
+			);
+
+			const result = db.callProcedureSync('read_users').result as any;
+			expect(result.kind).toBe('rows');
+			expect(result.value).toHaveLength(1);
+			expect(result.value[0].columns['1'].Int64).toBe(1);
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });

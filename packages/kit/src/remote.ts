@@ -1,5 +1,6 @@
 import { RemoteDatabase as NativeRemoteDatabase } from '@visorcraft/mongreldb/native.js';
 import { tableFromIPC, type Table as ArrowTable } from 'apache-arrow';
+import { procedureJson, type ProcedureCallOptions, type ProcedureSpec } from './procedure.js';
 
 /**
  * A thin Kit client for a running `mongreldb-server` daemon.
@@ -44,5 +45,22 @@ export class RemoteDatabase {
 	/** Flush/commit `table` on the server; returns the new epoch. */
 	commit(table: string): bigint {
 		return this.inner.commit(table);
+	}
+
+	createProcedure(spec: ProcedureSpec): unknown {
+		return JSON.parse((this.inner as any).createProcedure({ json: procedureJson(spec) }));
+	}
+
+	dropProcedure(name: string): void {
+		(this.inner as any).dropProcedure(name);
+	}
+
+	callProcedure(name: string, opts: ProcedureCallOptions = {}): unknown {
+		return JSON.parse(
+			(this.inner as any).callProcedure(name, {
+				argsJson: JSON.stringify(opts.args ?? {}),
+				idempotencyKey: opts.idempotencyKey
+			})
+		);
 	}
 }

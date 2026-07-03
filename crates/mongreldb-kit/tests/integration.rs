@@ -7,6 +7,7 @@ use mongreldb_kit::{
     MigrationOp, OnConflict, OrderBy, Query, Row, Schema, Select, Table, Transaction,
     UniqueConstraint, Update,
 };
+use mongreldb_kit_core::ProcedureSpec;
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
@@ -107,6 +108,45 @@ fn insert_named_user(txn: &mut Transaction, id: i64, email: &str, name: &str) ->
     row.insert("email".into(), json!(email));
     row.insert("name".into(), json!(name));
     txn.insert("users", row).unwrap()
+}
+
+#[test]
+fn stored_procedure_installs_and_calls_through_rust_kit() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+    let mut txn = db.begin().unwrap();
+    insert_user(&mut txn, 1, "alice@example.com");
+    txn.commit().unwrap();
+
+    let procedure = ProcedureSpec::new(json!({
+        "name": "read_users",
+        "version": 1,
+        "mode": "read_only",
+        "params": [],
+        "body": {
+            "steps": [{
+                "kind": "native_query",
+                "id": "read",
+                "table": "users",
+                "conditions": [],
+                "projection": [1, 2],
+                "limit": 10
+            }],
+            "return_value": { "kind": "step_rows", "value": "read" }
+        },
+        "checksum": "",
+        "created_epoch": 0,
+        "updated_epoch": 0
+    }));
+
+    db.create_procedure(&procedure).unwrap();
+    let result = db.call_procedure("read_users", Map::new()).unwrap();
+
+    let mongreldb_core::ProcedureCallOutput::Rows(rows) = result.output else {
+        panic!("expected rows");
+    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].columns.get(&1), Some(&CoreValue::Int64(1)));
 }
 
 fn insert_order(txn: &mut Transaction, id: i64, user_id: i64, total: f64) {

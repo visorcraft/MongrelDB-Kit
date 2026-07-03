@@ -94,6 +94,7 @@ Start here, then dive into the topic that fits your task.
 | [Constraints](./constraints.md) | Not-null, checks, unique / composite-unique, foreign keys, and delete actions (cascade / set-null / restrict). |
 | [Transactions](./transactions.md) | `begin`/`commit`/`rollback`, the retrying `transaction()` helper, conflicts, and the concurrency model. |
 | [Migrations](./migrations.md) | Migration files, the runner, checksums, supported operations, idempotent column adds, and table renames. |
+| [Stored procedures](./stored-procedures.md) | Declarative routines callable from embedded, remote, and CLI Kit clients. |
 | [Errors](./errors.md) | The error taxonomy, codes, and how to handle each category. |
 | [Internal tables](./internal-tables.md) | The reserved `__kit_*` tables and what each one stores. |
 | [CLI](./cli.md) | The `mongreldb-kit` command line: `check`, `diff`, `generate`, `migrate`, and more. |

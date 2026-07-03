@@ -555,3 +555,42 @@ def test_explain_reports_pushdown():
     assert plan["index_accelerated"] is False
     assert plan["pushed_conditions"] == []
     db.close()
+
+
+def test_stored_procedure_installs_and_calls_through_python_kit():
+    db = Database.create(tmp_db(), users_orders_schema())
+    with db.begin() as txn:
+        insert_user(txn, 1, "alice@example.com")
+        txn.commit()
+
+    db.create_procedure(
+        {
+            "name": "read_users",
+            "version": 1,
+            "mode": "read_only",
+            "params": [],
+            "body": {
+                "steps": [
+                    {
+                        "kind": "native_query",
+                        "id": "read",
+                        "table": "users",
+                        "conditions": [],
+                        "projection": [1, 2],
+                        "limit": 10,
+                    }
+                ],
+                "return_value": {"kind": "step_rows", "value": "read"},
+            },
+            "checksum": "",
+            "created_epoch": 0,
+            "updated_epoch": 0,
+        }
+    )
+
+    result = db.call_procedure("read_users")
+    rows = result["output"]
+    assert rows["kind"] == "rows"
+    assert len(rows["value"]) == 1
+    assert rows["value"][0]["columns"]["1"]["Int64"] == 1
+    db.close()
