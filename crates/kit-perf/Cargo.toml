@@ -17,7 +17,7 @@ name = "bench-daemon"
 path = "src/bench_daemon.rs"
 
 [dependencies]
-mongreldb-core = { version = "0.20.0" }
+mongreldb-core = { version = "0.20.1" }
 mongreldb-kit = { path = "../mongreldb-kit", version = "0.8.0" }
 serde_json = { version = "1", features = ["preserve_order"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -29,4 +29,4 @@ ureq = "2"
 [workspace]
 
 [patch.crates-io]
-mongreldb-core = { path = "../../../mongreldb/crates/mongreldb-core" }
+mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.20.1" }
