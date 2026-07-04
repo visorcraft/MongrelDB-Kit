@@ -117,8 +117,8 @@ import { join } from 'node:path';
 import {
   KitDatabase, Schema, table, int, text, timestamp,
   sequenceDefault, nowDefault, staticDefault, unique, index, foreignKey,
-} from '@mongreldb/kit';
-import type { Migration } from '@mongreldb/kit';
+} from '@visorcraft/mongreldb-kit';
+import type { Migration } from '@visorcraft/mongreldb-kit';
 
 const customers = table('customers', {
   columns: [

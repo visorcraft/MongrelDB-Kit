@@ -11,7 +11,7 @@ definitions:
 | `Update<T>` | a partial of `Row<T>` | `updateTable(...).set(...)` |
 
 ```ts
-import type { Row, Insert, Update } from '@mongreldb/kit';
+import type { Row, Insert, Update } from '@visorcraft/mongreldb-kit';
 import { customers } from './schema';
 
 type Customer       = Row<typeof customers>;

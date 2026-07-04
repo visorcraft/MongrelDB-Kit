@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::external::VirtualTableSpec;
 use crate::procedure::ProcedureSpec;
+use crate::trigger::TriggerSpec;
 
 /// A single schema-migration operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +70,23 @@ pub enum MigrationOp {
         procedure: ProcedureSpec,
     },
     DropProcedure {
+        name: String,
+    },
+    CreateTrigger {
+        name: String,
+        trigger: TriggerSpec,
+    },
+    ReplaceTrigger {
+        name: String,
+        trigger: TriggerSpec,
+    },
+    DropTrigger {
+        name: String,
+    },
+    CreateVirtualTable {
+        table: VirtualTableSpec,
+    },
+    DropVirtualTable {
         name: String,
     },
     RawSql(String),
@@ -169,6 +188,36 @@ fn canonical_op(op: &MigrationOp) -> String {
         ),
         MigrationOp::DropProcedure { name } => {
             format!(r#"{{"op":"drop_procedure","name":{}}}"#, json_string(name))
+        }
+        MigrationOp::CreateTrigger { name, trigger } => format!(
+            r#"{{"op":"create_trigger","name":{},"trigger":{}}}"#,
+            json_string(name),
+            trigger.canonical_json()
+        ),
+        MigrationOp::ReplaceTrigger { name, trigger } => format!(
+            r#"{{"op":"replace_trigger","name":{},"trigger":{}}}"#,
+            json_string(name),
+            trigger.canonical_json()
+        ),
+        MigrationOp::DropTrigger { name } => {
+            format!(r#"{{"op":"drop_trigger","name":{}}}"#, json_string(name))
+        }
+        MigrationOp::CreateVirtualTable { table } => format!(
+            r#"{{"op":"create_virtual_table","name":{},"module":{},"args":[{}]}}"#,
+            json_string(&table.name),
+            json_string(&table.module),
+            table
+                .args
+                .iter()
+                .map(|arg| json_string(arg))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        MigrationOp::DropVirtualTable { name } => {
+            format!(
+                r#"{{"op":"drop_virtual_table","name":{}}}"#,
+                json_string(name)
+            )
         }
         MigrationOp::RawSql(sql) => {
             format!(r#"{{"op":"raw_sql","sql":{}}}"#, json_string(sql))
@@ -346,6 +395,44 @@ mod tests {
         );
         // op count changed
         assert_ne!(base, migration_checksum(1, "init", &[]));
+    }
+
+    #[test]
+    fn checksum_covers_trigger_and_virtual_table_ops() {
+        let trigger = TriggerSpec::new(serde_json::json!({
+            "name": "users_ai",
+            "version": 1,
+            "target": { "kind": "table", "name": "users" },
+            "timing": "after",
+            "event": "insert",
+            "update_of": [],
+            "target_columns": [],
+            "program": { "steps": [] },
+            "enabled": true,
+            "checksum": "",
+            "created_epoch": 0,
+            "updated_epoch": 0
+        }));
+        let base = migration_checksum(4, "triggers", &[]);
+        let with_trigger = migration_checksum(
+            4,
+            "triggers",
+            &[MigrationOp::CreateTrigger {
+                name: "users_ai".into(),
+                trigger,
+            }],
+        );
+        let with_virtual_table = migration_checksum(
+            4,
+            "triggers",
+            &[MigrationOp::CreateVirtualTable {
+                table: VirtualTableSpec::new("docs", "fts_docs", ["prefix=1"]),
+            }],
+        );
+
+        assert_ne!(base, with_trigger);
+        assert_ne!(base, with_virtual_table);
+        assert_ne!(with_trigger, with_virtual_table);
     }
 
     #[test]

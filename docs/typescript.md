@@ -1,14 +1,14 @@
 # TypeScript Quickstart
 
-This guide shows how to define a schema, run migrations, and perform CRUD with `@mongreldb/kit`.
+This guide shows how to define a schema, run migrations, and perform CRUD with `@visorcraft/mongreldb-kit`.
 
 ## Installation
 
 ```sh
-npm install @mongreldb/kit mongreldb
+npm install @visorcraft/mongreldb-kit @visorcraft/mongreldb
 ```
 
-`mongreldb` is a peer dependency providing the native database bindings. In a local checkout, build
+`@visorcraft/mongreldb` is a peer dependency providing the native database bindings. In a local checkout, build
 the sibling `crates/mongreldb-node` addon with `npm run build` (release mode) before benchmarking;
 debug builds make bulk writes and pushed-down queries look much slower than they are.
 
@@ -29,7 +29,7 @@ import {
   sequenceDefault,
   eq,
   desc
-} from '@mongreldb/kit';
+} from '@visorcraft/mongreldb-kit';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -203,8 +203,53 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
 - `db.tableNames()` returns application tables and hides the reserved `__kit_*` namespace.
 - `db.renameTable(oldName, newName)` durably renames a live table. Pair it with a matching schema
   update in a migration; it rejects `__kit_` names.
+- `db.createTriggerSync(spec)`, `db.createOrReplaceTriggerSync(spec)`, `db.dropTriggerSync(name)`,
+  `db.triggers()`, and `db.trigger(name)` manage engine-side triggers.
+- `await db.sql(sql)` returns an Apache Arrow table. `await db.sqlRows(sql)` decodes SQL results to
+  plain objects.
+- `await db.createVirtualTable(spec)` and `await db.dropVirtualTable(name)` run the SQL DDL for
+  module-backed virtual/external tables.
 - `db.nativeDb` exposes the underlying `mongreldb` database for raw operations that intentionally
   bypass Kit validation, defaults, and relational guards.
+
+## Triggers and SQL helpers
+
+Assuming `users`, `audit`, and `events` table specs already exist:
+
+```ts
+import {
+  groupConcat,
+  newColumn,
+  percentileCont,
+  textValue,
+  trigger,
+  virtualTable,
+} from '@visorcraft/mongreldb-kit';
+
+db.createTriggerSync(trigger({
+  name: 'users_ai',
+  target: { kind: 'table', name: 'users' },
+  timing: 'after',
+  event: 'insert',
+  program: {
+    steps: [{
+      kind: 'insert',
+      table: 'audit',
+      cells: [
+        { column_id: audit.user_id.id, value: newColumn(users.id.id) },
+        { column_id: audit.note.id, value: textValue('created') },
+      ],
+    }],
+  },
+}));
+
+await db.sqlRows(`SELECT ${percentileCont(events.latency_ms, 0.95).sql} AS p95 FROM events`);
+await db.sqlRows(`SELECT ${groupConcat(events.tag, '|').sql} AS tags FROM events`);
+await db.createVirtualTable(virtualTable('docs_fts', 'fts_docs', ['content=docs']));
+```
+
+See [Triggers](./triggers.md) and
+[Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md) for the full API.
 
 ## Migrations
 
@@ -215,7 +260,7 @@ Call `db.migrateSync(schema, migrations)` to apply pending migrations in version
 Catch typed errors by name:
 
 ```ts
-import { KitDuplicateError, KitForeignKeyError, KitRestrictError, KitValidationError } from '@mongreldb/kit';
+import { KitDuplicateError, KitForeignKeyError, KitRestrictError, KitValidationError } from '@visorcraft/mongreldb-kit';
 
 try {
   db.insertInto(users).values({ email: 'alice@example.com' }).executeSync();
@@ -241,5 +286,6 @@ The first run creates `./app-data`. Subsequent runs open the existing database d
 - [Schema DSL](./schema.md) and [Types](./types.md) — column/table specs and `Row`/`Insert`/`Update` inference.
 - [Defaults & sequences](./defaults.md) — defaults and 1-based auto-increment ids.
 - [Query builder](./query-builder.md) — the complete query surface.
+- [Triggers](./triggers.md) and [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
 - [Constraints](./constraints.md) · [Errors](./errors.md) — enforcement and the typed failures.
 - [Transactions](./transactions.md) · [Migrations](./migrations.md) · [Testing](./testing.md).

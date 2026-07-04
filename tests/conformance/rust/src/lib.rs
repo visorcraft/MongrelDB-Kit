@@ -58,6 +58,7 @@ fn error_code(e: &KitError) -> String {
         KitError::Restrict(_) => "RESTRICT",
         KitError::Migration(_) => "MIGRATION",
         KitError::Conflict(_) => "CONFLICT",
+        KitError::TriggerValidation(_) => "TRIGGER_VALIDATION",
         KitError::Storage(_) => "STORAGE",
         KitError::Integrity(_) => "INTEGRITY",
     }

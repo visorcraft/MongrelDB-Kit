@@ -12,7 +12,7 @@ use mongreldb_core::{AggState, ApproxAgg, NativeAgg, NativeAggResult, RowId};
 use mongreldb_kit_core::schema::IndexKind as KitIndexKind;
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
-use mongreldb_kit_core::ProcedureSpec;
+use mongreldb_kit_core::{ProcedureSpec, TriggerSpec};
 use serde_json::Value;
 
 use std::collections::HashMap;
@@ -311,6 +311,30 @@ impl Database {
         self.inner
             .call_procedure(name, args)
             .map_err(KitError::from)
+    }
+
+    pub fn create_trigger(&self, spec: &TriggerSpec) -> Result<mongreldb_core::StoredTrigger> {
+        let trigger = core_trigger(spec)?;
+        self.inner.create_trigger(trigger).map_err(KitError::from)
+    }
+
+    pub fn replace_trigger(&self, spec: &TriggerSpec) -> Result<mongreldb_core::StoredTrigger> {
+        let trigger = core_trigger(spec)?;
+        self.inner
+            .create_or_replace_trigger(trigger)
+            .map_err(KitError::from)
+    }
+
+    pub fn drop_trigger(&self, name: &str) -> Result<()> {
+        self.inner.drop_trigger(name).map_err(KitError::from)
+    }
+
+    pub fn triggers(&self) -> Vec<mongreldb_core::StoredTrigger> {
+        self.inner.triggers()
+    }
+
+    pub fn trigger(&self, name: &str) -> Option<mongreldb_core::StoredTrigger> {
+        self.inner.trigger(name)
     }
 
     /// Allocate `count` values from the named sequence, returning the first
@@ -1054,6 +1078,25 @@ fn core_procedure(spec: &ProcedureSpec) -> Result<mongreldb_core::StoredProcedur
         serde_json::from_value(spec.json.clone()).map_err(KitError::from)?;
     mongreldb_core::StoredProcedure::new(parsed.name, parsed.mode, parsed.params, parsed.body, 0)
         .map_err(KitError::from)
+}
+
+fn core_trigger(spec: &TriggerSpec) -> Result<mongreldb_core::StoredTrigger> {
+    let parsed: mongreldb_core::StoredTrigger =
+        serde_json::from_value(spec.json.clone()).map_err(KitError::from)?;
+    mongreldb_core::StoredTrigger::new(
+        parsed.name,
+        mongreldb_core::TriggerDefinition {
+            target: parsed.target,
+            timing: parsed.timing,
+            event: parsed.event,
+            update_of: parsed.update_of,
+            target_columns: parsed.target_columns,
+            when: parsed.when,
+            program: parsed.program,
+        },
+        0,
+    )
+    .map_err(KitError::from)
 }
 
 fn json_to_core_value(value: &Value) -> Result<CoreValue> {

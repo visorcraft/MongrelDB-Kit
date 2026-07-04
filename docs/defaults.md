@@ -8,7 +8,7 @@ of them are declared in the column's [options](./schema.md#columnoptions):
 import {
   int, text, timestamp,
   staticDefault, nowDefault, uuidDefault, sequenceDefault, customDefault,
-} from '@mongreldb/kit';
+} from '@visorcraft/mongreldb-kit';
 ```
 
 ## The default kinds

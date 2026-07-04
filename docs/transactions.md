@@ -89,7 +89,7 @@ Two balance updates that must both apply or neither — with a guard against ove
 automatic retry on contention:
 
 ```ts
-import { table, int, text, sequenceDefault, check, toCells, validateRow } from '@mongreldb/kit';
+import { table, int, text, sequenceDefault, check, toCells, validateRow } from '@visorcraft/mongreldb-kit';
 import { ConditionKind } from 'mongreldb/native.js';
 
 const accounts = table('accounts', {

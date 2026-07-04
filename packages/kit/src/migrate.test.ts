@@ -8,6 +8,7 @@ import { Schema, table, int, text, real, json, index, unique, foreignKey } from 
 import { sequenceDefault } from './defaults.js';
 import {
 	migrate,
+	migrationContent,
 	migrationChecksum,
 	dropTable,
 	addIndex,
@@ -32,6 +33,9 @@ import {
 	KitDuplicateError,
 	KitForeignKeyError
 } from './errors.js';
+import { trigger, newColumn, textValue } from './trigger.js';
+import { virtualTable, createVirtualTableSql } from './external.js';
+import { percentileCont, groupConcat, jsonExtract } from './sql.js';
 import './query.js';
 
 function makeTempDir(): string {
@@ -282,6 +286,58 @@ describe('migrateSync', () => {
 		});
 	});
 
+	it('installs triggers through the migration context', () => {
+		withDbSync((db) => {
+			const audit = table('audit', {
+				columns: [int('id', { primaryKey: true }), int('user_id'), text('note')],
+				primaryKey: 'id'
+			});
+			const usersAi = trigger({
+				name: 'users_ai',
+				target: { kind: 'table', name: 'users' },
+				timing: 'after',
+				event: 'insert',
+				program: {
+					steps: [
+						{
+							kind: 'insert',
+							table: 'audit',
+							cells: [
+								{ column_id: audit.id.id, value: newColumn(users.id.id) },
+								{ column_id: audit.user_id.id, value: newColumn(users.id.id) },
+								{ column_id: audit.note.id, value: textValue('created') }
+							]
+						}
+					]
+				}
+			});
+			const migrations: Migration[] = [
+				{
+					version: 1,
+					name: 'init with trigger',
+					ops: [
+						{ kind: 'createTable', name: 'users' },
+						{ kind: 'createTable', name: 'audit' },
+						{ kind: 'createTrigger', name: 'users_ai', trigger: usersAi }
+					],
+					up: (ctx) => {
+						ctx.ensureTable(users);
+						ctx.ensureTable(audit);
+						ctx.createTrigger(usersAi);
+					}
+				}
+			];
+
+			db.migrateSync(new Schema([users, audit]), migrations);
+			db.insertInto(users).values({ id: 11n, email: 'trigger@example.com' }).executeSync();
+
+			expect(db.triggers().map((t) => t.name)).toEqual(['users_ai']);
+			expect(db.selectFrom(audit).executeSync()).toEqual([
+				{ id: 11n, user_id: 11n, note: 'created' }
+			]);
+		});
+	});
+
 	it('applies pending migrations', () => {
 		withDbSync((db) => {
 			const first: Migration[] = [
@@ -487,6 +543,60 @@ describe('migrationChecksum', () => {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	it('covers trigger and virtual-table ops in canonical migration content', () => {
+		const trig = trigger({
+			name: 'users_ai',
+			target: { kind: 'table', name: 'users' },
+			timing: 'after',
+			event: 'insert',
+			program: {
+				steps: [
+					{
+						kind: 'insert',
+						table: 'audit',
+						cells: [
+							{ column_id: 1, value: newColumn(1) },
+							{ column_id: 2, value: textValue('created') }
+						]
+					}
+				]
+			}
+		});
+		const content = migrationContent({
+			version: 4,
+			name: 'triggers_and_vtabs',
+			ops: [
+				{ kind: 'createTrigger', name: 'users_ai', trigger: trig },
+				{ kind: 'createVirtualTable', table: virtualTable('docs', 'fts_docs') },
+				{ kind: 'dropVirtualTable', name: 'old_docs' }
+			],
+			up: () => undefined
+		});
+
+		expect(content).toContain('"op":"create_trigger"');
+		expect(content).toContain('"trigger":');
+		expect(content).toContain('"op":"create_virtual_table"');
+		expect(content).toContain('"module":"fts_docs"');
+		expect(content).toContain('"op":"drop_virtual_table"');
+		expect(migrationChecksum({ version: 4, name: 'triggers_and_vtabs', up: () => undefined })).not.toBe(
+			migrationChecksum({
+				version: 4,
+				name: 'triggers_and_vtabs',
+				ops: [{ kind: 'createTrigger', name: 'users_ai', trigger: trig }],
+				up: () => undefined
+			})
+		);
+	});
+
+	it('generates Extended SQL and virtual-table SQL helpers', () => {
+		expect(percentileCont(users.id, 0.5).sql).toBe('percentile_cont("id", 0.5)');
+		expect(groupConcat(users.email, '|').sql).toBe(`group_concat("email", '|')`);
+		expect(jsonExtract('{"a":1}', '$.a').sql).toBe(`json_extract('{"a":1}', '$.a')`);
+		expect(createVirtualTableSql(virtualTable('docs', 'fts_docs', ["prefix=1"]))).toBe(
+			'CREATE VIRTUAL TABLE "docs" USING "fts_docs"(prefix=1)'
+		);
 	});
 });
 

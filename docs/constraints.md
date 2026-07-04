@@ -37,7 +37,7 @@ function. The first failure throws **`KitValidationError`** with `.table` and `.
 set and a human-readable `.message`.
 
 ```ts
-import { table, int, text } from '@mongreldb/kit';
+import { table, int, text } from '@visorcraft/mongreldb-kit';
 
 const products = table('products', {
   columns: [
@@ -91,7 +91,7 @@ TypeScript `fn` is a **predicate function** `(row) => boolean | string`, run aft
 column validator passes:
 
 ```ts
-import { table, int, check } from '@mongreldb/kit';
+import { table, int, check } from '@visorcraft/mongreldb-kit';
 
 const orderItems = table('order_items', {
   columns: [

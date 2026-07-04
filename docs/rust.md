@@ -252,6 +252,46 @@ let migrations = vec![
 mongreldb_kit::migrate(&mut db, &migrations)?;
 ```
 
+Trigger migration ops are executed by the Rust runner. Virtual-table and raw SQL
+ops are rejected by the Rust runner because those require a SQL-capable Kit
+surface.
+
+## Triggers and remote SQL
+
+Engine-side triggers use `TriggerSpec`, a JSON wrapper that keeps the Kit API
+aligned with the engine trigger schema:
+
+```rust
+use mongreldb_kit::TriggerSpec;
+use serde_json::json;
+
+let spec = TriggerSpec::new(json!({
+    "name": "users_ai",
+    "target": { "kind": "table", "name": "users" },
+    "timing": "after",
+    "event": "insert",
+    "program": { "steps": [] }
+}));
+
+db.create_trigger(&spec)?;
+db.replace_trigger(&spec)?;
+db.drop_trigger("users_ai")?;
+```
+
+With the `remote` feature, `RemoteDatabase::sql_rows` runs daemon SQL and
+`VirtualTableSpec` generates module-backed virtual-table DDL:
+
+```rust
+use mongreldb_kit::VirtualTableSpec;
+
+remote.create_virtual_table(&VirtualTableSpec::new(
+    "docs_fts",
+    "fts_docs",
+    ["content=docs"],
+))?;
+remote.drop_virtual_table("docs_fts")?;
+```
+
 ## Sequences and defaults
 
 A column whose `DefaultKind::Sequence(name)` default is set is auto-assigned from a named sequence
@@ -268,7 +308,7 @@ let block = db.allocate_sequence("orders_id_seq", 10)?; // reserve 10, returns t
 ## Error handling
 
 `KitError` is a flat enum of stable categories: `Validation`, `Duplicate`, `ForeignKey`, `Restrict`,
-`Migration`, `Conflict`, `Storage`, and `Integrity`. Match on the variant you handle:
+`TriggerValidation`, `Migration`, `Conflict`, `Storage`, and `Integrity`. Match on the variant you handle:
 
 ```rust
 use mongreldb_kit::KitError;

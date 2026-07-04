@@ -1,6 +1,12 @@
 import { RemoteDatabase as NativeRemoteDatabase } from '@visorcraft/mongreldb/native.js';
 import { tableFromIPC, type Table as ArrowTable } from 'apache-arrow';
 import { procedureJson, type ProcedureCallOptions, type ProcedureSpec } from './procedure.js';
+import { triggerJson, type TriggerSpec } from './trigger.js';
+import {
+	createVirtualTableSql,
+	dropVirtualTableSql,
+	type VirtualTableSpec
+} from './external.js';
 
 /**
  * A thin Kit client for a running `mongreldb-server` daemon.
@@ -42,6 +48,10 @@ export class RemoteDatabase {
 		return tableFromIPC(this.inner.sql(sql));
 	}
 
+	sqlRows(sql: string): Record<string, unknown>[] {
+		return [...this.sql(sql)].map((row) => ({ ...row }));
+	}
+
 	/** Flush/commit `table` on the server; returns the new epoch. */
 	commit(table: string): bigint {
 		return this.inner.commit(table);
@@ -62,5 +72,33 @@ export class RemoteDatabase {
 				idempotencyKey: opts.idempotencyKey
 			})
 		);
+	}
+
+	createTrigger(spec: TriggerSpec): unknown {
+		return JSON.parse((this.inner as any).createTrigger({ json: triggerJson(spec) }));
+	}
+
+	replaceTrigger(name: string, spec: TriggerSpec): unknown {
+		return JSON.parse((this.inner as any).replaceTrigger(name, { json: triggerJson(spec) }));
+	}
+
+	dropTrigger(name: string): void {
+		(this.inner as any).dropTrigger(name);
+	}
+
+	triggers(): unknown {
+		return JSON.parse((this.inner as any).triggers());
+	}
+
+	trigger(name: string): unknown {
+		return JSON.parse((this.inner as any).trigger(name));
+	}
+
+	createVirtualTable(spec: VirtualTableSpec): ArrowTable {
+		return this.sql(createVirtualTableSql(spec));
+	}
+
+	dropVirtualTable(name: string): ArrowTable {
+		return this.sql(dropVirtualTableSql(name));
 	}
 }

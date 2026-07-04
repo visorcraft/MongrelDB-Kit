@@ -5,7 +5,7 @@ table-level constraints (primary key, indexes, unique, foreign keys, checks), an
 into a `Schema`. The same declarations drive type inference (see [Types](./types.md)), validation,
 constraint enforcement, and migrations.
 
-Everything on this page is imported from `@mongreldb/kit`:
+Everything on this page is imported from `@visorcraft/mongreldb-kit`:
 
 ```ts
 import {
@@ -13,7 +13,7 @@ import {
   int, text, real, bool, json, timestamp, date, blob, column,
   index, unique, foreignKey, check,
   sequenceDefault, nowDefault, staticDefault,
-} from '@mongreldb/kit';
+} from '@visorcraft/mongreldb-kit';
 ```
 
 ## The running example

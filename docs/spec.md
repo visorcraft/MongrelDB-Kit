@@ -14,7 +14,7 @@ The kit is organized into four layers:
    - Delete planner (cascade, set null, restrict)
    - Query AST
 
-2. **MongrelDB execution adapter** (`mongreldb-kit` crate, `@mongreldb/kit` package, Python bindings)
+2. **MongrelDB execution adapter** (`mongreldb-kit` crate, `@visorcraft/mongreldb-kit` package, Python bindings)
    - Open/create databases
    - Create/drop/evolve tables
    - Read/write rows through transactions

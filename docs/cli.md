@@ -137,6 +137,12 @@ A bad schema exits non-zero with a pinpointed message, e.g.
 ]
 ```
 
+The JSON op vocabulary also includes `create_trigger`, `replace_trigger`,
+`drop_trigger`, `create_virtual_table`, and `drop_virtual_table`. Trigger ops are
+executed by the CLI runner; virtual-table ops are recorded/checksummed but fail
+under the CLI runner because creating virtual tables requires a SQL-capable Kit
+surface. Use TypeScript async migrations for those.
+
 **Plan** (and its `dry-run` alias) prints what would be applied without touching
 the database:
 

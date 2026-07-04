@@ -420,7 +420,35 @@ except DuplicateError as exc:
     print(exc.code)  # DUPLICATE
 ```
 
-Available exceptions: `ValidationError`, `DuplicateError`, `ForeignKeyError`, `RestrictError`, `MigrationError`, `ConflictError`, `StorageError`, `IntegrityError`.
+Available exceptions: `ValidationError`, `DuplicateError`, `ForeignKeyError`, `RestrictError`, `TriggerValidationError`, `MigrationError`, `ConflictError`, `StorageError`, `IntegrityError`.
+
+## Triggers and remote SQL
+
+Embedded Python can install, replace, list, and drop engine-side triggers by
+passing the same dict/JSON spec the engine stores:
+
+```python
+db.create_trigger({
+    "name": "users_ai",
+    "target": {"kind": "table", "name": "users"},
+    "timing": "after",
+    "event": "insert",
+    "program": {"steps": []},
+})
+
+db.triggers()
+db.trigger("users_ai")
+db.drop_trigger("users_ai")
+```
+
+The pure-Python `RemoteDatabase` exposes SQL and virtual-table helpers against a
+running `mongreldb-server`:
+
+```python
+arrow_ipc = remote.sql_arrow("SELECT count(*) AS n FROM users")
+remote.create_virtual_table("docs_fts", "fts_docs", ["content=docs"])
+remote.drop_virtual_table("docs_fts")
+```
 
 ## Running this example
 
@@ -433,6 +461,7 @@ python kit_demo.py
 ## See also
 
 - [Query builder](./query-builder.md) — the full query model these helpers serialize.
+- [Triggers](./triggers.md) and [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
 - [Constraints](./constraints.md) and [Errors](./errors.md) — the rules and the typed failures.
 - [Migrations](./migrations.md) — migration ops and the runner.
 - [TypeScript](./typescript.md) · [Rust](./rust.md) — the sibling language surfaces.

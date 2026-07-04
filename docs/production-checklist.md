@@ -27,7 +27,8 @@ Monitor these signals:
 - Disk space on the database volume
 - Migration lock age in `__kit_migration_locks`
 - Query latency for full-table scans (the kit materializes visible rows for unpushable filters)
-- Error rates by category: `DUPLICATE`, `FOREIGN_KEY`, `RESTRICT`, `VALIDATION`, `MIGRATION`
+- Error rates by category: `DUPLICATE`, `FOREIGN_KEY`, `RESTRICT`, `VALIDATION`,
+  `TRIGGER_VALIDATION`, `MIGRATION`
 - Health endpoint: `GET /health` for adapter-node deployments
 
 ## Performance

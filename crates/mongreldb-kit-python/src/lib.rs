@@ -60,6 +60,11 @@ create_exception!(
 );
 create_exception!(
     mongreldb_kit_py,
+    TriggerValidationError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
     StorageError,
     pyo3::exceptions::PyException
 );
@@ -78,6 +83,7 @@ fn map_err(e: KitError) -> PyErr {
         KitError::Restrict(_) => RestrictError::new_err(msg),
         KitError::Migration(_) => MigrationError::new_err(msg),
         KitError::Conflict(_) => ConflictError::new_err(msg),
+        KitError::TriggerValidation(_) => TriggerValidationError::new_err(msg),
         KitError::Storage(_) => StorageError::new_err(msg),
         KitError::Integrity(_) => IntegrityError::new_err(msg),
     }
@@ -267,6 +273,39 @@ impl PyDatabase {
             .call_procedure(name, args)
             .map_err(map_err)?;
         serde_json::to_string(&result).map_err(py_json_err)
+    }
+
+    fn create_trigger(&self, trigger_json: &str) -> PyResult<String> {
+        let value: Value = serde_json::from_str(trigger_json).map_err(py_json_err)?;
+        let spec = mongreldb_kit_core::TriggerSpec::new(value);
+        let trigger = self.require_db()?.create_trigger(&spec).map_err(map_err)?;
+        serde_json::to_string(&trigger).map_err(py_json_err)
+    }
+
+    fn replace_trigger(&self, trigger_json: &str) -> PyResult<String> {
+        let value: Value = serde_json::from_str(trigger_json).map_err(py_json_err)?;
+        let spec = mongreldb_kit_core::TriggerSpec::new(value);
+        let trigger = self.require_db()?.replace_trigger(&spec).map_err(map_err)?;
+        serde_json::to_string(&trigger).map_err(py_json_err)
+    }
+
+    fn drop_trigger(&self, name: &str) -> PyResult<()> {
+        self.require_db()?.drop_trigger(name).map_err(map_err)
+    }
+
+    fn triggers(&self) -> PyResult<Vec<String>> {
+        self.require_db()?
+            .triggers()
+            .iter()
+            .map(|trigger| serde_json::to_string(trigger).map_err(py_json_err))
+            .collect()
+    }
+
+    fn trigger(&self, name: &str) -> PyResult<Option<String>> {
+        self.require_db()?
+            .trigger(name)
+            .map(|trigger| serde_json::to_string(&trigger).map_err(py_json_err))
+            .transpose()
     }
 
     /// Export every visible row of `table` as a TSV document.
@@ -1340,6 +1379,10 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("RestrictError", py.get_type::<RestrictError>())?;
     m.add("MigrationError", py.get_type::<MigrationError>())?;
     m.add("ConflictError", py.get_type::<ConflictError>())?;
+    m.add(
+        "TriggerValidationError",
+        py.get_type::<TriggerValidationError>(),
+    )?;
     m.add("StorageError", py.get_type::<StorageError>())?;
     m.add("IntegrityError", py.get_type::<IntegrityError>())?;
 
@@ -1349,6 +1392,7 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     set_code(m, "RestrictError", "RESTRICT")?;
     set_code(m, "MigrationError", "MIGRATION")?;
     set_code(m, "ConflictError", "CONFLICT")?;
+    set_code(m, "TriggerValidationError", "TRIGGER_VALIDATION")?;
     set_code(m, "StorageError", "STORAGE")?;
     set_code(m, "IntegrityError", "INTEGRITY")?;
 

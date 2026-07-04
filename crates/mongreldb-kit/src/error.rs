@@ -23,6 +23,8 @@ pub enum KitError {
     Migration(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("trigger validation error: {0}")]
+    TriggerValidation(String),
     #[error("storage error: {0}")]
     Storage(String),
     #[error("integrity error: {0}")]
@@ -39,7 +41,13 @@ impl From<mongreldb_core::MongrelError> for KitError {
     fn from(e: mongreldb_core::MongrelError) -> Self {
         use mongreldb_core::MongrelError;
         match e {
+            MongrelError::Conflict(msg) if is_trigger_error(&msg) => {
+                KitError::TriggerValidation(msg)
+            }
             MongrelError::Conflict(msg) => KitError::Conflict(msg),
+            MongrelError::InvalidArgument(msg) if is_trigger_error(&msg) => {
+                KitError::TriggerValidation(msg)
+            }
             MongrelError::InvalidArgument(msg) => KitError::Validation(msg),
             MongrelError::Schema(msg) => KitError::Validation(msg),
             MongrelError::ColumnNotFound(msg) => KitError::Integrity(msg),
@@ -58,6 +66,12 @@ impl From<mongreldb_core::MongrelError> for KitError {
             _ => KitError::Storage(e.to_string()),
         }
     }
+}
+
+fn is_trigger_error(message: &str) -> bool {
+    message.contains("trigger ")
+        || message.contains("Trigger ")
+        || message.contains("external trigger bridge")
 }
 
 impl From<mongreldb_kit_core::schema::SchemaError> for KitError {
@@ -88,5 +102,29 @@ impl From<mongreldb_kit_core::planner::PlannerError> for KitError {
 impl From<serde_json::Error> for KitError {
     fn from(e: serde_json::Error) -> Self {
         KitError::Storage(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KitError;
+
+    #[test]
+    fn maps_trigger_core_errors_to_trigger_validation() {
+        let conflict = KitError::from(mongreldb_core::MongrelError::Conflict(
+            "trigger raised".into(),
+        ));
+        assert_eq!(
+            conflict,
+            KitError::TriggerValidation("trigger raised".into())
+        );
+
+        let invalid = KitError::from(mongreldb_core::MongrelError::InvalidArgument(
+            "external trigger bridge rejected".into(),
+        ));
+        assert_eq!(
+            invalid,
+            KitError::TriggerValidation("external trigger bridge rejected".into())
+        );
     }
 }

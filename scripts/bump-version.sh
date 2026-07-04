@@ -40,9 +40,13 @@ for f in "${CARGO_FILES[@]}"; do
 done
 sed -i "s/version = \"$OLD\"/version = \"$NEW\"/" python/mongreldb_kit/pyproject.toml
 sed -i "s/\"version\": \"$OLD\"/\"version\": \"$NEW\"/" packages/kit/package.json
+sed -i -E "s/return '[0-9]+\\.[0-9]+\\.[0-9]+';/return '$NEW';/" packages/kit/src/migrate.ts
+sed -i "s/mongreldb-kit = { path = \"..\\/mongreldb-kit\", version = \"$OLD\" }/mongreldb-kit = { path = \"..\\/mongreldb-kit\", version = \"$NEW\" }/" \
+  crates/kit-perf/Cargo.toml
 
 echo "Regenerating lockfiles..."
 cargo check --workspace >/dev/null
+(cd crates/kit-perf && cargo check >/dev/null)
 (cd packages/kit && npm install >/dev/null 2>&1)
 
 # Safety net: catch any file the hardcoded list above missed (e.g. a new

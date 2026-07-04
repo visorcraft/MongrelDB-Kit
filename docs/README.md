@@ -1,6 +1,6 @@
 # MongrelDB Kit
 
-`@mongreldb/kit` is the application persistence layer for [MongrelDB](https://github.com/visorcraft/mongreldb).
+`@visorcraft/mongreldb-kit` is the application persistence layer for [MongrelDB](https://github.com/visorcraft/mongreldb).
 MongrelDB is a fast storage engine with typed tables, snapshots, transactions, and SQL reads; the
 Kit adds the relational application layer on top:
 
@@ -8,6 +8,8 @@ Kit adds the relational application layer on top:
 - a synchronous **query builder** (CRUD, batch inserts, predicates, ordering, projections,
   aggregates, joins, group/having, subqueries, CTEs),
 - a **migration runner** with content-addressed checksums,
+- engine-side **triggers** and SQL-backed virtual/external table helpers,
+- **Extended SQL Function** helpers for date/time, JSON, aggregate, and math-style SQL calls,
 - **relational constraints the engine does not enforce natively** — not-null, checks, unique and
   composite-unique, foreign keys, and cascade / set-null / restrict deletes,
 - **auto-increment ids**, defaults, table rename support, and a stable error taxonomy.
@@ -22,13 +24,13 @@ core and validated by a cross-language conformance suite.
 ## Install
 
 ```sh
-npm install @mongreldb/kit
+npm install @visorcraft/mongreldb-kit @visorcraft/mongreldb
 ```
 
-`mongreldb` (the native engine binding) is a peer dependency. Node 22+ is required. In local
-development, build the sibling engine addon in release mode before benchmarking TypeScript paths.
-See the [TypeScript guide](./typescript.md) for build/runtime details, and [Rust](./rust.md) /
-[Python](./python.md) for those ecosystems.
+`@visorcraft/mongreldb` (the native engine binding) is a peer dependency. Node 22+ is required. In
+local development, build the sibling engine addon in release mode before benchmarking TypeScript
+paths. See the [TypeScript guide](./typescript.md) for build/runtime details, and the [Rust](./rust.md)
+and [Python](./python.md) guides for those ecosystems.
 
 ## Quickstart
 
@@ -39,7 +41,7 @@ import {
   Schema, table, int, text, timestamp,
   sequenceDefault, nowDefault, staticDefault, unique,
   KitDatabase, eq, desc,
-} from '@mongreldb/kit';
+} from '@visorcraft/mongreldb-kit';
 
 const customers = table('customers', {
   columns: [
@@ -95,6 +97,8 @@ Start here, then dive into the topic that fits your task.
 | [Transactions](./transactions.md) | `begin`/`commit`/`rollback`, the retrying `transaction()` helper, conflicts, and the concurrency model. |
 | [Migrations](./migrations.md) | Migration files, the runner, checksums, supported operations, idempotent column adds, and table renames. |
 | [Stored procedures](./stored-procedures.md) | Declarative routines callable from embedded, remote, and CLI Kit clients. |
+| [Triggers](./triggers.md) | Engine-side declarative triggers, migration helpers, remote APIs, and trigger validation errors. |
+| [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md) | SQL function helpers, `db.sqlRows`, and virtual/external table module specs. |
 | [Errors](./errors.md) | The error taxonomy, codes, and how to handle each category. |
 | [Internal tables](./internal-tables.md) | The reserved `__kit_*` tables and what each one stores. |
 | [CLI](./cli.md) | The `mongreldb-kit` command line: `check`, `diff`, `generate`, `migrate`, and more. |
@@ -106,7 +110,7 @@ Start here, then dive into the topic that fits your task.
 
 | Guide | Package |
 | --- | --- |
-| [TypeScript](./typescript.md) | `@mongreldb/kit` |
+| [TypeScript](./typescript.md) | `@visorcraft/mongreldb-kit` |
 | [Rust](./rust.md) | `mongreldb-kit` |
 | [Python](./python.md) | `mongreldb-kit` (import `mongreldb_kit`) |
 

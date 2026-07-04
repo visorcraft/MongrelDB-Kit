@@ -10,7 +10,7 @@ use mongreldb_kit::{
     Table,
 };
 use mongreldb_kit_core::migrations::plan_migrations;
-use mongreldb_kit_core::ProcedureSpec;
+use mongreldb_kit_core::{ProcedureSpec, TriggerSpec, VirtualTableSpec};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -86,6 +86,23 @@ enum CliMigrationOp {
     DropProcedure {
         name: String,
     },
+    CreateTrigger {
+        name: String,
+        trigger: Value,
+    },
+    ReplaceTrigger {
+        name: String,
+        trigger: Value,
+    },
+    DropTrigger {
+        name: String,
+    },
+    CreateVirtualTable {
+        table: VirtualTableSpec,
+    },
+    DropVirtualTable {
+        name: String,
+    },
     RawSql(String),
 }
 
@@ -130,6 +147,19 @@ impl From<CliMigrationOp> for MigrationOp {
                 procedure: ProcedureSpec::new(procedure),
             },
             CliMigrationOp::DropProcedure { name } => MigrationOp::DropProcedure { name },
+            CliMigrationOp::CreateTrigger { name, trigger } => MigrationOp::CreateTrigger {
+                name,
+                trigger: TriggerSpec::new(trigger),
+            },
+            CliMigrationOp::ReplaceTrigger { name, trigger } => MigrationOp::ReplaceTrigger {
+                name,
+                trigger: TriggerSpec::new(trigger),
+            },
+            CliMigrationOp::DropTrigger { name } => MigrationOp::DropTrigger { name },
+            CliMigrationOp::CreateVirtualTable { table } => {
+                MigrationOp::CreateVirtualTable { table }
+            }
+            CliMigrationOp::DropVirtualTable { name } => MigrationOp::DropVirtualTable { name },
             CliMigrationOp::RawSql(sql) => MigrationOp::RawSql(sql),
         }
     }

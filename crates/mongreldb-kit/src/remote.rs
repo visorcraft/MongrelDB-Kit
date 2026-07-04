@@ -33,13 +33,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::error::{KitError, Result};
-use mongreldb_kit_core::ProcedureSpec;
+use mongreldb_kit_core::{ProcedureSpec, TriggerSpec, VirtualTableSpec};
 
 const EC_UNIQUE: &str = "UNIQUE_VIOLATION";
 const EC_FK: &str = "FK_VIOLATION";
 const EC_CHECK: &str = "CHECK_VIOLATION";
 const EC_CONFLICT: &str = "CONFLICT";
 const EC_BAD: &str = "BAD_REQUEST";
+const EC_TRIGGER_VALIDATION: &str = "TRIGGER_VALIDATION";
 
 /// A typed remote client bound to a `mongreldb-server` URL.
 pub struct RemoteDatabase {
@@ -183,6 +184,73 @@ impl RemoteDatabase {
             .send()
             .map_err(ioe)?;
         decode(resp)
+    }
+
+    pub fn triggers(&self) -> Result<Vec<Value>> {
+        let resp = self.client.get(self.url("/triggers")).send().map_err(ioe)?;
+        let v: Value = decode(resp)?;
+        Ok(v.get("triggers")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    pub fn trigger(&self, name: &str) -> Result<Value> {
+        let resp = self
+            .client
+            .get(self.url(&format!("/triggers/{name}")))
+            .send()
+            .map_err(ioe)?;
+        let v: Value = decode(resp)?;
+        Ok(v.get("trigger").cloned().unwrap_or(Value::Null))
+    }
+
+    pub fn create_trigger(&self, spec: &TriggerSpec) -> Result<Value> {
+        let resp = self
+            .client
+            .post(self.url("/triggers"))
+            .json(&json!({ "trigger": spec.json }))
+            .send()
+            .map_err(ioe)?;
+        decode(resp)
+    }
+
+    pub fn replace_trigger(&self, name: &str, spec: &TriggerSpec) -> Result<Value> {
+        let resp = self
+            .client
+            .put(self.url(&format!("/triggers/{name}")))
+            .json(&json!({ "trigger": spec.json }))
+            .send()
+            .map_err(ioe)?;
+        decode(resp)
+    }
+
+    pub fn drop_trigger(&self, name: &str) -> Result<()> {
+        let resp = self
+            .client
+            .delete(self.url(&format!("/triggers/{name}")))
+            .send()
+            .map_err(ioe)?;
+        let _: Value = decode(resp)?;
+        Ok(())
+    }
+
+    pub fn create_virtual_table(
+        &mut self,
+        table: &VirtualTableSpec,
+    ) -> Result<Vec<Map<String, Value>>> {
+        let rows = self.sql_rows(&table.create_sql())?;
+        self.refresh()?;
+        Ok(rows)
+    }
+
+    pub fn drop_virtual_table(&mut self, name: &str) -> Result<Vec<Map<String, Value>>> {
+        let rows = self.sql_rows(&format!(
+            "DROP TABLE {}",
+            mongreldb_kit_core::quote_ident(name)
+        ))?;
+        self.refresh()?;
+        Ok(rows)
     }
 
     fn url(&self, path: &str) -> String {
@@ -578,6 +646,7 @@ fn map_error(resp: reqwest::blocking::Response) -> KitError {
             EC_FK => return KitError::ForeignKey(msg),
             EC_CHECK | EC_BAD => return KitError::Validation(msg),
             EC_CONFLICT => return KitError::Conflict(msg),
+            EC_TRIGGER_VALIDATION => return KitError::TriggerValidation(msg),
             _ => {}
         }
     }

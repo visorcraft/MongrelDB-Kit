@@ -7,7 +7,7 @@ machine-readable `code`** and, where it helps, structured fields (`table`, `colu
 Python.
 
 ```ts
-import { KitDuplicateError } from '@mongreldb/kit';
+import { KitDuplicateError } from '@visorcraft/mongreldb-kit';
 
 try {
   db.insertInto(customers).values({ email: 'ada@example.com', name: 'Ada' }).executeSync();
@@ -29,6 +29,7 @@ try {
 | `KitForeignKeyError` | `'FOREIGN_KEY'` | `table`, `constraint` | An insert/update references a parent row that does not exist. |
 | `KitRestrictError` | `'RESTRICT'` | `table`, `constraint` | A delete is blocked by child rows under an `onDelete: 'restrict'` foreign key. |
 | `KitConflictError` | `'CONFLICT'` | `retryable === true` | A write-write conflict; safe to retry the whole transaction. |
+| `KitTriggerValidationError` | `'TRIGGER_VALIDATION'` | — | An engine trigger rejected the write or raised a validation failure. |
 | `KitMigrationError` | `'MIGRATION'` | — | A migration fails, is malformed, or the migration lock is already held. |
 | `KitSchemaDriftError` | `'SCHEMA_DRIFT'` | — | An already-applied migration was edited, renamed, or removed. |
 | `KitTimeoutError` | `'TIMEOUT'` | — | A transaction exceeded its time budget. |
@@ -75,7 +76,7 @@ validation: not-null, wrong runtime type, enum membership, `min`/`max`, `minLeng
   `check` failures (which span multiple columns).
 
 ```ts
-import { KitValidationError } from '@mongreldb/kit';
+import { KitValidationError } from '@visorcraft/mongreldb-kit';
 
 try {
   // `name` is non-nullable with no default.
@@ -101,7 +102,7 @@ row. Reads never throw this — `selectFrom(...)` returns `[]` and a missing-row
 - `pk` — the primary-key value that was not found (`unknown`; a `bigint`, string, or composite array).
 
 ```ts
-import { KitNotFoundError } from '@mongreldb/kit';
+import { KitNotFoundError } from '@visorcraft/mongreldb-kit';
 
 try {
   db.deleteFrom(customers).where(eq(customers.id, 999n)).executeSync();
@@ -124,7 +125,7 @@ skips the guard, matching SQL `NULL` semantics.)
   name of the form `__pk_<table>`.
 
 ```ts
-import { KitDuplicateError } from '@mongreldb/kit';
+import { KitDuplicateError } from '@visorcraft/mongreldb-kit';
 
 db.insertInto(customers).values({ email: 'ada@example.com', name: 'Ada' }).executeSync();
 try {
@@ -145,7 +146,7 @@ A `null` in any FK column skips the check (an optional reference).
 - `constraint` — the foreign-key name.
 
 ```ts
-import { KitForeignKeyError } from '@mongreldb/kit';
+import { KitForeignKeyError } from '@visorcraft/mongreldb-kit';
 
 try {
   db.insertInto(orders).values({ customer_id: 999n }).executeSync(); // no such customer
@@ -166,7 +167,7 @@ and `'set null'` (child FK columns nulled), which never raise this.
 - `constraint` — the blocking foreign-key name.
 
 ```ts
-import { KitRestrictError } from '@mongreldb/kit';
+import { KitRestrictError } from '@visorcraft/mongreldb-kit';
 
 // order_items.product_id references products with onDelete: 'restrict'.
 try {
@@ -197,13 +198,32 @@ ordinary `Error`s whose message begins with `__CONFLICT__:` rather than as a `Ki
 detect either form with the exported helper:
 
 ```ts
-import { isRetryableConflict } from '@mongreldb/kit';
+import { isRetryableConflict } from '@visorcraft/mongreldb-kit';
 
 isRetryableConflict(err); // true for KitConflictError and for native "__CONFLICT__: …" messages
 ```
 
 If you drive transactions manually, gate your own retry loop on `isRetryableConflict`. See
 [Transactions](./transactions.md).
+
+## `KitTriggerValidationError` — `'TRIGGER_VALIDATION'`
+
+Thrown when an engine-side trigger rejects a write, for example through a trigger
+`raise` step or a trigger validation failure. Treat it like a data validation
+failure: the write did not commit, and retrying with the same row will fail the
+same way.
+
+```ts
+import { KitTriggerValidationError } from '@visorcraft/mongreldb-kit';
+
+try {
+  db.insertInto(users).values(row).executeSync();
+} catch (err) {
+  if (err instanceof KitTriggerValidationError) {
+    console.error(err.code); // 'TRIGGER_VALIDATION'
+  }
+}
+```
 
 ## `KitMigrationError` — `'MIGRATION'`
 
@@ -213,7 +233,7 @@ default, a duplicate column/index/FK, or a missing table), or when the advisory 
 already held** by a concurrent run.
 
 ```ts
-import { KitMigrationError } from '@mongreldb/kit';
+import { KitMigrationError } from '@visorcraft/mongreldb-kit';
 
 try {
   db.migrateSync(schema, migrations);
@@ -234,7 +254,7 @@ Editing committed history would silently change what a recorded migration meant,
 refuses to proceed.
 
 ```ts
-import { KitSchemaDriftError } from '@mongreldb/kit';
+import { KitSchemaDriftError } from '@visorcraft/mongreldb-kit';
 
 try {
   db.migrateSync(schema, migrations);
@@ -268,7 +288,7 @@ rely on `instanceof KitUnsupportedError` to catch them.
 Both can fail the same `insertInto(...)`; branch on the subtype:
 
 ```ts
-import { KitDuplicateError, KitForeignKeyError } from '@mongreldb/kit';
+import { KitDuplicateError, KitForeignKeyError } from '@visorcraft/mongreldb-kit';
 
 function placeOrder(customerId: bigint) {
   try {
@@ -286,12 +306,13 @@ function placeOrder(customerId: bigint) {
 Branch on the stable `.code` instead of the class when you only need the category:
 
 ```ts
-import { KitError } from '@mongreldb/kit';
+import { KitError } from '@visorcraft/mongreldb-kit';
 
 function statusFor(err: unknown): number {
   if (!(err instanceof KitError)) return 500;
   switch (err.code) {
     case 'VALIDATION':  return 400;
+    case 'TRIGGER_VALIDATION': return 400;
     case 'NOT_FOUND':   return 404;
     case 'DUPLICATE':
     case 'FOREIGN_KEY':
@@ -305,7 +326,7 @@ function statusFor(err: unknown): number {
 ### Retry on conflict
 
 ```ts
-import { isRetryableConflict } from '@mongreldb/kit';
+import { isRetryableConflict } from '@visorcraft/mongreldb-kit';
 
 function withRetry<T>(work: () => T, attempts = 5): T {
   for (let i = 0; ; i++) {
@@ -334,13 +355,14 @@ The Kit guarantees one stable error *category* across languages; the surface sha
 | `KitRestrictError` / `RESTRICT` | `KitError::Restrict` | `RestrictError` (`RESTRICT`) |
 | `KitMigrationError` / `MIGRATION` | `KitError::Migration` | `MigrationError` (`MIGRATION`) |
 | `KitConflictError` / `CONFLICT` | `KitError::Conflict` | `ConflictError` (`CONFLICT`) |
+| `KitTriggerValidationError` / `TRIGGER_VALIDATION` | `KitError::TriggerValidation` | `TriggerValidationError` (`TRIGGER_VALIDATION`) |
 | base `KitError` / `STORAGE` | `KitError::Storage` | `StorageError` (`STORAGE`) |
 | base `KitError` / `INTEGRITY` | `KitError::Integrity` | `IntegrityError` (`INTEGRITY`) |
 
-Rust and Python expose **eight** categories. TypeScript adds four finer-grained subtypes —
+Rust and Python expose **nine** categories. TypeScript adds four finer-grained subtypes —
 `KitNotFoundError`, `KitSchemaDriftError`, `KitTimeoutError`, and `KitUnsupportedError` — that the
 other two fold into the nearest shared category (a missing row surfaces as an integrity/storage
-error; schema drift as a migration error; and so on). Code that switches only on the eight shared
+error; schema drift as a migration error; and so on). Code that switches only on the nine shared
 codes behaves identically in every language.
 
 ## Notes
@@ -349,13 +371,15 @@ codes behaves identically in every language.
 - `.code` strings are stable API — safe to log, serialize, and switch on. Class names and `.message`
   text are not contractual.
 - Validation runs **before** the write, so a thrown `KitValidationError`/`KitDuplicateError`/
-  `KitForeignKeyError` leaves the database unchanged; the surrounding transaction is rolled back.
+  `KitForeignKeyError`/`KitTriggerValidationError` leaves the database unchanged; the surrounding
+  transaction is rolled back.
 - `KitConflictError` is the only retryable error. Do not retry validation, duplicate, foreign-key,
-  restrict, or migration errors — they will fail again with the same input.
+  restrict, trigger validation, or migration errors — they will fail again with the same input.
 
 ## See also
 
 - [Constraints](./constraints.md) — the rules that raise `Duplicate`, `ForeignKey`, `Restrict`, and `check`-based `Validation` errors.
+- [Triggers](./triggers.md) — engine-side triggers and `TRIGGER_VALIDATION`.
 - [Transactions](./transactions.md) — conflict handling and the retrying transaction helpers.
 - [Migrations](./migrations.md) — what raises `Migration` and `SchemaDrift` errors.
 - [Query builder](./query-builder.md) — the CRUD calls that surface these errors.

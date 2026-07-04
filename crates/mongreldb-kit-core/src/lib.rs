@@ -5,15 +5,18 @@
 //! `mongreldb-kit` crate and by language bindings.
 
 pub mod check;
+pub mod external;
 pub mod keys;
 pub mod migrations;
 pub mod planner;
 pub mod procedure;
 pub mod query;
 pub mod schema;
+pub mod trigger;
 pub mod validation;
 
 pub use check::{eval_check, CheckParseError};
+pub use external::{quote_ident, VirtualTableSpec};
 pub use keys::{
     decode_pk, encode_component, encode_pk, encode_row_guard_key, encode_unique_key, KeyComponent,
     KIT_KEY_VERSION,
@@ -31,4 +34,5 @@ pub use schema::{
     CheckConstraint, Column, ColumnType, DefaultKind, ForeignKey, ForeignKeyAction, Index,
     IndexKind, Schema, SchemaError, Sequence, Table, UniqueConstraint,
 };
+pub use trigger::TriggerSpec;
 pub use validation::{validate_row, ValidationError};

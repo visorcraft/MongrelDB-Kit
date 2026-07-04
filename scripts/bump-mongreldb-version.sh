@@ -2,8 +2,9 @@
 # Point MongrelDB Kit at a different MongrelDB engine release: the dev-only
 # [patch.crates-io] git tag (root Cargo.toml), the mongreldb-core version
 # constraint in crates/mongreldb-kit/Cargo.toml, the mongreldb-core version
-# constraint in tests/conformance/rust/Cargo.toml, and the mongreldb-server
-# git tag used by the Rust conformance runner. Then regenerates Cargo.lock.
+# constraint in tests/conformance/rust/Cargo.toml, the mongreldb-server git
+# tag used by the Rust conformance runner, and the standalone kit-perf crate.
+# Then regenerates Cargo.lock files.
 #
 # Usage: scripts/bump-mongreldb-version.sh NEW_VERSION
 # Example: scripts/bump-mongreldb-version.sh 0.19.5
@@ -46,15 +47,20 @@ if [[ "$NEW" == "$OLD" ]]; then
 fi
 echo "Pointing Kit at MongrelDB $OLD -> $NEW"
 
-sed -i "s/tag = \"v$OLD\"/tag = \"v$NEW\"/" Cargo.toml
+sed -i -E "s#mongreldb-core = \\{ git = \"https://github.com/visorcraft/MongrelDB.git\", (tag = \"v[0-9.]+\"|rev = \"[a-f0-9]+\") \\}#mongreldb-core = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" Cargo.toml
 sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$NEW\"/" \
   crates/mongreldb-kit/Cargo.toml
-sed -i "s/tag = \"v$OLD\"/tag = \"v$NEW\"/" tests/conformance/rust/Cargo.toml
+sed -i -E "s#mongreldb-server = \\{ git = \"https://github.com/visorcraft/MongrelDB.git\", (tag = \"v[0-9.]+\"|rev = \"[a-f0-9]+\") \\}#mongreldb-server = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" tests/conformance/rust/Cargo.toml
 sed -i "s/mongreldb-core = \"[0-9.]*\"/mongreldb-core = \"$NEW\"/" \
   tests/conformance/rust/Cargo.toml
+sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$NEW\"/" \
+  crates/kit-perf/Cargo.toml
+sed -i -E "s#mongreldb-core = \\{ git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v[0-9.]+\" \\}#mongreldb-core = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" \
+  crates/kit-perf/Cargo.toml
 
 echo "Regenerating lockfile (fetches mongreldb-core from the git tag)..."
 cargo check --workspace >/dev/null
+(cd crates/kit-perf && cargo check >/dev/null)
 
 # Safety net: catch any file the hardcoded list above missed.
 STRAY="$(grep -rln "v$OLD\"\|\"$OLD\"" --include="*.toml" . 2>/dev/null \

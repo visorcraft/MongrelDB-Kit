@@ -12,6 +12,12 @@ import { KIT_KEY_VERSION, encodedPk, encodeRowGuardKey, encodeUniqueKey } from '
 
 import { KitMigrationError, KitSchemaDriftError, KitForeignKeyError } from './errors.js';
 import { procedureJson, type ProcedureSpec } from './procedure.js';
+import { triggerJson, type TriggerSpec } from './trigger.js';
+import {
+	createVirtualTableSql,
+	dropVirtualTableSql,
+	type VirtualTableSpec
+} from './external.js';
 import {
 	kitSchemaMigrations,
 	kitSchemaCatalog,
@@ -92,6 +98,11 @@ export type MigrationOp =
 	| { kind: 'createProcedure'; name: string; procedure: ProcedureSpec }
 	| { kind: 'replaceProcedure'; name: string; procedure: ProcedureSpec }
 	| { kind: 'dropProcedure'; name: string }
+	| { kind: 'createTrigger'; name: string; trigger: TriggerSpec }
+	| { kind: 'replaceTrigger'; name: string; trigger: TriggerSpec }
+	| { kind: 'dropTrigger'; name: string }
+	| { kind: 'createVirtualTable'; table: VirtualTableSpec }
+	| { kind: 'dropVirtualTable'; name: string }
 	| { kind: 'rawSql'; sql: string };
 
 export interface Migration {
@@ -116,6 +127,11 @@ export interface MigrationContext {
 	alterColumn: (tableName: string, columnName: string, newColumn: ColumnSpec) => Promise<void> | void;
 	addIndex: (tableName: string, index: IndexSpec) => Promise<void> | void;
 	dropIndex: (tableName: string, indexName: string) => Promise<void> | void;
+	createTrigger: (trigger: TriggerSpec) => Promise<void> | void;
+	replaceTrigger: (trigger: TriggerSpec) => Promise<void> | void;
+	dropTrigger: (name: string) => Promise<void> | void;
+	createVirtualTable: (table: VirtualTableSpec) => Promise<void> | void;
+	dropVirtualTable: (name: string) => Promise<void> | void;
 	sql: (sql: string) => Promise<unknown[]> | unknown[];
 }
 
@@ -311,6 +327,16 @@ function canonicalOp(op: MigrationOp): string {
 			return `{"op":"replace_procedure","name":${s(op.name)},"procedure":${procedureJson(op.procedure)}}`;
 		case 'dropProcedure':
 			return `{"op":"drop_procedure","name":${s(op.name)}}`;
+		case 'createTrigger':
+			return `{"op":"create_trigger","name":${s(op.name)},"trigger":${triggerJson(op.trigger)}}`;
+		case 'replaceTrigger':
+			return `{"op":"replace_trigger","name":${s(op.name)},"trigger":${triggerJson(op.trigger)}}`;
+		case 'dropTrigger':
+			return `{"op":"drop_trigger","name":${s(op.name)}}`;
+		case 'createVirtualTable':
+			return `{"op":"create_virtual_table","name":${s(op.table.name)},"module":${s(op.table.module)},"args":[${(op.table.args ?? []).map(s).join(',')}]}`;
+		case 'dropVirtualTable':
+			return `{"op":"drop_virtual_table","name":${s(op.name)}}`;
 		case 'rawSql':
 			return `{"op":"raw_sql","sql":${s(op.sql)}}`;
 		default: {
@@ -468,7 +494,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.3.0';
+	return '0.10.0';
 }
 
 function makeContext(kit: KitDatabase): MigrationContext {
@@ -482,6 +508,17 @@ function makeContext(kit: KitDatabase): MigrationContext {
 			alterColumn(kit, tableName, columnName, newColumn),
 		addIndex: (tableName: string, index: IndexSpec) => addIndex(kit, tableName, index),
 		dropIndex: (tableName: string, indexName: string) => dropIndex(kit, tableName, indexName),
+		createTrigger: (trigger: TriggerSpec) => {
+			kit.createTriggerSync(trigger);
+		},
+		replaceTrigger: (trigger: TriggerSpec) => {
+			kit.createOrReplaceTriggerSync(trigger);
+		},
+		dropTrigger: (name: string) => {
+			kit.dropTriggerSync(name);
+		},
+		createVirtualTable: (table: VirtualTableSpec) => createVirtualTable(kit, table),
+		dropVirtualTable: (name: string) => dropVirtualTable(kit, name),
 		sql: (sql: string) => runSql(kit.nativeDb, sql)
 	};
 }
@@ -596,6 +633,25 @@ function makeContextSync(kit: KitDatabase): MigrationContext {
 			alterColumnSync(kit, tableName, columnName, newColumn),
 		addIndex: (tableName: string, index: IndexSpec) => addIndexSync(kit, tableName, index),
 		dropIndex: (tableName: string, indexName: string) => dropIndexSync(kit, tableName, indexName),
+		createTrigger: (trigger: TriggerSpec) => {
+			kit.createTriggerSync(trigger);
+		},
+		replaceTrigger: (trigger: TriggerSpec) => {
+			kit.createOrReplaceTriggerSync(trigger);
+		},
+		dropTrigger: (name: string) => {
+			kit.dropTriggerSync(name);
+		},
+		createVirtualTable: (table: VirtualTableSpec) => {
+			throw new KitMigrationError(
+				`createVirtualTable(${table.name}) requires async migrations because it runs SQL`
+			);
+		},
+		dropVirtualTable: (name: string) => {
+			throw new KitMigrationError(
+				`dropVirtualTable(${name}) requires async migrations because it runs SQL`
+			);
+		},
 		sql: () => {
 			throw new KitMigrationError('sql() is not available in synchronous migrations');
 		}
@@ -713,6 +769,17 @@ function createTableSync(kit: KitDatabase, table: TableSpec): void {
 
 export async function createTable(kit: KitDatabase, table: TableSpec): Promise<void> {
 	createTableSync(kit, table);
+}
+
+export async function createVirtualTable(
+	kit: KitDatabase,
+	table: VirtualTableSpec
+): Promise<void> {
+	await runSql(kit.nativeDb, createVirtualTableSql(table));
+}
+
+export async function dropVirtualTable(kit: KitDatabase, name: string): Promise<void> {
+	await runSql(kit.nativeDb, dropVirtualTableSql(name));
 }
 
 /**

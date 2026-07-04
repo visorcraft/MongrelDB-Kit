@@ -39,7 +39,7 @@ There are two runners. Both live on the kit surface; pick by whether your `up()`
 callbacks are synchronous.
 
 ```ts
-import { KitDatabase, migrate } from '@mongreldb/kit';
+import { KitDatabase, migrate } from '@visorcraft/mongreldb-kit';
 import { schema } from './schema.js';
 
 const db = KitDatabase.openSync('./data', schema);
@@ -93,6 +93,11 @@ it never drives the work.
 | `ctx.alterColumn(tableName, oldName, column)` | Alter an existing column through native MongrelDB validation. |
 | `ctx.addIndex(tableName, index)` | Add an index by rebuilding the table. |
 | `ctx.dropIndex(tableName, indexName)` | Drop an index by rebuilding the table. |
+| `ctx.createTrigger(trigger)` | Install a declarative engine trigger from a `TriggerSpec`. |
+| `ctx.replaceTrigger(trigger)` | Replace an existing trigger with the same name. |
+| `ctx.dropTrigger(name)` | Drop an installed trigger. |
+| `ctx.createVirtualTable(table)` | Run `CREATE VIRTUAL TABLE ... USING ...`. Available in async migrations only. |
+| `ctx.dropVirtualTable(name)` | Run `DROP TABLE ...` for a virtual table. Available in async migrations only. |
 | `ctx.sql(sql)` | Run raw SQL. Available in async migrations only; throws in `migrateSync`. |
 
 For changes beyond adding a table or column, import the standalone helpers and
@@ -102,7 +107,7 @@ runner:
 ```ts
 import {
   migrate, dropTable, addColumn, addIndex, addUnique, addForeignKey, unique,
-} from '@mongreldb/kit';
+} from '@visorcraft/mongreldb-kit';
 
 await migrate(db, schema, [
   {
@@ -124,6 +129,9 @@ await migrate(db, schema, [
 | `alterColumn(kit, t, oldName, column)` / `ctx.alterColumn` | Alter an existing column through native MongrelDB validation. Supports renames, native type changes that do not require stored-row conversion, and nullability changes that existing data satisfies. |
 | `addIndex(kit, t, indexSpec)` / `ctx.addIndex` | Add an index by rebuilding the table (MongrelDB has no add-index-in-place). Unique indexes also backfill unique guards. |
 | `dropIndex(kit, t, indexName)` / `ctx.dropIndex` | Drop an index by rebuilding the table; dropping a unique index also clears its guards. |
+| `ctx.createTrigger(trigger)` / `ctx.replaceTrigger(trigger)` / `ctx.dropTrigger(name)` | Manage engine-side triggers. Include matching `createTrigger` / `replaceTrigger` / `dropTrigger` ops when you want checksum drift protection. |
+| `createVirtualTable(kit, table)` / `ctx.createVirtualTable` | Create a virtual table through SQL; async migrations only. |
+| `dropVirtualTable(kit, name)` / `ctx.dropVirtualTable` | Drop a virtual table through SQL; async migrations only. |
 | `addUnique(kit, t, uniqueSpec)` | Add a unique constraint and backfill its guards; rejects data that already violates it. |
 | `addForeignKey(kit, t, fkSpec)` | Add a foreign key and touch parent row guards; rejects a child with a missing parent. |
 | `dropTable(kit, tableName)` | Drop a table and clear its unique-key and row guards. |
@@ -183,13 +191,19 @@ Verify against this matrix rather than assuming symmetry.
 | `addIndex` | `addIndex` / `ctx.addIndex` (table rebuild) | implemented (table rebuild) |
 | `dropColumn` | `dropColumn` / `ctx.dropColumn` (table rebuild) | implemented (table rebuild) |
 | `dropIndex` | `dropIndex` / `ctx.dropIndex` (table rebuild) | implemented (table rebuild) |
+| `createTrigger` | `ctx.createTrigger` | implemented |
+| `replaceTrigger` | `ctx.replaceTrigger` | implemented |
+| `dropTrigger` | `ctx.dropTrigger` | implemented |
+| `createVirtualTable` | `createVirtualTable` / `ctx.createVirtualTable` (async migrations only) | **not supported** — raises a migration error |
+| `dropVirtualTable` | `dropVirtualTable` / `ctx.dropVirtualTable` (async migrations only) | **not supported** — raises a migration error |
 | `rawSql` | `ctx.sql` (async migrations only) | **not supported** — raises a migration error |
 
 Remaining asymmetry: `dropUnique`, `dropForeignKey`, and check ops are handled
 (or safely no-op'd) by the Rust/CLI runner but have no TypeScript helper because
-the schema definition already carries their enforcement. `rawSql` remains
-TypeScript-only because the Rust/CLI runner intentionally avoids embedding a SQL
-execution engine in migrations.
+the schema definition already carries their enforcement. Virtual-table ops and
+`rawSql` remain TypeScript-only because the Rust/CLI runner intentionally avoids
+embedding a SQL execution engine in migrations; use a SQL-capable Kit surface
+for those changes.
 
 ## Checksums and drift detection
 
@@ -292,7 +306,7 @@ that match what `up()` does, so the checksum stays content-aware.
 ```ts
 import {
   KitDatabase, migrate, text, unique, addUnique,
-} from '@mongreldb/kit';
+} from '@visorcraft/mongreldb-kit';
 import { schema, customers, products, orders, orderItems } from './schema.js';
 
 const db = KitDatabase.openSync('./data', schema);

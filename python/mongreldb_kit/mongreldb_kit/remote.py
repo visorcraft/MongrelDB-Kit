@@ -25,6 +25,7 @@ from .mongreldb_kit_py import (
     DuplicateError,
     ForeignKeyError,
     StorageError,
+    TriggerValidationError,
     ValidationError,
 )
 
@@ -44,9 +45,15 @@ def _map_error(status: int, body: str) -> Exception:
         return ForeignKeyError(msg)
     if code in ("CHECK_VIOLATION", "BAD_REQUEST"):
         return ValidationError(msg)
+    if code == "TRIGGER_VALIDATION":
+        return TriggerValidationError(msg)
     if code == "CONFLICT":
         return ConflictError(msg)
     return StorageError(f"http {status} ({code}): {msg}")
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
 
 
 class RemoteDatabase:
@@ -135,6 +142,33 @@ class RemoteDatabase:
 
     def call_procedure(self, name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self._post_json(f"/kit/procedures/{name}/call", {"args": args or {}})
+
+    def triggers(self) -> List[Dict[str, Any]]:
+        return list((self._get_json("/triggers").get("triggers") or []))
+
+    def trigger(self, name: str) -> Dict[str, Any]:
+        return self._get_json(f"/triggers/{name}").get("trigger")
+
+    def create_trigger(self, trigger: Dict[str, Any]) -> Dict[str, Any]:
+        return self._post_json("/triggers", {"trigger": trigger})
+
+    def replace_trigger(self, name: str, trigger: Dict[str, Any]) -> Dict[str, Any]:
+        data = json.dumps({"trigger": trigger}).encode("utf-8")
+        with self._open("PUT", f"/triggers/{name}", body=data) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def drop_trigger(self, name: str) -> None:
+        self._open("DELETE", f"/triggers/{name}", body=None).close()
+
+    def create_virtual_table(self, name: str, module: str, args: Optional[List[str]] = None) -> bytes:
+        arg_sql = ", ".join(args or [])
+        suffix = f"({arg_sql})" if arg_sql else ""
+        return self.sql_arrow(
+            f"CREATE VIRTUAL TABLE {_quote_ident(name)} USING {_quote_ident(module)}{suffix}"
+        )
+
+    def drop_virtual_table(self, name: str) -> bytes:
+        return self.sql_arrow(f"DROP TABLE {_quote_ident(name)}")
 
     # ── HTTP plumbing ─────────────────────────────────────────────────────
 

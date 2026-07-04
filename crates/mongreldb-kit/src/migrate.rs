@@ -174,6 +174,28 @@ fn apply_migration_ops(
             MigrationOp::DropProcedure { name } => {
                 let _ = core.drop_procedure(name);
             }
+            MigrationOp::CreateTrigger { trigger, .. } => {
+                core.create_trigger(core_trigger(trigger)?)
+                    .map_err(KitError::from)?;
+            }
+            MigrationOp::ReplaceTrigger { trigger, .. } => {
+                core.create_or_replace_trigger(core_trigger(trigger)?)
+                    .map_err(KitError::from)?;
+            }
+            MigrationOp::DropTrigger { name } => {
+                let _ = core.drop_trigger(name);
+            }
+            MigrationOp::CreateVirtualTable { table } => {
+                return Err(KitError::Migration(format!(
+                    "create_virtual_table migration op requires a SQL-capable Kit surface: {}",
+                    table.create_sql()
+                )));
+            }
+            MigrationOp::DropVirtualTable { name } => {
+                return Err(KitError::Migration(format!(
+                    "drop_virtual_table migration op requires a SQL-capable Kit surface: DROP TABLE {name}"
+                )));
+            }
             MigrationOp::DropColumn { table, column } => {
                 let target = schema.table(table).ok_or_else(|| {
                     KitError::Migration(format!("drop_column: table {table} not found in schema"))
@@ -224,6 +246,25 @@ fn apply_migration_ops(
         }
     }
     Ok(())
+}
+
+fn core_trigger(spec: &mongreldb_kit_core::TriggerSpec) -> Result<mongreldb_core::StoredTrigger> {
+    let parsed: mongreldb_core::StoredTrigger =
+        serde_json::from_value(spec.json.clone()).map_err(KitError::from)?;
+    mongreldb_core::StoredTrigger::new(
+        parsed.name,
+        mongreldb_core::TriggerDefinition {
+            target: parsed.target,
+            timing: parsed.timing,
+            event: parsed.event,
+            update_of: parsed.update_of,
+            target_columns: parsed.target_columns,
+            when: parsed.when,
+            program: parsed.program,
+        },
+        0,
+    )
+    .map_err(KitError::from)
 }
 
 fn alter_column(

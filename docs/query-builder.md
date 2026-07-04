@@ -4,7 +4,7 @@ MongrelDB Kit ships a small, typed query builder for reads and writes. It is **s
 (`.executeSync()`) with an async wrapper (`.execute()`), returns typed rows, and pushes the
 predicates it can down to the storage engine while computing everything else — joins, grouping,
 aggregates, subqueries, CTEs — in memory. The whole surface is exposed as methods on a
-`KitDatabase` plus a handful of helper functions imported from `@mongreldb/kit`.
+`KitDatabase` plus a handful of helper functions imported from `@visorcraft/mongreldb-kit`.
 
 This guide uses the shared "store" schema (`customers`, `products`, `orders`, `order_items`); the
 full definition lives in [Schema DSL](./schema.md). The snippets below assume an open database and a
@@ -16,7 +16,7 @@ import {
   eq, ne, gt, gte, lt, lte, inList, notInList, isNull, isNotNull,
   like, contains, and, or, not, asc, desc,
   inSubquery, exists, notExists, count, sum, min, max, avg,
-} from '@mongreldb/kit';
+} from '@visorcraft/mongreldb-kit';
 import { customers, products, orders, orderItems, schema } from './store-schema.js';
 
 const db = KitDatabase.openSync('./data', schema);
@@ -104,7 +104,7 @@ const rows = await db.selectFrom(orders).where(eq(orders.status, 'paid')).execut
 
 ## Predicates
 
-Predicate helpers are imported from `@mongreldb/kit` and passed to `.where(...)`. The comparison
+Predicate helpers are imported from `@visorcraft/mongreldb-kit` and passed to `.where(...)`. The comparison
 helpers are typed: the value must match the column's application type (e.g. `bigint` for an `int`
 column, `string` for `text`).
 
@@ -625,6 +625,10 @@ txn.select("customers", filter={"exists": {"table": "orders", "filter": {"status
 Raw escape hatches per language: TypeScript `db.nativeDb`, Rust `db.inner` (core `Database`), Python
 `db._handle`. These bypass kit constraints.
 
+For SQL-first reads, Extended SQL Functions, and virtual/external tables, prefer the explicit SQL
+surfaces (`db.sqlRows`, remote `sql_rows` / `sql_arrow`) described in
+[Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
+
 ## See also
 
 - [Schema DSL](./schema.md) — the `customers` / `products` / `orders` / `order_items` schema used above.
@@ -632,4 +636,5 @@ Raw escape hatches per language: TypeScript `db.nativeDb`, Rust `db.inner` (core
 - [Defaults & sequences](./defaults.md) — sequence-assigned ids and column defaults.
 - [Constraints](./constraints.md) — the unique / foreign-key / check guards writes enforce.
 - [Transactions](./transactions.md) — how writes commit and retry on conflict.
+- [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md) — SQL function helpers and module-backed virtual tables.
 - [TypeScript](./typescript.md) · [Rust](./rust.md) · [Python](./python.md) — the language guides.

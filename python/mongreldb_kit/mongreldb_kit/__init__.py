@@ -14,6 +14,7 @@ from .mongreldb_kit_py import (
     MigrationError,
     RestrictError,
     StorageError,
+    TriggerValidationError,
     ValidationError,
     migrate as _migrate,
     encode_pk as _encode_pk,
@@ -62,6 +63,7 @@ __all__ = [
     "MigrationError",
     "RestrictError",
     "StorageError",
+    "TriggerValidationError",
     "ValidationError",
     "Column",
     "ForeignKey",
@@ -149,6 +151,24 @@ class Database:
     def call_procedure(self, name: str, args: Any | None = None) -> dict[str, Any]:
         args_json = "{}" if args is None else (args if isinstance(args, str) else json.dumps(args))
         return json.loads(self._handle.call_procedure(name, args_json))
+
+    def create_trigger(self, trigger: Any) -> dict[str, Any]:
+        trigger_json = trigger if isinstance(trigger, str) else json.dumps(trigger)
+        return json.loads(self._handle.create_trigger(trigger_json))
+
+    def replace_trigger(self, trigger: Any) -> dict[str, Any]:
+        trigger_json = trigger if isinstance(trigger, str) else json.dumps(trigger)
+        return json.loads(self._handle.replace_trigger(trigger_json))
+
+    def drop_trigger(self, name: str) -> None:
+        self._handle.drop_trigger(name)
+
+    def triggers(self) -> list[dict[str, Any]]:
+        return [json.loads(s) for s in self._handle.triggers()]
+
+    def trigger(self, name: str) -> Optional[dict[str, Any]]:
+        raw = self._handle.trigger(name)
+        return None if raw is None else json.loads(raw)
 
     def export_tsv(self, table: str) -> str:
         """Export every visible row of ``table`` as a TSV document."""

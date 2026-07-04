@@ -11,3 +11,6 @@ export * from './query.js';
 export * from './migrate.js';
 export * from './remote.js';
 export * from './procedure.js';
+export * from './trigger.js';
+export * from './external.js';
+export * from './sql.js';

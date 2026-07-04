@@ -1,18 +1,18 @@
 # MongrelDB Kit
 
-MongrelDB Kit is the application-facing persistence layer for [MongrelDB](https://www.MongrelDB.com). It gives TypeScript, Rust, and Python applications a schema-aware query builder, migrations, relational constraints, batch writes, auto-increment ids, and stable semantics across languages.
+MongrelDB Kit is the application-facing persistence layer for [MongrelDB](https://www.MongrelDB.com). It gives TypeScript, Rust, and Python applications a schema-aware query builder, migrations, relational constraints, triggers, Extended SQL Function helpers, virtual/external table helpers, batch writes, auto-increment ids, and stable semantics across languages.
 
 The repository also ships the `mongreldb-kit` CLI for schema validation, migration planning/status, drift checks, fixture import/export, and type generation.
 
 [![crates.io](https://img.shields.io/crates/v/mongreldb-kit)](https://crates.io/crates/mongreldb-kit)
-[![npm](https://img.shields.io/npm/v/@mongreldb/kit)](https://www.npmjs.com/package/@mongreldb/kit)
+[![npm](https://img.shields.io/npm/v/@visorcraft/mongreldb-kit)](https://www.npmjs.com/package/@visorcraft/mongreldb-kit)
 [![PyPI](https://img.shields.io/pypi/v/mongreldb-kit)](https://pypi.org/project/mongreldb-kit/)
 
 ## Packages And Tools
 
 | Surface | Package / crate | Install or run |
 |---|---|---|
-| TypeScript | `@mongreldb/kit` | `npm install @mongreldb/kit mongreldb` |
+| TypeScript | `@visorcraft/mongreldb-kit` | `npm install @visorcraft/mongreldb-kit @visorcraft/mongreldb` |
 | Rust | `mongreldb-kit` | `cargo add mongreldb-kit` |
 | Python | `mongreldb-kit` | `pip install mongreldb-kit` |
 | CLI | `mongreldb-kit-cli` (`mongreldb-kit` binary) | `cargo run -p mongreldb-kit-cli -- --help` |
@@ -23,6 +23,8 @@ The repository also ships the `mongreldb-kit` CLI for schema validation, migrati
 - Synchronous TypeScript CRUD/query builder with predicates, ordering, projections, aggregates, joins, subqueries, CTEs, batch inserts, updates, and deletes.
 - Rust and Python APIs backed by the same Rust core and verified with cross-language conformance fixtures.
 - Migration runner with content-addressed checksums and stored schema catalog.
+- Engine-side trigger management plus SQL-backed virtual/external table helpers.
+- Extended SQL Function helpers for JSON, date/time, aggregate, and math-style SQL calls.
 - Relational constraint enforcement on top of MongrelDB transactions: not-null, type/range/string validation, unique/composite unique, foreign keys, and cascade/set-null/restrict deletes.
 
 ## Documentation
@@ -37,6 +39,8 @@ The repository also ships the `mongreldb-kit` CLI for schema validation, migrati
 - [Defaults](docs/defaults.md)
 - [Query builder](docs/query-builder.md)
 - [Migrations](docs/migrations.md)
+- [Triggers](docs/triggers.md)
+- [Extended SQL & virtual tables](docs/extended-sql-and-virtual-tables.md)
 - [Constraints](docs/constraints.md)
 - [Transactions](docs/transactions.md)
 - [Errors](docs/errors.md)
@@ -60,7 +64,7 @@ import {
   sequenceDefault,
   unique,
   eq
-} from '@mongreldb/kit';
+} from '@visorcraft/mongreldb-kit';
 
 const users = table('users', {
   columns: [
@@ -101,7 +105,7 @@ See the language docs for complete runnable examples in TypeScript, Rust, and Py
 
 ## Development Notes
 
-- TypeScript requires Node.js 22+ and the native `mongreldb` peer dependency.
+- TypeScript requires Node.js 22+ and the native `@visorcraft/mongreldb` peer dependency.
 - A MongrelDB database path is a data directory, not a single database file.
 - In this mono-repo checkout, the TypeScript package loads the native addon from the sibling MongrelDB repo. Build `crates/mongreldb-node` there with `npm run build` in release mode before benchmarking; stale debug `.node` builds make bulk paths much slower.
 

@@ -6,6 +6,7 @@ import { KitDatabase } from './db.js';
 import { Schema, table, int, text, real, json, index } from './schema.js';
 import { eq, gt, gte } from './query.js';
 import { procedure } from './procedure.js';
+import { newColumn, textValue, trigger } from './trigger.js';
 
 function makeTempDir(): string {
 	return mkdtempSync(join(tmpdir(), 'kit-db-test-'));
@@ -211,6 +212,52 @@ describe('KitDatabase', () => {
 			expect(result.kind).toBe('rows');
 			expect(result.value).toHaveLength(1);
 			expect(result.value[0].columns['1'].Int64).toBe(1);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('trigger installs through TypeScript Kit and fires on Kit writes', () => {
+		const users = table('users', {
+			columns: [int('id', { primaryKey: true }), text('name')],
+			primaryKey: 'id'
+		});
+		const audit = table('audit', {
+			columns: [int('id', { primaryKey: true }), int('user_id'), text('note')],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([users, audit]));
+		try {
+			db.createTriggerSync(
+				trigger({
+					name: 'users_ai',
+					target: { kind: 'table', name: 'users' },
+					timing: 'after',
+					event: 'insert',
+					program: {
+						steps: [
+							{
+								kind: 'insert',
+								table: 'audit',
+								cells: [
+									{ column_id: audit.id.id, value: newColumn(users.id.id) },
+									{ column_id: audit.user_id.id, value: newColumn(users.id.id) },
+									{ column_id: audit.note.id, value: textValue('created') }
+								]
+							}
+						]
+					}
+				})
+			);
+
+			db.insertInto(users).values({ id: 7n, name: 'ada' }).executeSync();
+			expect(db.triggers().map((t) => t.name)).toEqual(['users_ai']);
+			expect(db.trigger('users_ai')?.event).toBe('insert');
+			expect(db.selectFrom(audit).executeSync()).toEqual([
+				{ id: 7n, user_id: 7n, note: 'created' }
+			]);
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });

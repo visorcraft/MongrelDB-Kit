@@ -714,8 +714,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.21.0"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.21.0#06cec4a8e62e590227840f7334a7b42fda850b0e"
+version = "0.22.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.22.0#dd070a186091688c433aed6b26cb69c67b463952"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bincode",
  "mongreldb-core",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "hex",
  "regex",

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import mongreldb from '@visorcraft/mongreldb';
+import { tableFromIPC, type Table as ArrowTable } from 'apache-arrow';
 import type {
 	Database as NativeDatabase,
 	Transaction,
@@ -16,6 +17,12 @@ import {
 } from './internalTables.js';
 import type { TableSpec, ColumnStorageType, CheckSpec } from './types.js';
 import { procedureJson, type ProcedureCallOptions, type ProcedureCallResult, type ProcedureSpec } from './procedure.js';
+import { triggerJson, type TriggerSpec } from './trigger.js';
+import {
+	createVirtualTableSql,
+	dropVirtualTableSql,
+	type VirtualTableSpec
+} from './external.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
 import { isReferencedTable, deleteGuardsForTable, type ConstraintKit } from './constraints.js';
 import { KitError, isRetryableConflict } from './errors.js';
@@ -74,6 +81,12 @@ type MongrelDatabase = NativeDatabase & {
 	procedures(): { json: string }[];
 	procedure(name: string): { json: string } | null;
 	callProcedure(name: string, opts?: { argsJson?: string; idempotencyKey?: string }): { epoch?: bigint; resultJson: string };
+	createTrigger(spec: { json: string }): bigint;
+	createOrReplaceTrigger(spec: { json: string }): bigint;
+	dropTrigger(name: string): void;
+	triggers(): { json: string }[];
+	trigger(name: string): { json: string } | null;
+	sql(sql: string): Promise<Buffer>;
 };
 
 type MongrelModule = {
@@ -421,6 +434,43 @@ export class KitDatabase {
 			epoch: result.epoch,
 			result: JSON.parse(result.resultJson)
 		};
+	}
+
+	createTriggerSync(spec: TriggerSpec): bigint {
+		return this.db.createTrigger({ json: triggerJson(spec) });
+	}
+
+	createOrReplaceTriggerSync(spec: TriggerSpec): bigint {
+		return this.db.createOrReplaceTrigger({ json: triggerJson(spec) });
+	}
+
+	dropTriggerSync(name: string): void {
+		this.db.dropTrigger(name);
+	}
+
+	triggers(): TriggerSpec[] {
+		return this.db.triggers().map((trigger) => JSON.parse(trigger.json) as TriggerSpec);
+	}
+
+	trigger(name: string): TriggerSpec | null {
+		const trigger = this.db.trigger(name);
+		return trigger ? (JSON.parse(trigger.json) as TriggerSpec) : null;
+	}
+
+	async sql(sql: string): Promise<ArrowTable> {
+		return tableFromIPC(await this.db.sql(sql));
+	}
+
+	async sqlRows(sql: string): Promise<Record<string, unknown>[]> {
+		return [...(await this.sql(sql))].map((row) => ({ ...row }));
+	}
+
+	async createVirtualTable(spec: VirtualTableSpec): Promise<ArrowTable> {
+		return this.sql(createVirtualTableSql(spec));
+	}
+
+	async dropVirtualTable(name: string): Promise<ArrowTable> {
+		return this.sql(dropVirtualTableSql(name));
 	}
 
 	/** Verify run footer checksums; returns integrity issues grouped by table. */

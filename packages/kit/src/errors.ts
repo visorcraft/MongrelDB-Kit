@@ -6,6 +6,7 @@ export type KitErrorCode =
 	| 'FOREIGN_KEY'
 	| 'RESTRICT'
 	| 'CONFLICT'
+	| 'TRIGGER_VALIDATION'
 	| 'MIGRATION'
 	| 'SCHEMA_DRIFT'
 	| 'TIMEOUT'
@@ -88,6 +89,13 @@ export class KitConflictError extends KitError {
 	constructor(message = 'Conflict') {
 		super(message, 'CONFLICT');
 		this.name = 'KitConflictError';
+	}
+}
+
+export class KitTriggerValidationError extends KitError {
+	constructor(message: string) {
+		super(message, 'TRIGGER_VALIDATION');
+		this.name = 'KitTriggerValidationError';
 	}
 }
 
