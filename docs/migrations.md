@@ -274,12 +274,21 @@ guards untouched.
 
 ## Renaming tables
 
-TypeScript exposes `KitDatabase.renameTable(oldName, newName)`, a direct wrapper over the engine's
-durable table rename. It preserves the table id, rows, indexes, and handles, and rejects names that
-start with the reserved `__kit_` prefix.
+All three language surfaces expose a durable table rename:
+- TypeScript: `KitDatabase.renameTable(oldName, newName)`
+- Rust: `Database::rename_table(&mut self, from, to)`
+- Python: `Database.rename_table(old_name, new_name)`
+
+Each is a direct wrapper over the engine's durable table rename. It preserves the table id, rows,
+indexes, and handles, and rejects names that start with the reserved `__kit_` prefix. The Rust and
+Python kits additionally update the in-memory kit schema catalog (and persist it to
+`kit_schema.json`) and retarget foreign keys that referenced the old name, so the new name works
+end-to-end for subsequent transactions. The TypeScript kit reads table names from the engine, so it
+reflects the rename immediately; update your code-defined schema to match so constraint checking
+stays aligned.
 
 Use it in the transition migration with an open handle that can still see the old table, then pass
-the new schema to `migrateSync` so the schema catalog is rewritten to the renamed table. Future
+the new schema to `migrate` so the schema catalog is rewritten to the renamed table. Future
 opens should use the new schema. There is no declarative `renameTable` migration op, so record the
 intent in the migration name and, if you use `ops` for checksums, an equivalent `rawSql`
 description:
@@ -297,6 +306,50 @@ db.migrateSync(newSchema, [
   },
 ]);
 ```
+
+## SQL views
+
+Views (`CREATE VIEW <name> AS <select>`) are **session-scoped** in the engine — they are not
+persisted to the catalog. The kit holds one long-lived SQL session per `Database` handle for the
+database's lifetime (mirroring how the daemon and any long-lived app use MongrelDB), so a view
+created via a migration or direct `sql()` call persists across subsequent `sql()` / `sqlRows()` /
+`sqlArrow()` calls on that same handle. Closing and reopening the database loses the view —
+re-apply the migration to restore it.
+
+Three migration ops manage views; all run SQL through the embedded session:
+
+| Op | Effect |
+|---|---|
+| `createView` / `replaceView` | `CREATE VIEW <name> AS <select>`. The engine overwrites any existing view, so create and replace are the same SQL. |
+| `dropView` | `DROP VIEW IF EXISTS <name>` (idempotent). |
+
+```ts
+// TypeScript — view ops are async-only (they run SQL).
+await db.migrate(schema, [
+  {
+    version: 4,
+    name: 'add_active_users_view',
+    ops: [{ kind: 'createView', name: 'active_users', view: { name: 'active_users', sql: 'SELECT id, email FROM users WHERE active = TRUE' } }],
+    async up({ createView }) {
+      await createView({ name: 'active_users', sql: 'SELECT id, email FROM users WHERE active = TRUE' });
+    },
+  },
+]);
+```
+
+```python
+# Python / Rust — views are created by the migration runner directly.
+db.migrate([{
+    "version": 4,
+    "name": "add_active_users_view",
+    "ops": [{"create_view": {"name": "active_users", "view": {"name": "active_users", "sql": "SELECT id, email FROM users WHERE active = TRUE"}}}],
+}])
+# Query the view via the SQL surface:
+db.sql_rows("SELECT * FROM active_users ORDER BY id")
+```
+
+> **Note:** `CREATE OR REPLACE VIEW` is not supported by the engine (the `OR REPLACE` keyword is
+> gated off). Re-issue `CREATE VIEW` for replace semantics — it overwrites.
 
 ## Walkthrough: evolving the store schema
 

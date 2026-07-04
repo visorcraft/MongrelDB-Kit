@@ -34,7 +34,7 @@ pub fn migrate(db: &mut crate::db::Database, migrations: &[Migration]) -> Result
     // Apply DDL ops directly. Each op is individually durable in core; the
     // migration record transaction below makes the applied versions atomic.
     for migration in &pending {
-        apply_migration_ops(core, migration, &db.schema)?;
+        apply_migration_ops(db, migration, &db.schema)?;
     }
 
     // Record all newly-applied migrations in one transaction.
@@ -89,10 +89,11 @@ fn bytes_string(value: Option<&CoreValue>) -> Result<Option<String>> {
 }
 
 fn apply_migration_ops(
-    core: &CoreDatabase,
+    db: &crate::db::Database,
     migration: &Migration,
     schema: &KitSchema,
 ) -> Result<()> {
+    let core = db.core_db();
     for op in &migration.ops {
         match op {
             MigrationOp::CreateTable { name } => {
@@ -186,15 +187,28 @@ fn apply_migration_ops(
                 let _ = core.drop_trigger(name);
             }
             MigrationOp::CreateVirtualTable { table } => {
-                return Err(KitError::Migration(format!(
-                    "create_virtual_table migration op requires a SQL-capable Kit surface: {}",
-                    table.create_sql()
-                )));
+                // SQL-backed: run `CREATE VIRTUAL TABLE ...` through the
+                // embedded session, then refresh so the new table is visible
+                // to subsequent `sql()` calls.
+                db.sql(&table.create_sql())?;
+                db.refresh_sql_session()?;
             }
             MigrationOp::DropVirtualTable { name } => {
-                return Err(KitError::Migration(format!(
-                    "drop_virtual_table migration op requires a SQL-capable Kit surface: DROP TABLE {name}"
-                )));
+                db.sql(&format!("DROP TABLE IF EXISTS {name}"))?;
+                db.refresh_sql_session()?;
+            }
+            MigrationOp::CreateView { view, .. } => {
+                // The engine's `CREATE VIEW` overwrites any existing entry, so
+                // create and replace are the same SQL (see `ReplaceView`).
+                db.sql(&view.create_sql())?;
+            }
+            MigrationOp::ReplaceView { view, .. } => {
+                db.sql(&view.create_sql())?;
+            }
+            MigrationOp::DropView { name } => {
+                // `IF EXISTS` so dropping an already-absent view is a no-op
+                // (idempotent re-applies of the same migration).
+                db.sql(&format!("DROP VIEW IF EXISTS {name}"))?;
             }
             MigrationOp::DropColumn { table, column } => {
                 let target = schema.table(table).ok_or_else(|| {
@@ -239,9 +253,12 @@ fn apply_migration_ops(
                 drop_stale_unique_guards(core, target)?;
             }
             MigrationOp::RawSql(sql) => {
-                return Err(KitError::Migration(format!(
-                    "RawSql migration op is not supported: {sql}"
-                )));
+                // Run arbitrary SQL (DDL or DML) through the embedded session.
+                // Useful for engine features without a dedicated migration op.
+                // Schema-affecting statements should be followed by
+                // `refresh_sql_session` if later ops in this migration query
+                // the new structure via SQL.
+                db.sql(sql)?;
             }
         }
     }

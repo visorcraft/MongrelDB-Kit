@@ -1570,7 +1570,10 @@ fn migrate_drop_column_rebuilds_table_and_removes_stale_values() {
 }
 
 #[test]
-fn migrate_raw_sql_errors_clearly() {
+fn migrate_raw_sql_runs_through_the_sql_surface() {
+    // RawSql previously errored (the kit had no SQL surface); it now runs
+    // through the embedded MongrelSession. A VACUUM is a no-op DDL statement
+    // that should succeed and leave the migration recorded as applied.
     let dir = temp_dir();
     let mut db = Database::create(&dir, Schema::new(vec![people_table(false)]).unwrap()).unwrap();
 
@@ -1579,11 +1582,56 @@ fn migrate_raw_sql_errors_clearly() {
         name: "raw".into(),
         ops: vec![MigrationOp::RawSql("VACUUM".into())],
     }];
-    let err = mongreldb_kit::migrate(&mut db, &migrations).unwrap_err();
-    match err {
-        KitError::Migration(msg) => assert!(msg.contains("RawSql")),
-        other => panic!("expected migration error, got {other:?}"),
+    mongreldb_kit::migrate(&mut db, &migrations).expect("RawSql migration should succeed");
+
+    // The migration is recorded as applied (re-migrating is a no-op).
+    let applied = db.applied_migrations().unwrap();
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].version, 1);
+}
+
+#[test]
+fn migrate_create_view_and_drop_view_round_trip() {
+    use mongreldb_kit_core::ViewSpec;
+
+    let dir = temp_dir();
+    let mut db = Database::create(&dir, make_schema()).unwrap();
+    {
+        let mut txn = db.begin().unwrap();
+        insert_user(&mut txn, 1, "a@x.com");
+        insert_user(&mut txn, 2, "b@x.com");
+        txn.commit().unwrap();
     }
+
+    // CreateView via migration: the view lands in the kit's long-lived SQL
+    // session and is queryable afterward.
+    let migrations = vec![Migration {
+        version: 1,
+        name: "add_view".into(),
+        ops: vec![MigrationOp::CreateView {
+            name: "v".into(),
+            view: ViewSpec::new("v", "SELECT id, email FROM users WHERE id >= 2"),
+        }],
+    }];
+    mongreldb_kit::migrate(&mut db, &migrations).expect("view migration should succeed");
+
+    let rows = db.sql_rows("SELECT * FROM v ORDER BY id").unwrap();
+    assert_eq!(
+        rows,
+        vec![json!({"id": 2, "email": "b@x.com"})
+            .as_object()
+            .unwrap()
+            .clone()]
+    );
+
+    // DropView via migration: the view is gone; subsequent SELECTs error.
+    let drop_migrations = vec![Migration {
+        version: 2,
+        name: "drop_view".into(),
+        ops: vec![MigrationOp::DropView { name: "v".into() }],
+    }];
+    mongreldb_kit::migrate(&mut db, &drop_migrations).expect("drop view should succeed");
+    assert!(db.sql_rows("SELECT * FROM v").is_err());
 }
 
 #[test]
@@ -1741,4 +1789,79 @@ fn delete_where_multi_row_cascade() {
     assert!(txn.get_by_pk("orders", &json!(11)).unwrap().is_none());
     assert!(txn.get_by_pk("items", &json!(1)).unwrap().is_none());
     assert!(txn.get_by_pk("items", &json!(2)).unwrap().is_none());
+}
+
+#[test]
+fn sql_surface_runs_selects_and_returns_rows() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+    {
+        let mut txn = db.begin().unwrap();
+        insert_user(&mut txn, 1, "a@x.com");
+        insert_user(&mut txn, 2, "b@x.com");
+        txn.commit().unwrap();
+    }
+
+    // sql_rows: read path returns JSON-style rows.
+    let rows = db
+        .sql_rows("SELECT id, email FROM users ORDER BY id")
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            json!({"id": 1, "email": "a@x.com"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            json!({"id": 2, "email": "b@x.com"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ]
+    );
+
+    // sql: returns raw Arrow record batches with the same content.
+    let batches = db.sql("SELECT id FROM users ORDER BY id").unwrap();
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+
+    // sql_arrow: returns non-empty IPC bytes that round-trip through the
+    // shared decoder.
+    let ipc = db.sql_arrow("SELECT id FROM users ORDER BY id").unwrap();
+    assert!(!ipc.is_empty());
+    let decoded = mongreldb_kit::arrow_util::read_arrow_ipc(&ipc).unwrap();
+    assert_eq!(decoded.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+}
+
+#[test]
+fn sql_surface_runs_ddl_and_views() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+    {
+        let mut txn = db.begin().unwrap();
+        insert_user(&mut txn, 1, "a@x.com");
+        insert_user(&mut txn, 2, "b@x.com");
+        txn.commit().unwrap();
+    }
+
+    // CREATE VIEW returns no rows (DDL).
+    assert!(db
+        .sql_rows("CREATE VIEW active_users AS SELECT id, email FROM users WHERE id >= 2")
+        .unwrap()
+        .is_empty());
+
+    // SELECT * FROM <view> resolves via the view's defining SQL.
+    let rows = db
+        .sql_rows("SELECT * FROM active_users ORDER BY id")
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![json!({"id": 2, "email": "b@x.com"})
+            .as_object()
+            .unwrap()
+            .clone()]
+    );
+
+    // DROP VIEW removes it; the subsequent SELECT errors cleanly.
+    assert!(db.sql_rows("DROP VIEW active_users").is_ok());
+    assert!(db.sql_rows("SELECT * FROM active_users").is_err());
 }

@@ -1,0 +1,49 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "blobs",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "key",
+            "storage_type": "bytes",
+            "application_type": "bytes",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [
+          { "name": "idx_blobs_key_bitmap", "columns": ["key"], "unique": false, "kind": "bitmap" }
+        ],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "key": [97, 108, 112, 104, 97] },
+    { "id": 2, "key": [97, 108, 112, 104, 97, 98, 101, 116] },
+    { "id": 3, "key": [98, 101, 116, 97] },
+    { "id": 4, "key": [103, 97, 109, 109, 97] }
+  ],
+  "scenarios": [
+    { "name": "prefix_alpha", "table": "blobs", "column": "key", "prefix": "alpha", "order": "+id" },
+    { "name": "prefix_a", "table": "blobs", "column": "key", "prefix": "a", "order": "+id" },
+    { "name": "prefix_beta_exact", "table": "blobs", "column": "key", "prefix": "beta", "order": "+id" },
+    { "name": "prefix_none", "table": "blobs", "column": "key", "prefix": "zeta", "order": "+id" }
+  ]
+}

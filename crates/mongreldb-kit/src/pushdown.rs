@@ -91,6 +91,12 @@ fn collect_conditions(table: &KitTable, expr: &Expr, out: &mut Vec<Condition>) -
         Expr::Gt(a, b) => push_if_some(out, try_translate_cmp(table, a, b, CmpOp::Gt)),
         Expr::Gte(a, b) => push_if_some(out, try_translate_cmp(table, a, b, CmpOp::Gte)),
         Expr::In(a, list) => push_if_some(out, try_translate_in(table, a, list)),
+        // BytesPrefix is exact in the engine (no residual re-check): the
+        // bitmap's distinct keys are enumerated and filtered by prefix. Returns
+        // `true` only when a bitmap-indexed Bytes column matched.
+        Expr::BytesPrefix(a, prefix) => {
+            push_if_some(out, try_translate_bytes_prefix(table, a, prefix))
+        }
         Expr::Contains(a, needle) => {
             // FM substring: push `FmContains` when the column has an FM index,
             // but keep `Contains` as a residual (the engine returns a superset)
@@ -284,6 +290,25 @@ fn try_translate_contains(table: &KitTable, a: &Expr, needle: &str) -> Option<Co
     Some(Condition::FmContains {
         column_id: col.id as u16,
         pattern: needle.as_bytes().to_vec(),
+    })
+}
+
+/// Translate `BytesPrefix(Column, prefix)` into the engine's exact
+/// `Condition::BytesPrefix` — requires a bitmap index on the column (the
+/// engine enumerates the bitmap's distinct keys and keeps those starting with
+/// `prefix`). Returns `None` (→ residual `starts_with` evaluation) when the
+/// column has no bitmap index or the operand isn't a bare column reference.
+fn try_translate_bytes_prefix(table: &KitTable, a: &Expr, prefix: &str) -> Option<Condition> {
+    let Expr::Column(col_name) = a else {
+        return None;
+    };
+    let col = table.column(col_name)?;
+    if !has_bitmap_index(table, col_name) {
+        return None;
+    }
+    Some(Condition::BytesPrefix {
+        column_id: col.id as u16,
+        prefix: prefix.as_bytes().to_vec(),
     })
 }
 

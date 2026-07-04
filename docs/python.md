@@ -224,10 +224,12 @@ rows = txn.select(
 )
 ```
 
-Per-column operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `contains`, `in`, `not_in`,
-`is_null`, `is_not_null`, `in_subquery`. A bare value (`{"user_id": 1}`) is shorthand for `eq`.
-Top-level logical keys combine column predicates: `and` / `or` (a list of filters), `not` (a
-filter), and `exists` / `not_exists` (a subselect). Multiple keys at one level are AND-ed.
+Per-column operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `contains`, `bytes_prefix`,
+`in`, `not_in`, `is_null`, `is_not_null`, `in_subquery`. A bare value (`{"user_id": 1}`) is
+shorthand for `eq`. `bytes_prefix` matches an anchored prefix on a bitmap-indexed Bytes column
+(exact engine pushdown). Top-level logical keys combine column predicates: `and` / `or` (a list of
+filters), `not` (a filter), and `exists` / `not_exists` (a subselect). Multiple keys at one level
+are AND-ed.
 
 Order syntax:
 - `"+id"` or `"id"` — ascending
@@ -392,6 +394,35 @@ db.transaction(lambda txn: txn.insert("users", {...}))  # commit on success, ret
 
 `db.transaction(fn, max_retries=5)` runs `fn(txn)`, commits on success, rolls back on any error, and
 retries the whole callback when a `ConflictError` (a retryable write-write conflict) is raised.
+
+### Embedded SQL surface and maintenance
+
+`sql_rows` and `sql_arrow` run statements through the kit's embedded SQL session
+(the engine's DataFusion frontend). The session is held for the database's
+lifetime, so session-scoped objects (views, prepared statements, the result
+cache) persist across calls. Maintenance helpers mirror the engine's `ANALYZE`
+and `VACUUM`, and `rename_table` updates the engine, the kit schema catalog,
+and any referencing foreign keys.
+
+```python
+rows = db.sql_rows("SELECT id, email FROM users ORDER BY id")  # list[dict]
+ipc = db.sql_arrow("SELECT id FROM users ORDER BY id")         # raw Arrow IPC bytes
+# (decode with pyarrow.ipc.open_file)
+
+db.sql_rows("CREATE VIEW active AS SELECT id FROM users WHERE active = TRUE")
+db.sql_rows("SELECT * FROM active")  # queries the view
+
+db.analyze()              # ensure_indexes_complete() on every table
+reclaimed = db.vacuum()   # compact_all() + gc(); returns the reclaimed-file count
+
+db.rename_table("widgets", "things")  # engine + schema catalog + persisted
+db.compact_all(); db.compact_table("things")
+```
+
+> Writes through `sql_rows` / `sql_arrow` bypass kit-level constraints (defaults,
+> enums, min/max, length, regex, triggers) — use the `Transaction` API for
+> constrained writes. The engine's own declarative constraints (unique, FK,
+> check) still apply.
 
 ## Key encoding
 

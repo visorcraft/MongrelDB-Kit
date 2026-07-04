@@ -523,6 +523,7 @@ fn collect_aliases(expr: &Expr, out: &mut HashSet<String>) {
         | Expr::NotIn(a, _)
         | Expr::Like(a, _)
         | Expr::Contains(a, _)
+        | Expr::BytesPrefix(a, _)
         | Expr::IsNull(a)
         | Expr::IsNotNull(a) => collect_aliases(a, out),
         Expr::InSubquery(a, _) => collect_aliases(a, out),
@@ -587,6 +588,9 @@ fn strip_alias_prefix(expr: &Expr, alias: &str) -> Expr {
         Expr::Like(a, pat) => Expr::Like(Box::new(strip_alias_prefix(a, alias)), pat.clone()),
         Expr::Contains(a, needle) => {
             Expr::Contains(Box::new(strip_alias_prefix(a, alias)), needle.clone())
+        }
+        Expr::BytesPrefix(a, prefix) => {
+            Expr::BytesPrefix(Box::new(strip_alias_prefix(a, alias)), prefix.clone())
         }
         Expr::InSubquery(a, sub) => {
             Expr::InSubquery(Box::new(strip_alias_prefix(a, alias)), sub.clone())
@@ -813,6 +817,18 @@ fn eval_pred<S: Scope>(expr: &Expr, scope: &S, ctx: &ExecCtx) -> Result<bool> {
             Value::String(s) => s.contains(needle.as_str()),
             _ => false,
         },
+        Expr::BytesPrefix(col, prefix) => match eval_val(col, scope, ctx)? {
+            // Bytes columns arrive from the engine as a JSON array of byte
+            // numbers; text columns as a string. Treat both as UTF-8 bytes for
+            // the anchored prefix check. (Pushdown is exact in the engine; this
+            // residual only runs when pushdown is bypassed — e.g. a CTE source
+            // — or when the column has no bitmap index.)
+            Value::String(s) => s.as_bytes().starts_with(prefix.as_bytes()),
+            Value::Array(elems) => {
+                bytes_from_json_array(&elems).is_some_and(|b| b.starts_with(prefix.as_bytes()))
+            }
+            _ => false,
+        },
         Expr::InSubquery(col, sub) => {
             // ponytail: subqueries are uncorrelated — the sub-SELECT is evaluated
             // once against the same snapshot/CTEs and cannot reference the outer
@@ -994,6 +1010,20 @@ fn like(text: &str, pattern: &str) -> bool {
         Err(_) => return false,
     };
     regex.is_match(text)
+}
+
+/// Decode a bytes column value from its JSON array form (the inverse of
+/// `to_core_value`'s `ColumnType::Bytes` branch): each element is a byte
+/// number in 0..=255. Returns `None` on a malformed array.
+fn bytes_from_json_array(elems: &[Value]) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(elems.len());
+    for v in elems {
+        match v {
+            Value::Number(n) => out.push(n.as_u64()? as u8),
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 fn regex_like(pattern: &str) -> Result<regex::Regex> {

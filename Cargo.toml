@@ -8,10 +8,11 @@ members = [
 ]
 resolver = "2"
 
-# Dev-only: unify `mongreldb-core` (consumed from crates.io by the kit) with the
-# same git tag the conformance runner's `mongreldb-server` dev-dependency pulls,
-# so `build_app(Arc<Database>)` shares one `mongreldb-core` type instance.
-# `[patch.crates-io]` is stripped by `cargo publish`, so published kits are
-# unaffected.
+# Dev-only: unify `mongreldb-core`/`mongreldb-query` (consumed from crates.io by
+# the kit) with the same engine sources the conformance runner's
+# `mongreldb-server` dev-dependency pulls, so `build_app(Arc<Database>)` shares
+# one `mongreldb-core` type instance. `[patch.crates-io]` is stripped by
+# `cargo publish`, so published kits are unaffected.
 [patch.crates-io]
 mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.23.0" }
+mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.23.0" }

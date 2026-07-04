@@ -48,7 +48,10 @@ fi
 echo "Pointing Kit at MongrelDB $OLD -> $NEW"
 
 sed -i -E "s#mongreldb-core = \\{ git = \"https://github.com/visorcraft/MongrelDB.git\", (tag = \"v[0-9.]+\"|rev = \"[a-f0-9]+\") \\}#mongreldb-core = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" Cargo.toml
+sed -i -E "s#mongreldb-query = \\{ git = \"https://github.com/visorcraft/MongrelDB.git\", (tag = \"v[0-9.]+\"|rev = \"[a-f0-9]+\") \\}#mongreldb-query = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" Cargo.toml
 sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$NEW\"/" \
+  crates/mongreldb-kit/Cargo.toml
+sed -i "s/mongreldb-query = \"$OLD\"/mongreldb-query = \"$NEW\"/" \
   crates/mongreldb-kit/Cargo.toml
 sed -i -E "s#mongreldb-server = \\{ git = \"https://github.com/visorcraft/MongrelDB.git\", (tag = \"v[0-9.]+\"|rev = \"[a-f0-9]+\") \\}#mongreldb-server = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" tests/conformance/rust/Cargo.toml
 sed -i "s/mongreldb-core = \"[0-9.]*\"/mongreldb-core = \"$NEW\"/" \
@@ -56,6 +59,8 @@ sed -i "s/mongreldb-core = \"[0-9.]*\"/mongreldb-core = \"$NEW\"/" \
 sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$NEW\"/" \
   crates/kit-perf/Cargo.toml
 sed -i -E "s#mongreldb-core = \\{ git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v[0-9.]+\" \\}#mongreldb-core = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" \
+  crates/kit-perf/Cargo.toml
+sed -i -E "s#mongreldb-query = \\{ git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v[0-9.]+\" \\}#mongreldb-query = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" \
   crates/kit-perf/Cargo.toml
 
 echo "Regenerating lockfile (fetches mongreldb-core from the git tag)..."

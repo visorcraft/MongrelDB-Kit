@@ -1,0 +1,66 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "products",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "name",
+            "storage_type": "text",
+            "application_type": "text",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          },
+          {
+            "id": 3,
+            "name": "price",
+            "storage_type": "float64",
+            "application_type": "float64",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "name": "widget", "price": 9.99 },
+    { "id": 2, "name": "gadget", "price": 19.99 },
+    { "id": 3, "name": "gizmo", "price": 4.99 }
+  ],
+  "view_sql": "SELECT id, name, price FROM products WHERE price >= 10",
+  "scenarios": [
+    {
+      "name": "select_from_view",
+      "sql": "SELECT id, name, price FROM pricey ORDER BY id",
+      "expected_rows": [
+        { "id": 2, "name": "gadget", "price": 19.99 }
+      ]
+    },
+    {
+      "name": "count_from_view",
+      "sql": "SELECT COUNT(*) AS n FROM pricey",
+      "expected_rows": [
+        { "n": 1 }
+      ]
+    }
+  ]
+}

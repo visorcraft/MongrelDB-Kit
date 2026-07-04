@@ -10,7 +10,7 @@ use mongreldb_kit::{
     Table,
 };
 use mongreldb_kit_core::migrations::plan_migrations;
-use mongreldb_kit_core::{ProcedureSpec, TriggerSpec, VirtualTableSpec};
+use mongreldb_kit_core::{ProcedureSpec, TriggerSpec, ViewSpec, VirtualTableSpec};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -103,6 +103,17 @@ enum CliMigrationOp {
     DropVirtualTable {
         name: String,
     },
+    CreateView {
+        name: String,
+        view: ViewSpec,
+    },
+    ReplaceView {
+        name: String,
+        view: ViewSpec,
+    },
+    DropView {
+        name: String,
+    },
     RawSql(String),
 }
 
@@ -160,6 +171,9 @@ impl From<CliMigrationOp> for MigrationOp {
                 MigrationOp::CreateVirtualTable { table }
             }
             CliMigrationOp::DropVirtualTable { name } => MigrationOp::DropVirtualTable { name },
+            CliMigrationOp::CreateView { name, view } => MigrationOp::CreateView { name, view },
+            CliMigrationOp::ReplaceView { name, view } => MigrationOp::ReplaceView { name, view },
+            CliMigrationOp::DropView { name } => MigrationOp::DropView { name },
             CliMigrationOp::RawSql(sql) => MigrationOp::RawSql(sql),
         }
     }
@@ -577,8 +591,8 @@ fn literal_list(v: &Value) -> Result<Vec<Literal>> {
 }
 
 /// Translate a friendly per-column filter object into an engine `Expr`. Ops:
-/// eq/ne/gt/gte/lt/lte/in/not_in/is_null/is_not_null; `{"col": value}` is
-/// shorthand for eq; multiple keys are AND-ed.
+/// eq/ne/gt/gte/lt/lte/like/contains/bytes_prefix/in/not_in/is_null/is_not_null;
+/// `{"col": value}` is shorthand for eq; multiple keys are AND-ed.
 fn parse_filter(map: &Map<String, Value>) -> Result<Expr> {
     let mut parts = Vec::new();
     for (col, val) in map {
@@ -594,6 +608,11 @@ fn parse_filter(map: &Map<String, Value>) -> Result<Expr> {
                     "gte" => Expr::Gte(col_expr(), lit(operand)),
                     "lt" => Expr::Lt(col_expr(), lit(operand)),
                     "lte" => Expr::Lte(col_expr(), lit(operand)),
+                    "like" => Expr::Like(col_expr(), filter_str(operand, "like")?),
+                    "contains" => Expr::Contains(col_expr(), filter_str(operand, "contains")?),
+                    "bytes_prefix" => {
+                        Expr::BytesPrefix(col_expr(), filter_str(operand, "bytes_prefix")?)
+                    }
                     "in" => Expr::In(col_expr(), literal_list(operand)?),
                     "not_in" => Expr::NotIn(col_expr(), literal_list(operand)?),
                     "is_null" => Expr::IsNull(col_expr()),
@@ -611,6 +630,14 @@ fn parse_filter(map: &Map<String, Value>) -> Result<Expr> {
         1 => parts.into_iter().next().unwrap(),
         _ => Expr::And(parts),
     })
+}
+
+/// Extract a string operand for the `like`/`contains`/`bytes_prefix` filter ops.
+fn filter_str(v: &Value, op: &str) -> Result<String> {
+    match v.as_str() {
+        Some(s) => Ok(s.to_string()),
+        None => bail!("operator {op} expects a string operand"),
+    }
 }
 
 fn parse_order(order: &str) -> Vec<OrderBy> {

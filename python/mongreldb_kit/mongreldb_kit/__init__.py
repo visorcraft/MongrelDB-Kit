@@ -133,6 +133,60 @@ class Database:
         """Drop corrupt runs; return the ids of the runs that were dropped."""
         return self._handle.doctor()
 
+    def rename_table(self, old_name: str, new_name: str) -> None:
+        """Rename a live table.
+
+        Fails if ``old_name`` does not exist or ``new_name`` is already in use;
+        a no-op when they are equal. Names beginning with ``__kit_`` are
+        reserved for internal tables. The kit schema catalog is not updated —
+        call :meth:`set_schema` if you want the schema model to reflect the new
+        name.
+        """
+        self._handle.rename_table(old_name, new_name)
+
+    def compact_all(self) -> tuple[int, int]:
+        """Compact all tables; return ``(compacted, skipped)``."""
+        return self._handle.compact_all()
+
+    def compact_table(self, name: str) -> bool:
+        """Compact a single table; return ``True`` if compacted, ``False`` if skipped."""
+        return self._handle.compact_table(name)
+
+    def analyze(self) -> None:
+        """Rebuild statistics/metadata for every table's indexes.
+
+        The engine's ``ANALYZE`` equivalent. Safe to run at any time; useful
+        after bulk loads so the query planner and learned indexes have fresh
+        data.
+        """
+        self._handle.analyze()
+
+    def vacuum(self) -> int:
+        """Reclaim space across all tables: compact every sorted run, then gc.
+
+        Returns the count of reclaimed orphaned runs/files. Equivalent to the
+        engine's ``VACUUM``.
+        """
+        return self._handle.vacuum()
+
+    def sql_rows(self, sql: str) -> list[dict[str, Any]]:
+        """Run a SQL statement; return the result rows as a list of dicts.
+
+        Empty for DDL/DML. Writes through SQL bypass kit-level constraints
+        (defaults, enums, min/max, length, regex, triggers) — use the
+        transactional API for constrained writes. The engine's own declarative
+        constraints (unique, FK, check) still apply.
+        """
+        return self._handle.sql_rows(sql)
+
+    def sql_arrow(self, sql: str) -> bytes:
+        """Run a SQL statement; return the result as raw Arrow IPC bytes.
+
+        Decode with ``pyarrow.ipc.open_file``. Empty for DDL/DML. The same
+        bypass caveats as :meth:`sql_rows` apply.
+        """
+        return self._handle.sql_arrow(sql)
+
     def snapshot_epoch(self) -> int:
         """The current visible commit epoch (monotonically increasing version)."""
         return self._handle.snapshot_epoch()
@@ -393,11 +447,11 @@ class Transaction:
 
         ``filter`` uses the friendly filter shape (see ``parse_filter`` in the
         binding): per-column ``{"col": {"op": value}}`` with ops ``eq``/``ne``/
-        ``gt``/``gte``/``lt``/``lte``/``like``/``contains``/``in``/``not_in``/
-        ``is_null``/``is_not_null``/``in_subquery``, plus top-level ``and``/``or``/
-        ``not``/``exists``/``not_exists``. ``ctes`` is a list of
-        ``{"name", "table", "filter"?, ...}`` materialized before the body runs;
-        the body's ``table`` may then name a CTE.
+        ``gt``/``gte``/``lt``/``lte``/``like``/``contains``/``bytes_prefix``/
+        ``in``/``not_in``/``is_null``/``is_not_null``/``in_subquery``, plus
+        top-level ``and``/``or``/``not``/``exists``/``not_exists``. ``ctes`` is a
+        list of ``{"name", "table", "filter"?, ...}`` materialized before the
+        body runs; the body's ``table`` may then name a CTE.
         """
         rows = self._handle.select(
             table,

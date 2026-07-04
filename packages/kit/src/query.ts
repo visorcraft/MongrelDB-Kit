@@ -113,6 +113,7 @@ export type Predicate =
 	| { kind: 'notIn'; column: ColumnSpec; values: unknown[] }
 	| { kind: 'like'; column: ColumnSpec; pattern: string }
 	| { kind: 'contains'; column: ColumnSpec; substr: string }
+	| { kind: 'bytesPrefix'; column: ColumnSpec; prefix: string }
 	| { kind: 'inSub'; column: ColumnSpec; subquery: Subquery }
 	| { kind: 'exists'; subquery: Subquery; negate: boolean };
 
@@ -278,6 +279,17 @@ export function contains<T extends ColumnSpec>(column: T, substr: string): Predi
 	return { kind: 'contains', column: asColumn(column), substr };
 }
 
+/**
+ * Anchored prefix match `column LIKE 'prefix%'` on a Bytes column with a
+ * bitmap index. Pushed down exactly to the engine's `BytesPrefix` condition
+ * (no residual re-check) — tighter than {@link contains} for anchored matches.
+ * Falls back to a residual `startsWith` scan when the column has no bitmap
+ * index.
+ */
+export function bytesPrefix<T extends ColumnSpec>(column: T, prefix: string): Predicate {
+	return { kind: 'bytesPrefix', column: asColumn(column), prefix };
+}
+
 /** `column IN (subquery)`. The subquery must select exactly one column. */
 export function inSubquery<T extends ColumnSpec>(column: T, subquery: Subquery): Predicate {
 	return { kind: 'inSub', column, subquery };
@@ -416,6 +428,22 @@ function makeContainsCondition(
 	);
 	if (!hasFm || column.storageType !== 'text') return null;
 	return { kind: ConditionKind.FmContains, columnId: column.id, text: substr };
+}
+
+/** Build a `BytesPrefix` condition for an anchored prefix match on a Bytes
+ * column with a bitmap index (default `kind`). Exact in the engine — no
+ * residual re-check. Returns `null` when the column has no bitmap index or
+ * isn't a `bytes` column, leaving the predicate as a residual scan. */
+function makeBytesPrefixCondition(
+	table: TableSpec,
+	column: ColumnSpec,
+	prefix: string
+): ConditionSpec | null {
+	const hasBitmap = table.indexes.some(
+		(idx) => (idx.kind ?? 'bitmap') !== 'fm' && idx.columns.includes(column.name)
+	);
+	if (!hasBitmap || column.storageType !== 'bytes') return null;
+	return { kind: ConditionKind.BytesPrefix, columnId: column.id, text: prefix };
 }
 
 /** Build an `FmContainsAll` condition of a LIKE pattern's literal runs (a
@@ -625,7 +653,8 @@ const CONDITION_LABELS: Record<number, string> = {
 	[ConditionKind.IsNull]: 'IsNull',
 	[ConditionKind.IsNotNull]: 'IsNotNull',
 	[ConditionKind.Ann]: 'Ann',
-	[ConditionKind.SparseMatch]: 'SparseMatch'
+	[ConditionKind.SparseMatch]: 'SparseMatch',
+	[ConditionKind.BytesPrefix]: 'BytesPrefix'
 };
 
 /** How a `where` predicate would execute: which native conditions push down. */
@@ -696,6 +725,14 @@ function compilePredicate(table: TableSpec, predicate: Predicate): PredicatePlan
 			// a residual since the engine returns a superset.
 			const condition = makeContainsCondition(table, predicate.column, predicate.substr);
 			return condition ? { conditions: [condition], residual: predicate } : residualPlan(predicate);
+		}
+		case 'bytesPrefix': {
+			// BytesPrefix is exact in the engine (no residual re-check): the
+			// bitmap's distinct keys are enumerated and filtered by prefix.
+			// Returns no condition when the column has no bitmap index → the
+			// predicate stays as a residual startsWith scan.
+			const condition = makeBytesPrefixCondition(table, predicate.column, predicate.prefix);
+			return condition ? { conditions: [condition] } : residualPlan(predicate);
 		}
 		case 'null': {
 			// Push the engine's page-stat-aware IsNull / IsNotNull; keep the null
@@ -786,6 +823,22 @@ function matchRowPredicate(row: Record<string, unknown>, predicate: Predicate): 
 		case 'contains': {
 			const value = row[predicate.column.name];
 			return value != null && String(value).includes(predicate.substr);
+		}
+		case 'bytesPrefix': {
+			// Anchored prefix on a bytes column. Bytes values round-trip through
+			// JSON as arrays of byte numbers; treat strings as UTF-8 bytes.
+			const value = row[predicate.column.name];
+			if (value == null) return false;
+			if (Array.isArray(value)) {
+				const bytes = value as ArrayLike<number>;
+				const prefix = predicate.prefix;
+				if (bytes.length < prefix.length) return false;
+				for (let i = 0; i < prefix.length; i++) {
+					if (bytes[i] !== prefix.charCodeAt(i)) return false;
+				}
+				return true;
+			}
+			return String(value).startsWith(predicate.prefix);
 		}
 		case 'inSub':
 			return predicate.subquery

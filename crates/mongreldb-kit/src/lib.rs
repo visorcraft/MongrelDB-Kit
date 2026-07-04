@@ -3,6 +3,7 @@
 //! This crate wraps MongrelDB core with the kit schema model, transaction
 //! semantics, query execution, and migration runner.
 
+pub mod arrow_util;
 pub mod db;
 pub mod error;
 pub(crate) mod internal;

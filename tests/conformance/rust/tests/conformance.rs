@@ -22,3 +22,13 @@ fn phase1_dml() {
 fn remote_typed_client() {
     conformance_runner::run_remote().expect("remote conformance failed");
 }
+
+#[test]
+fn bytes_prefix() {
+    conformance_runner::run_bytes_prefix().expect("bytes_prefix conformance failed");
+}
+
+#[test]
+fn views() {
+    conformance_runner::run_views().expect("views conformance failed");
+}

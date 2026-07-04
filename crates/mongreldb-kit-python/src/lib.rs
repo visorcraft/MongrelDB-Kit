@@ -439,6 +439,44 @@ impl PyDatabase {
         self.require_db()?.compact_table(name).map_err(map_err)
     }
 
+    /// Rename a live table. Fails if `from` does not exist or `to` is already
+    /// in use; a no-op when `from == to`. Names beginning with `__kit_` are
+    /// reserved for internal tables. The kit schema catalog is also updated
+    /// (in memory and persisted) so the new name works end-to-end.
+    fn rename_table(&mut self, from: &str, to: &str) -> PyResult<()> {
+        self.require_db_mut()?
+            .rename_table(from, to)
+            .map_err(map_err)
+    }
+
+    /// Rebuild statistics/metadata for every table's indexes (the engine's
+    /// `ANALYZE` equivalent). Safe to run at any time; useful after bulk loads.
+    fn analyze(&self) -> PyResult<()> {
+        self.require_db()?.analyze().map_err(map_err)
+    }
+
+    /// Reclaim space across all tables: compact every sorted run, then gc.
+    /// Returns the count of reclaimed orphaned runs/files. (Engine `VACUUM`.)
+    fn vacuum(&self) -> PyResult<usize> {
+        self.require_db()?.vacuum().map_err(map_err)
+    }
+
+    /// Run a SQL read/DDL/DML statement and return the result rows as a list
+    /// of dicts (column name → value). Empty for DDL/DML. Writes through SQL
+    /// bypass kit-level constraints — use the transactional API for those.
+    fn sql_rows(&self, py: Python<'_>, sql: &str) -> PyResult<Vec<Py<PyAny>>> {
+        let rows = self.require_db()?.sql_rows(sql).map_err(map_err)?;
+        rows.into_iter()
+            .map(|row| json_map_to_pydict(py, &row))
+            .collect()
+    }
+
+    /// Run a SQL statement and return the result as raw Arrow IPC *file* bytes
+    /// (decode with `pyarrow.ipc.open_file`). Empty for DDL/DML.
+    fn sql_arrow(&self, sql: &str) -> PyResult<Vec<u8>> {
+        self.require_db()?.sql_arrow(sql).map_err(map_err)
+    }
+
     /// Incrementally-maintained aggregate (`count`/`sum`/`min`/`max`/`avg`) over
     /// `table`, optionally filtered by the friendly `filter` object (which must
     /// translate exactly to index conditions). Returns a dict
@@ -1123,10 +1161,11 @@ fn parse_on_conflict(json: &str) -> PyResult<OnConflict> {
 /// Convert a friendly object filter into a kit `Expr`.
 ///
 /// Per-column shapes: `{ "col": { "op": value } }` where `op` is one of `eq`,
-/// `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `contains`, `in`, `not_in`,
-/// `is_null`, `is_not_null`, `in_subquery`. `{ "col": value }` is shorthand for
-/// `eq`. Top-level logical keys: `and`/`or` (array of filters), `not` (a filter),
-/// `exists`/`not_exists` (a subselect). Multiple keys are AND-ed.
+/// `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `contains`, `bytes_prefix`, `in`,
+/// `not_in`, `is_null`, `is_not_null`, `in_subquery`. `{ "col": value }` is
+/// shorthand for `eq`. Top-level logical keys: `and`/`or` (array of filters),
+/// `not` (a filter), `exists`/`not_exists` (a subselect). Multiple keys are
+/// AND-ed.
 fn parse_filter(map: &Map<String, Value>) -> Result<Expr, KitError> {
     let mut parts = Vec::new();
     for (key, val) in map {
@@ -1179,6 +1218,9 @@ fn column_predicate(column: &str, val: &Value) -> Result<Expr, KitError> {
                 "lte" => Expr::Lte(Box::new(col_expr()), Box::new(operand_lit())),
                 "like" => Expr::Like(Box::new(col_expr()), as_str(operand, "like")?),
                 "contains" => Expr::Contains(Box::new(col_expr()), as_str(operand, "contains")?),
+                "bytes_prefix" => {
+                    Expr::BytesPrefix(Box::new(col_expr()), as_str(operand, "bytes_prefix")?)
+                }
                 "in" => Expr::In(Box::new(col_expr()), as_literal_list(operand)?),
                 "not_in" => Expr::NotIn(Box::new(col_expr()), as_literal_list(operand)?),
                 "is_null" => Expr::IsNull(Box::new(col_expr())),

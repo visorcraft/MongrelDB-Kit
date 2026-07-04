@@ -209,8 +209,14 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
   plain objects.
 - `await db.createVirtualTable(spec)` and `await db.dropVirtualTable(name)` run the SQL DDL for
   module-backed virtual/external tables.
+- `await db.analyze()` and `await db.vacuum()` rebuild index statistics and reclaim space (the
+  engine's `ANALYZE` / `VACUUM` equivalents), routing through the SQL surface.
 - `db.nativeDb` exposes the underlying `mongreldb` database for raw operations that intentionally
   bypass Kit validation, defaults, and relational guards.
+
+> The kit's SQL session is held for the database's lifetime, so views (`CREATE
+> VIEW`) created via `db.sql()` persist across subsequent `sql()` / `sqlRows()`
+> calls. See [Migrations → SQL views](./migrations.md#sql-views).
 
 ## Triggers and SQL helpers
 

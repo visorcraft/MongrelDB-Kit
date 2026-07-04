@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::external::VirtualTableSpec;
+use crate::external::{ViewSpec, VirtualTableSpec};
 use crate::procedure::ProcedureSpec;
 use crate::trigger::TriggerSpec;
 
@@ -87,6 +87,17 @@ pub enum MigrationOp {
         table: VirtualTableSpec,
     },
     DropVirtualTable {
+        name: String,
+    },
+    CreateView {
+        name: String,
+        view: ViewSpec,
+    },
+    ReplaceView {
+        name: String,
+        view: ViewSpec,
+    },
+    DropView {
         name: String,
     },
     RawSql(String),
@@ -218,6 +229,19 @@ fn canonical_op(op: &MigrationOp) -> String {
                 r#"{{"op":"drop_virtual_table","name":{}}}"#,
                 json_string(name)
             )
+        }
+        MigrationOp::CreateView { name, view } => format!(
+            r#"{{"op":"create_view","name":{},"sql":{}}}"#,
+            json_string(name),
+            json_string(&view.sql)
+        ),
+        MigrationOp::ReplaceView { name, view } => format!(
+            r#"{{"op":"replace_view","name":{},"sql":{}}}"#,
+            json_string(name),
+            json_string(&view.sql)
+        ),
+        MigrationOp::DropView { name } => {
+            format!(r#"{{"op":"drop_view","name":{}}}"#, json_string(name))
         }
         MigrationOp::RawSql(sql) => {
             format!(r#"{{"op":"raw_sql","sql":{}}}"#, json_string(sql))

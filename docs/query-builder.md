@@ -14,7 +14,7 @@ small amount of seed data:
 import {
   KitDatabase, Schema,
   eq, ne, gt, gte, lt, lte, inList, notInList, isNull, isNotNull,
-  like, contains, and, or, not, asc, desc,
+  like, contains, bytesPrefix, and, or, not, asc, desc,
   inSubquery, exists, notExists, count, sum, min, max, avg,
 } from '@visorcraft/mongreldb-kit';
 import { customers, products, orders, orderItems, schema } from './store-schema.js';
@@ -120,6 +120,7 @@ column, `string` for `text`).
 | `notInList` | `notInList(column, values[])` | `column NOT IN (...)` |
 | `like` | `like(column, pattern)` | SQL `LIKE` (see below) |
 | `contains` | `contains(column, substr)` | case-sensitive substring |
+| `bytesPrefix` | `bytesPrefix(column, prefix)` | anchored prefix on a bitmap-indexed Bytes column (exact pushdown) |
 | `and` | `and(...predicates)` | logical AND (variadic) |
 | `or` | `or(...predicates)` | logical OR (variadic) |
 | `not` | `not(predicate)` | logical NOT |
@@ -157,6 +158,21 @@ db.selectFrom(customers).where(contains(customers.email, 'cleo')).executeSync();
 
 Both run as a full table scan with the match evaluated in JavaScript — see
 [Performance & limits](#performance--limits).
+
+### `bytesPrefix` — anchored prefix on Bytes columns
+
+`bytesPrefix(column, prefix)` is the exact equivalent of `LIKE 'prefix%'` (no
+wildcards in `prefix`) on a `bytes`-storage column that has a bitmap index. It
+**pushes down exactly** to the engine's `BytesPrefix` condition — no residual
+re-check, no full scan — so it is dramatically faster than `like` for anchored
+matches on indexed Bytes columns. Falls back to a residual `startsWith` scan
+when the column has no bitmap index.
+
+```ts
+// Find rows whose `key` (a Bytes column with a bitmap index) starts with the
+// bytes of "user:". Pushes down to an exact bitmap-prefix lookup.
+db.selectFrom(events).where(bytesPrefix(events.key, 'user:')).executeSync();
+```
 
 ## Writes
 

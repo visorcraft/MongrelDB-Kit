@@ -421,6 +421,24 @@ impl Schema {
     pub fn has_table(&self, name: &str) -> bool {
         self.by_name.contains_key(name)
     }
+
+    /// Rename a table in place, keeping the `by_name` index in sync. Returns
+    /// `false` if `from` is absent or `to` is already in use (no change made).
+    /// Does *not* retarget foreign keys — callers that need that should do it
+    /// before/after on the tables they own.
+    pub fn rename_table(&mut self, from: &str, to: &str) -> bool {
+        if from == to {
+            return self.has_table(from);
+        }
+        if !self.has_table(from) || self.has_table(to) {
+            return false;
+        }
+        let idx = *self.by_name.get(from).unwrap();
+        self.tables[idx].name = to.to_string();
+        self.by_name.remove(from);
+        self.by_name.insert(to.to_string(), idx);
+        true
+    }
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ pub mod trigger;
 pub mod validation;
 
 pub use check::{eval_check, CheckParseError};
-pub use external::{quote_ident, VirtualTableSpec};
+pub use external::{quote_ident, ViewSpec, VirtualTableSpec};
 pub use keys::{
     decode_pk, encode_component, encode_pk, encode_row_guard_key, encode_unique_key, KeyComponent,
     KIT_KEY_VERSION,

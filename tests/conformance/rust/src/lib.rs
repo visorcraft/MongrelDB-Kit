@@ -1055,6 +1055,157 @@ pub fn run_contains() -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// BytesPrefix conformance (anchored `LIKE 'prefix%'` on a bitmap-indexed
+// Bytes column — exact pushdown, no residual).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct BytesPrefixScenario {
+    name: String,
+    table: String,
+    column: String,
+    prefix: String,
+    #[serde(default)]
+    order: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BytesPrefixFixture {
+    schema: Schema,
+    rows: Vec<Map<String, Value>>,
+    scenarios: Vec<BytesPrefixScenario>,
+}
+
+pub fn run_bytes_prefix() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: BytesPrefixFixture = load_json(&fixtures.join("bytes_prefix.json"))?;
+    let expected: Map<String, Value> = load_json(&fixtures.join("expected/bytes_prefix.json"))?;
+
+    let table = fixture
+        .schema
+        .tables
+        .first()
+        .ok_or("bytes_prefix fixture has no table")?
+        .name
+        .clone();
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+    for row in &fixture.rows {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        txn.insert(&table, row.clone()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    for scenario in &fixture.scenarios {
+        let select = Select {
+            table: scenario.table.clone(),
+            columns: Vec::new(),
+            filter: Some(Expr::BytesPrefix(
+                Box::new(Expr::Column(scenario.column.clone())),
+                scenario.prefix.clone(),
+            )),
+            order_by: Vec::new(),
+            limit: None,
+            offset: None,
+        };
+        let txn = db.begin().map_err(|e| e.to_string())?;
+        let mut rows: Vec<Map<String, Value>> = txn
+            .select(&Query::Select(select))
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|r| r.values)
+            .collect();
+        txn.commit().map_err(|e| e.to_string())?;
+        if let Some(order) = &scenario.order {
+            sort_flat_rows(&mut rows, order);
+        }
+        let actual = Value::Array(rows.into_iter().map(Value::Object).collect());
+        let exp = expected
+            .get(&scenario.name)
+            .and_then(|e| e.get("rows"))
+            .ok_or(format!("missing expected rows for {}", scenario.name))?;
+        assert_eq_json(&scenario.name, &actual, exp)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Views conformance (CREATE VIEW + SELECT FROM <view> via the SQL surface)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct ViewScenario {
+    name: String,
+    sql: String,
+    expected_rows: Vec<Map<String, Value>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ViewsFixture {
+    schema: Schema,
+    rows: Vec<Map<String, Value>>,
+    view_sql: String,
+    scenarios: Vec<ViewScenario>,
+}
+
+pub fn run_views() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: ViewsFixture = load_json(&fixtures.join("views.json"))?;
+
+    let table = fixture
+        .schema
+        .tables
+        .first()
+        .ok_or("views fixture has no table")?
+        .name
+        .clone();
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+    for row in &fixture.rows {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        txn.insert(&table, row.clone()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    // Create the view via the SQL surface (session-scoped, persists across
+    // subsequent sql() calls on the same Database handle).
+    db.sql(&format!("CREATE VIEW pricey AS {}", fixture.view_sql))
+        .map_err(|e| e.to_string())?;
+
+    for scenario in &fixture.scenarios {
+        let mut rows = db.sql_rows(&scenario.sql).map_err(|e| e.to_string())?;
+        // Normalize: sort single-row/scalar results deterministically is
+        // unnecessary (order is fixed by the scenario SQL), but normalize
+        // numeric types for comparison (f64 vs int).
+        for row in &mut rows {
+            normalize_row_numbers(row);
+        }
+        let actual = Value::Array(rows.into_iter().map(Value::Object).collect());
+        let mut exp: Vec<Map<String, Value>> = scenario.expected_rows.clone();
+        for row in &mut exp {
+            normalize_row_numbers(row);
+        }
+        let expected = Value::Array(exp.into_iter().map(Value::Object).collect());
+        assert_eq_json(&scenario.name, &actual, &expected)?;
+    }
+    Ok(())
+}
+
+/// Coerce JSON numbers to f64 for comparison (DataFusion may return COUNT(*) as
+/// Int64 or Float64 depending on the planner; normalize so 1 == 1.0).
+fn normalize_row_numbers(row: &mut Map<String, Value>) {
+    for v in row.values_mut() {
+        if let Value::Number(n) = v {
+            if let Some(f) = n.as_f64() {
+                *v = serde_json::json!(f);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ANN conformance (ann_search top-k over an Embedding column's HNSW index)
 // ---------------------------------------------------------------------------
 

@@ -25,13 +25,10 @@
 
 use std::collections::HashMap;
 
-use arrow::array::{
-    Array, BooleanArray, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
-};
-use arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use crate::arrow_util::{batch_to_rows, read_arrow_ipc};
 use crate::error::{KitError, Result};
 use mongreldb_kit_core::{ProcedureSpec, TriggerSpec, VirtualTableSpec};
 
@@ -663,62 +660,6 @@ fn decode<T: for<'de> Deserialize<'de>>(resp: reqwest::blocking::Response) -> Re
     }
     let v: T = resp.json().map_err(|e| KitError::Storage(e.to_string()))?;
     Ok(v)
-}
-
-fn read_arrow_ipc(bytes: &[u8]) -> Result<Vec<RecordBatch>> {
-    if bytes.is_empty() {
-        return Ok(Vec::new());
-    }
-    let cursor = std::io::Cursor::new(bytes);
-    let reader = arrow::ipc::reader::FileReader::try_new(cursor, None)
-        .map_err(|e| KitError::Storage(e.to_string()))?;
-    reader
-        .into_iter()
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| KitError::Storage(e.to_string()))
-}
-
-fn batch_to_rows(b: &RecordBatch) -> Result<Vec<Map<String, Value>>> {
-    let schema = b.schema();
-    let mut rows = Vec::with_capacity(b.num_rows());
-    for r in 0..b.num_rows() {
-        let mut row = Map::new();
-        for (c, field) in schema.fields().iter().enumerate() {
-            let name = field.name();
-            let arr = b.column(c);
-            row.insert(name.clone(), cell_value(arr.as_ref(), r));
-        }
-        rows.push(row);
-    }
-    Ok(rows)
-}
-
-fn cell_value(arr: &dyn Array, r: usize) -> Value {
-    if arr.is_null(r) {
-        return Value::Null;
-    }
-    if let Some(a) = arr.as_any().downcast_ref::<Int64Array>() {
-        return json!(a.value(r));
-    }
-    if let Some(a) = arr.as_any().downcast_ref::<Int32Array>() {
-        return json!(a.value(r));
-    }
-    if let Some(a) = arr.as_any().downcast_ref::<Float64Array>() {
-        return serde_json::Number::from_f64(a.value(r))
-            .map(Value::Number)
-            .unwrap_or(Value::Null);
-    }
-    if let Some(a) = arr.as_any().downcast_ref::<BooleanArray>() {
-        return Value::Bool(a.value(r));
-    }
-    if let Some(a) = arr.as_any().downcast_ref::<StringArray>() {
-        return Value::String(a.value(r).to_string());
-    }
-    if arr.as_any().downcast_ref::<NullArray>().is_some() {
-        return Value::Null;
-    }
-    // Fallback: stringify unknown types.
-    Value::String(format!("{arr:?}"))
 }
 
 #[cfg(test)]

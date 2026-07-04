@@ -105,6 +105,23 @@ impl From<serde_json::Error> for KitError {
     }
 }
 
+impl From<mongreldb_query::MongrelQueryError> for KitError {
+    fn from(e: mongreldb_query::MongrelQueryError) -> Self {
+        use mongreldb_query::MongrelQueryError;
+        match e {
+            // Core errors carry the engine's declarative constraint failures
+            // (unique / FK / check / conflict) — route them through the same
+            // mapping as direct core errors so callers see the right category.
+            MongrelQueryError::Core(core) => KitError::from(core),
+            MongrelQueryError::Schema(msg) => KitError::Validation(msg),
+            MongrelQueryError::Arrow(msg) | MongrelQueryError::DataFusion(msg) => {
+                KitError::Storage(msg)
+            }
+            _ => KitError::Storage(e.to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::KitError;

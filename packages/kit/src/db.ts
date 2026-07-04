@@ -506,6 +506,21 @@ export class KitDatabase {
 		return this.db.compactTable(table);
 	}
 
+	/** Rebuild statistics/metadata for every table's indexes (the engine's
+	 * `ANALYZE` equivalent). Routes through the SQL surface for parity with the
+	 * engine's own definition. Safe to run at any time; useful after bulk loads
+	 * so the query planner and learned indexes have fresh data. */
+	async analyze(): Promise<void> {
+		await this.sql('ANALYZE');
+	}
+
+	/** Reclaim space across all tables (the engine's `VACUUM` equivalent:
+	 * compact every sorted run, then gc). Routes through the SQL surface for
+	 * parity with the engine's own definition. Safe to run at any time. */
+	async vacuum(): Promise<void> {
+		await this.sql('VACUUM');
+	}
+
 	/** The current visible commit epoch (monotonically increasing version). */
 	snapshotEpoch(): bigint {
 		return this.db.snapshotEpoch();

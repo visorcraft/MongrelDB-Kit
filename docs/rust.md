@@ -292,6 +292,40 @@ remote.create_virtual_table(&VirtualTableSpec::new(
 remote.drop_virtual_table("docs_fts")?;
 ```
 
+## Embedded SQL surface and maintenance
+
+`Database::sql`, `sql_arrow`, and `sql_rows` run statements through the kit's
+embedded `MongrelSession` (the engine's DataFusion SQL frontend). The session is
+held for the database's lifetime, so session-scoped objects (views, prepared
+statements, the result cache) persist across calls — mirroring a long-lived
+database connection. After a migration that creates or drops tables, call
+`refresh_sql_session` so the session sees the new table set.
+
+```rust
+use mongreldb_kit::{Database, ViewSpec};
+use mongreldb_kit_core::MigrationOp;
+
+// Read path: returns Arrow RecordBatch, raw IPC bytes, or JSON-style rows.
+let batches = db.sql("SELECT id, email FROM users ORDER BY id")?;
+let ipc: Vec<u8> = db.sql_arrow("SELECT id FROM users ORDER BY id")?;
+let rows = db.sql_rows("SELECT id, email FROM users ORDER BY id")?;
+
+// DDL/DML return empty; views live in the session.
+db.sql("CREATE VIEW active AS SELECT id FROM users WHERE active = TRUE")?;
+db.sql_rows("SELECT * FROM active")?; // queries the view
+
+// Maintenance (the engine's ANALYZE / VACUUM equivalents).
+db.analyze()?;          // ensure_indexes_complete() on every table
+let reclaimed = db.vacuum()?; // compact_all() + gc()
+
+// Rename a table (engine + kit schema catalog + persisted).
+db.rename_table("widgets", "things")?;
+```
+
+> Writes through `sql()` bypass kit-level constraints (defaults, enums, min/max,
+> length, regex, triggers) — use the `Transaction` API for constrained writes.
+> The engine's own declarative constraints (unique, FK, check) still apply.
+
 ## Sequences and defaults
 
 A column whose `DefaultKind::Sequence(name)` default is set is auto-assigned from a named sequence

@@ -30,6 +30,7 @@ import {
 	notExists,
 	joinEq,
 	contains,
+	bytesPrefix,
 	like,
 	asc,
 	desc,
@@ -144,11 +145,19 @@ function normalizeRowForTs(table: TableSpec, row: Record<string, any>): Record<s
 			out[key] = null;
 		} else if (isIntColumn(table, key)) {
 			out[key] = BigInt(value);
+		} else if (isBytesColumn(table, key) && Array.isArray(value)) {
+			// Fixtures store bytes columns as JSON arrays of byte numbers; the
+			// TS kit requires Uint8Array.
+			out[key] = new Uint8Array(value as number[]);
 		} else {
 			out[key] = value;
 		}
 	}
 	return out;
+}
+
+function isBytesColumn(table: TableSpec, columnName: string): boolean {
+	return table.columns.some((c) => c.name === columnName && c.storageType === 'bytes');
 }
 
 function defaultForStorageType(storageType: string): unknown {
@@ -193,11 +202,24 @@ function normalizeRowForCompare(table: TableSpec, row: Record<string, unknown>):
 		const col = table.columns.find((c) => c.name === k);
 		if (col && col.nullable && valuesEqual(v, defaultForStorageType(col.storageType))) {
 			out[k] = null;
+		} else if (col && col.storageType === 'bytes') {
+			// Canonicalize bytes columns to an array of byte numbers, regardless
+			// of whether the runtime returned a Uint8Array (Rust/Python) or a
+			// UTF-8-decoded string (TS NAPI addon). This matches the fixture's
+			// JSON-array representation.
+			out[k] = bytesToArray(v);
 		} else {
 			out[k] = normalizeValueForCompare(v);
 		}
 	}
 	return out;
+}
+
+function bytesToArray(v: unknown): number[] {
+	if (v instanceof Uint8Array) return Array.from(v);
+	if (typeof v === 'string') return Array.from(v, (c) => c.charCodeAt(0));
+	if (Array.isArray(v)) return (v as number[]).map((n) => Number(n));
+	return [];
 }
 
 function buildPredicate(table: TableSpec, filter: Record<string, any>): any {
@@ -797,6 +819,66 @@ describe('mongreldb-kit conformance', () => {
 					sortAggRows(exp, scenario.order);
 				}
 				expect(rows, `contains ${scenario.name}`).toEqual(exp);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs bytes_prefix scenarios against the TypeScript kit', () => {
+		const raw = loadJson('bytes_prefix.json');
+		const expected = loadJson('expected/bytes_prefix.json');
+		const schema = schemaFromFixture(raw.schema);
+		const baseTable = schema.table(raw.schema.tables[0].name);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-bp-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const row of raw.rows) {
+				kit.insertInto(baseTable).values(normalizeRowForTs(baseTable, row)).executeSync();
+			}
+			for (const scenario of raw.scenarios) {
+				const tspec = schema.table(scenario.table);
+				const col = tspec.columns.find((c) => c.name === scenario.column)!;
+				const rows = (
+					kit.selectFrom(tspec).where(bytesPrefix(col, scenario.prefix)).executeSync() as any[]
+				).map((r) => normalizeRowForCompare(tspec, r));
+				const exp = (expected[scenario.name].rows as any[]).map((r) =>
+					normalizeRowForCompare(tspec, r)
+				);
+				if (scenario.order) {
+					sortAggRows(rows, scenario.order);
+					sortAggRows(exp, scenario.order);
+				}
+				expect(rows, `bytes_prefix ${scenario.name}`).toEqual(exp);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('runs SQL view scenarios against the TypeScript kit', async () => {
+		const raw = loadJson('views.json');
+		const schema = schemaFromFixture(raw.schema);
+		const baseTable = schema.table(raw.schema.tables[0].name);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-views-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const row of raw.rows) {
+				kit.insertInto(baseTable).values(normalizeRowForTs(baseTable, row)).executeSync();
+			}
+			// Create the view via the SQL surface; it lives in the kit's session
+			// and is queryable by subsequent sql() calls.
+			await kit.sql(`CREATE VIEW pricey AS ${raw.view_sql}`);
+			for (const scenario of raw.scenarios) {
+				const rows = (await kit.sqlRows(scenario.sql)).map((r: any) =>
+					normalizeRowForCompare(baseTable, r)
+				);
+				const exp = (scenario.expected_rows as any[]).map((r) =>
+					normalizeRowForCompare(baseTable, r)
+				);
+				expect(rows, `views ${scenario.name}`).toEqual(exp);
 			}
 		} finally {
 			kit.close();

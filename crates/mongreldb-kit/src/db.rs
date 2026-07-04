@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const SCHEMA_FILE: &str = "kit_schema.json";
 
@@ -165,17 +166,24 @@ fn condition_label(c: &mongreldb_core::query::Condition) -> String {
 /// Wraps a MongrelDB core database and a kit schema, providing table metadata
 /// and transaction creation.
 pub struct Database {
-    pub(crate) inner: CoreDatabase,
+    pub(crate) inner: Arc<CoreDatabase>,
     pub(crate) schema: KitSchema,
     pub(crate) root: PathBuf,
     /// Application-registered named default providers (`DefaultKind::CustomName`).
     pub(crate) default_providers: HashMap<String, DefaultProvider>,
+    /// Lazily-initialized long-lived SQL session. Views, prepared statements,
+    /// and the result cache are session-scoped (the engine does not persist
+    /// them), so the kit holds one session for the database's lifetime rather
+    /// than opening one per `sql()` call — mirroring how the daemon and any
+    /// long-lived application use MongrelDB. Built on first use so tables
+    /// created in `Database::create` are visible to it.
+    pub(crate) session: parking_lot::Mutex<Option<mongreldb_query::MongrelSession>>,
 }
 
 impl Database {
     /// Open an existing kit database.
     pub fn open(path: &Path) -> Result<Self> {
-        let inner = CoreDatabase::open(path)?;
+        let inner = Arc::new(CoreDatabase::open(path)?);
         let schema = load_schema(path)?;
         // Ensure reserved tables exist for databases created by older versions.
         ensure_internal_tables(&inner)?;
@@ -185,12 +193,13 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
         })
     }
 
     /// Open an existing page-encrypted kit database with its passphrase.
     pub fn open_encrypted(path: &Path, passphrase: &str) -> Result<Self> {
-        let inner = CoreDatabase::open_encrypted(path, passphrase)?;
+        let inner = Arc::new(CoreDatabase::open_encrypted(path, passphrase)?);
         let schema = load_schema(path)?;
         ensure_internal_tables(&inner)?;
         reap_rotated_wal_segments(&inner);
@@ -199,6 +208,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
         })
     }
 
@@ -207,7 +217,7 @@ impl Database {
     /// `encrypted_indexable` are encrypted at rest.
     pub fn create_encrypted(path: &Path, schema: KitSchema, passphrase: &str) -> Result<Self> {
         std::fs::create_dir_all(path)?;
-        let inner = CoreDatabase::create_encrypted(path, passphrase)?;
+        let inner = Arc::new(CoreDatabase::create_encrypted(path, passphrase)?);
         ensure_internal_tables(&inner)?;
         store_schema(path, &schema)?;
         for table in &schema.tables {
@@ -218,13 +228,14 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
         })
     }
 
     /// Create a fresh kit database with the given schema.
     pub fn create(path: &Path, schema: KitSchema) -> Result<Self> {
         std::fs::create_dir_all(path)?;
-        let inner = CoreDatabase::create(path)?;
+        let inner = Arc::new(CoreDatabase::create(path)?);
 
         // Create the reserved kit tables first so we can record migrations,
         // reserve unique keys, and touch row guards.
@@ -244,6 +255,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
         })
     }
 
@@ -895,6 +907,12 @@ impl Database {
         &self.inner
     }
 
+    /// The underlying engine handle wrapped in an `Arc`, for callers that need
+    /// a shared/owned reference (e.g. building a `MongrelSession`).
+    pub(crate) fn core_arc(&self) -> Arc<CoreDatabase> {
+        Arc::clone(&self.inner)
+    }
+
     /// Best-effort flush-on-close (§4.4): force-flush pending writes on every
     /// table to `.sr` sorted runs so WAL segments stay bounded across repeated
     /// short-lived process invocations (e.g. the CLI). Call as the last action
@@ -915,6 +933,130 @@ impl Database {
     /// skipped (< 2 runs).
     pub fn compact_table(&self, name: &str) -> Result<bool> {
         self.inner.compact_table(name).map_err(KitError::from)
+    }
+
+    /// Rename a live table. Fails if `from` does not exist or `to` is already
+    /// in use; a no-op when `from == to`. Names beginning with `__kit_` are
+    /// reserved for internal tables and rejected here (parity with the
+    /// TypeScript kit).
+    ///
+    /// Updates both the engine table and the kit schema catalog (in memory and
+    /// persisted to `kit_schema.json`), so subsequent `table_names()`,
+    /// `table(name)`, and transactional reads by the new name all work. Foreign
+    /// keys in other tables that reference `from` are retargeted to `to`.
+    pub fn rename_table(&mut self, from: &str, to: &str) -> Result<()> {
+        if from.starts_with("__kit_") || to.starts_with("__kit_") {
+            return Err(KitError::Validation(
+                "rename_table: names beginning with '__kit_' are reserved for internal tables"
+                    .into(),
+            ));
+        }
+        self.inner.rename_table(from, to).map_err(KitError::from)?;
+        // Keep the kit schema catalog in sync: rename the table (updating the
+        // by_name index), retarget any FKs that pointed at it, then persist.
+        if !self.schema.rename_table(from, to) {
+            // The engine renamed it but the kit schema didn't have it / had a
+            // clash — surface the divergence rather than silently desyncing.
+            return Err(KitError::Integrity(format!(
+                "rename_table: kit schema has no table '{from}' (or '{to}' already exists)"
+            )));
+        }
+        for table in &mut self.schema.tables {
+            for fk in &mut table.foreign_keys {
+                if fk.references_table == from {
+                    fk.references_table = to.to_string();
+                }
+            }
+        }
+        store_schema(&self.root, &self.schema)?;
+        Ok(())
+    }
+
+    /// Rebuild statistics/metadata for every table's indexes (the engine's
+    /// `ANALYZE` equivalent: `ensure_indexes_complete` on each table). Safe to
+    /// run at any time; useful after bulk loads so the query planner and
+    /// learned indexes have fresh data.
+    pub fn analyze(&self) -> Result<()> {
+        for name in self.inner.table_names() {
+            let handle = self.inner.table(&name).map_err(KitError::from)?;
+            handle.lock().ensure_indexes_complete()?;
+        }
+        Ok(())
+    }
+
+    /// Reclaim space across all tables: compacts every table's sorted runs,
+    /// then runs `gc`. Returns the count of reclaimed orphaned runs/files.
+    /// Equivalent to the engine's `VACUUM`. Safe to run at any time.
+    pub fn vacuum(&self) -> Result<usize> {
+        self.inner.compact().map_err(KitError::from)?;
+        self.inner.gc().map_err(KitError::from)
+    }
+
+    /// Run a SQL statement through the embedded `MongrelSession` (DataFusion
+    /// frontend) and return the result as Arrow [`RecordBatch`]es. This is the
+    /// Rust analogue of the TypeScript kit's `db.sql(sql)` (which returns Arrow
+    /// IPC bytes) and the NAPI `Database.sql`.
+    ///
+    /// Read statements return their rows; DDL/DML (e.g. `CREATE VIEW`,
+    /// `ANALYZE`, `VACUUM`, `CREATE VIRTUAL TABLE`) return an empty vec. Writes
+    /// made directly through SQL bypass Kit-level constraints (defaults,
+    /// enums, min/max, length, regex, triggers) — use the transactional
+    /// [`Transaction`](crate::Transaction) API for constrained writes. The
+    /// engine's own declarative constraints (unique, FK, check) still apply.
+    ///
+    /// The session is held for the database's lifetime, so session-scoped
+    /// objects (views, prepared statements, the result cache) persist across
+    /// calls — mirroring a long-lived database connection. After a migration
+    /// that creates/drops tables, call [`Database::refresh_sql_session`] so the
+    /// session sees the new table set.
+    pub fn sql(&self, statement: &str) -> Result<Vec<arrow::record_batch::RecordBatch>> {
+        // Take the cached session out of the mutex (or build one on first use)
+        // so no `MutexGuard` is held across the async `run`. The kit's SQL
+        // surface is `&self` and blocking; concurrent `sql()` calls on one
+        // `Database` serialize here (applications needing concurrency should
+        // use multiple handles, each with its own session).
+        let session = match self.session.lock().take() {
+            Some(s) => s,
+            None => {
+                mongreldb_query::MongrelSession::open(self.core_arc()).map_err(KitError::from)?
+            }
+        };
+        let runtime = sql_runtime();
+        let result = runtime
+            .block_on(session.run(statement))
+            .map_err(KitError::from);
+        // Preserve the session (and any views/state created during the call).
+        *self.session.lock() = Some(session);
+        result
+    }
+
+    /// (Re)build the cached SQL session so it sees the current table set. The
+    /// engine's `MongrelSession` snapshots the table list at construction; this
+    /// rebuilds it after a migration creates or drops tables. Views and other
+    /// session-scoped state are reset.
+    pub fn refresh_sql_session(&self) -> Result<()> {
+        let session =
+            mongreldb_query::MongrelSession::open(self.core_arc()).map_err(KitError::from)?;
+        *self.session.lock() = Some(session);
+        Ok(())
+    }
+
+    /// Like [`Database::sql`], but returns the result serialized as Arrow IPC
+    /// *file* bytes — the same wire format the NAPI addon and the daemon emit.
+    /// Decode with `pyarrow.ipc.open_file`, the JS `apache-arrow`
+    /// `tableFromIPC`, or [`crate::arrow_util::read_arrow_ipc`]. Empty for
+    /// DDL/DML.
+    pub fn sql_arrow(&self, statement: &str) -> Result<Vec<u8>> {
+        let batches = self.sql(statement)?;
+        crate::arrow_util::batches_to_ipc(&batches)
+    }
+
+    /// Like [`Database::sql`], but materializes the result rows into JSON-style
+    /// maps (column name → value) for callers that don't want to take a direct
+    /// Arrow dependency. Empty for DDL/DML.
+    pub fn sql_rows(&self, statement: &str) -> Result<Vec<serde_json::Map<String, Value>>> {
+        let batches = self.sql(statement)?;
+        crate::arrow_util::batches_to_rows(&batches)
     }
 
     /// Direct HOT (PK → RowId) lookup via the core engine — no full-row
@@ -1071,6 +1213,21 @@ pub(crate) fn create_core_table(db: &CoreDatabase, name: &str, schema: CoreSchem
     }
     db.create_table(name, schema).map_err(KitError::from)?;
     Ok(())
+}
+
+/// A cached single-threaded tokio runtime for driving `MongrelSession::run`
+/// (which is async) from the kit's otherwise-blocking SQL surface. Built once
+/// per process and reused; `CurrentThread` is sufficient since the kit never
+/// runs concurrent SQL statements on the same database from one thread.
+fn sql_runtime() -> &'static tokio::runtime::Runtime {
+    use std::sync::OnceLock;
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build kit SQL tokio runtime")
+    })
 }
 
 fn core_procedure(spec: &ProcedureSpec) -> Result<mongreldb_core::StoredProcedure> {

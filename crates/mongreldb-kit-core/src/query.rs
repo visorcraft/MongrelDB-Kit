@@ -57,6 +57,12 @@ pub enum Expr {
     /// Case-sensitive substring containment. Equivalent to `LIKE '%needle%'`
     /// but without treating `%`/`_` in the needle as wildcards.
     Contains(Box<Expr>, String),
+    /// Anchored prefix match on a Bytes column with a bitmap index — the
+    /// exact equivalent of `LIKE 'prefix%'` (no wildcards in `prefix`). Pushes
+    /// down to the engine's `Condition::BytesPrefix` exactly (no residual
+    /// re-check). Falls back to a `starts_with` residual when the column lacks
+    /// a bitmap index or pushdown is bypassed (e.g. a CTE-materialized source).
+    BytesPrefix(Box<Expr>, String),
     /// Membership in the rows produced by a sub-`SELECT` (its first projected
     /// column). The subquery is evaluated against the same execution context, so
     /// it may read other tables or materialized CTEs.

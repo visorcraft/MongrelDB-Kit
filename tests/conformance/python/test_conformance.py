@@ -410,6 +410,70 @@ def test_contains():
         db.close()
 
 
+def test_bytes_prefix():
+    raw = load_json("bytes_prefix.json")
+    expected = load_json("expected/bytes_prefix.json")
+    table = raw["schema"]["tables"][0]["name"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = kit.Database.create(tmp, raw["schema"])
+        for row in raw["rows"]:
+            txn = db.begin()
+            txn.insert(table, row)
+            txn.commit()
+
+        for scenario in raw["scenarios"]:
+            txn = db.begin()
+            rows = txn.select(
+                scenario["table"],
+                filter={scenario["column"]: {"bytes_prefix": scenario["prefix"]}},
+            )
+            txn.commit()
+            order = scenario.get("order")
+            if order:
+                desc = order.startswith("-")
+                col = order.lstrip("+-")
+                rows = sorted(
+                    rows,
+                    key=lambda r: (r.get(col) is None, r.get(col)),
+                    reverse=desc,
+                )
+            exp = expected[scenario["name"]]["rows"]
+            assert rows == exp, f"{scenario['name']}: {rows} != {exp}"
+        db.close()
+
+
+def test_views():
+    raw = load_json("views.json")
+    table = raw["schema"]["tables"][0]["name"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = kit.Database.create(tmp, raw["schema"])
+        for row in raw["rows"]:
+            txn = db.begin()
+            txn.insert(table, row)
+            txn.commit()
+
+        # Create the view via the SQL surface; it lives in the kit's session
+        # and is queryable by subsequent sql_rows() calls.
+        db.sql_rows(f"CREATE VIEW pricey AS {raw['view_sql']}")
+
+        for scenario in raw["scenarios"]:
+            rows = db.sql_rows(scenario["sql"])
+            # Normalize numeric types (COUNT(*) may be int or float across
+            # language runtimes; compare by float value).
+            norm_rows = [
+                {k: float(v) if isinstance(v, (int, float)) else v for k, v in r.items()}
+                for r in rows
+            ]
+            norm_exp = [
+                {k: float(v) if isinstance(v, (int, float)) else v for k, v in r.items()}
+                for r in scenario["expected_rows"]
+            ]
+            assert norm_rows == norm_exp, f"{scenario['name']}: {norm_rows} != {norm_exp}"
+        db.close()
+
+
 def test_ann():
     raw = load_json("ann.json")
     table = raw["schema"]["tables"][0]["name"]

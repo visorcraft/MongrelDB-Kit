@@ -14,8 +14,11 @@ import { KitMigrationError, KitSchemaDriftError, KitForeignKeyError } from './er
 import { procedureJson, type ProcedureSpec } from './procedure.js';
 import { triggerJson, type TriggerSpec } from './trigger.js';
 import {
+	createViewSql,
 	createVirtualTableSql,
+	dropViewSql,
 	dropVirtualTableSql,
+	type ViewSpec,
 	type VirtualTableSpec
 } from './external.js';
 import {
@@ -103,6 +106,9 @@ export type MigrationOp =
 	| { kind: 'dropTrigger'; name: string }
 	| { kind: 'createVirtualTable'; table: VirtualTableSpec }
 	| { kind: 'dropVirtualTable'; name: string }
+	| { kind: 'createView'; name: string; view: ViewSpec }
+	| { kind: 'replaceView'; name: string; view: ViewSpec }
+	| { kind: 'dropView'; name: string }
 	| { kind: 'rawSql'; sql: string };
 
 export interface Migration {
@@ -132,6 +138,9 @@ export interface MigrationContext {
 	dropTrigger: (name: string) => Promise<void> | void;
 	createVirtualTable: (table: VirtualTableSpec) => Promise<void> | void;
 	dropVirtualTable: (name: string) => Promise<void> | void;
+	createView: (view: ViewSpec) => Promise<void> | void;
+	replaceView: (view: ViewSpec) => Promise<void> | void;
+	dropView: (name: string) => Promise<void> | void;
 	sql: (sql: string) => Promise<unknown[]> | unknown[];
 }
 
@@ -337,6 +346,12 @@ function canonicalOp(op: MigrationOp): string {
 			return `{"op":"create_virtual_table","name":${s(op.table.name)},"module":${s(op.table.module)},"args":[${(op.table.args ?? []).map(s).join(',')}]}`;
 		case 'dropVirtualTable':
 			return `{"op":"drop_virtual_table","name":${s(op.name)}}`;
+		case 'createView':
+			return `{"op":"create_view","name":${s(op.name)},"sql":${s(op.view.sql)}}`;
+		case 'replaceView':
+			return `{"op":"replace_view","name":${s(op.name)},"sql":${s(op.view.sql)}}`;
+		case 'dropView':
+			return `{"op":"drop_view","name":${s(op.name)}}`;
 		case 'rawSql':
 			return `{"op":"raw_sql","sql":${s(op.sql)}}`;
 		default: {
@@ -494,7 +509,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.11.0';
+	return '0.12.0';
 }
 
 function makeContext(kit: KitDatabase): MigrationContext {
@@ -519,6 +534,9 @@ function makeContext(kit: KitDatabase): MigrationContext {
 		},
 		createVirtualTable: (table: VirtualTableSpec) => createVirtualTable(kit, table),
 		dropVirtualTable: (name: string) => dropVirtualTable(kit, name),
+		createView: (v: ViewSpec) => createView(kit, v),
+		replaceView: (v: ViewSpec) => replaceView(kit, v),
+		dropView: (name: string) => dropView(kit, name),
 		sql: (sql: string) => runSql(kit.nativeDb, sql)
 	};
 }
@@ -652,6 +670,21 @@ function makeContextSync(kit: KitDatabase): MigrationContext {
 				`dropVirtualTable(${name}) requires async migrations because it runs SQL`
 			);
 		},
+		createView: (v: ViewSpec) => {
+			throw new KitMigrationError(
+				`createView(${v.name}) requires async migrations because it runs SQL`
+			);
+		},
+		replaceView: (v: ViewSpec) => {
+			throw new KitMigrationError(
+				`replaceView(${v.name}) requires async migrations because it runs SQL`
+			);
+		},
+		dropView: (name: string) => {
+			throw new KitMigrationError(
+				`dropView(${name}) requires async migrations because it runs SQL`
+			);
+		},
 		sql: () => {
 			throw new KitMigrationError('sql() is not available in synchronous migrations');
 		}
@@ -780,6 +813,22 @@ export async function createVirtualTable(
 
 export async function dropVirtualTable(kit: KitDatabase, name: string): Promise<void> {
 	await runSql(kit.nativeDb, dropVirtualTableSql(name));
+}
+
+/** Create (or replace — the engine overwrites) a SQL view. Async-only: runs
+ * `CREATE VIEW` through the kit's SQL surface. */
+export async function createView(kit: KitDatabase, v: ViewSpec): Promise<void> {
+	await runSql(kit.nativeDb, createViewSql(v));
+}
+
+/** Replace a SQL view (re-issues `CREATE VIEW`; the engine overwrites). */
+export async function replaceView(kit: KitDatabase, v: ViewSpec): Promise<void> {
+	await runSql(kit.nativeDb, createViewSql(v));
+}
+
+/** Drop a SQL view by name. Idempotent (`DROP VIEW IF EXISTS`). */
+export async function dropView(kit: KitDatabase, name: string): Promise<void> {
+	await runSql(kit.nativeDb, dropViewSql(name));
 }
 
 /**
