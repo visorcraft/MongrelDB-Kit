@@ -194,16 +194,19 @@ Verify against this matrix rather than assuming symmetry.
 | `createTrigger` | `ctx.createTrigger` | implemented |
 | `replaceTrigger` | `ctx.replaceTrigger` | implemented |
 | `dropTrigger` | `ctx.dropTrigger` | implemented |
-| `createVirtualTable` | `createVirtualTable` / `ctx.createVirtualTable` (async migrations only) | **not supported** — raises a migration error |
-| `dropVirtualTable` | `dropVirtualTable` / `ctx.dropVirtualTable` (async migrations only) | **not supported** — raises a migration error |
-| `rawSql` | `ctx.sql` (async migrations only) | **not supported** — raises a migration error |
+| `createVirtualTable` | `createVirtualTable` / `ctx.createVirtualTable` (async migrations only) | implemented (runs SQL via the embedded session) |
+| `dropVirtualTable` | `dropVirtualTable` / `ctx.dropVirtualTable` (async migrations only) | implemented (runs SQL via the embedded session) |
+| `createView` / `replaceView` | `createView` / `replaceView` / `ctx.createView` / `ctx.replaceView` (async migrations only) | implemented (runs `CREATE VIEW` via the embedded session) |
+| `dropView` | `dropView` / `ctx.dropView` (async migrations only) | implemented (runs `DROP VIEW IF EXISTS` via the embedded session) |
+| `rawSql` | `ctx.sql` (async migrations only) | implemented (runs the SQL via the embedded session) |
 
 Remaining asymmetry: `dropUnique`, `dropForeignKey`, and check ops are handled
 (or safely no-op'd) by the Rust/CLI runner but have no TypeScript helper because
-the schema definition already carries their enforcement. Virtual-table ops and
-`rawSql` remain TypeScript-only because the Rust/CLI runner intentionally avoids
-embedding a SQL execution engine in migrations; use a SQL-capable Kit surface
-for those changes.
+the schema definition already carries their enforcement. SQL-backed ops (views,
+virtual tables, raw SQL) run in both surfaces: TypeScript requires async
+migrations (the SQL path is async), while the Rust/CLI runner executes them
+through its own embedded `MongrelSession`. See
+[SQL views](#sql-views) below for view-specific semantics.
 
 ## Checksums and drift detection
 

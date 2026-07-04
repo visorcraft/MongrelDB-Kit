@@ -22,7 +22,8 @@ The repository also ships the `mongreldb-kit` CLI for schema validation, migrati
 - Schema helpers for typed tables, stable table/column ids, defaults, indexes, checks, unique constraints, and foreign keys.
 - Synchronous TypeScript CRUD/query builder with predicates, ordering, projections, aggregates, joins, subqueries, CTEs, batch inserts, updates, and deletes.
 - Rust and Python APIs backed by the same Rust core and verified with cross-language conformance fixtures.
-- Migration runner with content-addressed checksums and stored schema catalog.
+- Migration runner with content-addressed checksums, stored schema catalog, table renames, and SQL views.
+- Embedded SQL surface (`sql` / `sqlArrow` / `sqlRows`) and maintenance helpers (`analyze` / `vacuum`) in every language.
 - Engine-side trigger management plus SQL-backed virtual/external table helpers.
 - Extended SQL Function helpers for JSON, date/time, aggregate, and math-style SQL calls.
 - Relational constraint enforcement on top of MongrelDB transactions: not-null, type/range/string validation, unique/composite unique, foreign keys, and cascade/set-null/restrict deletes.

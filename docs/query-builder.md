@@ -592,8 +592,8 @@ let rows = txn.select(&query)?;
 
 Rust also exposes `txn.select_distinct`, `txn.aggregate(&AggregateQuery { .. })` (count/sum/min/max/avg
 with optional `group_by`/`having`), `txn.join(&JoinQuery { .. })` with `JoinKind::Inner`/`Left`/`Cross`,
-and `txn.select_with(&ctes, &body)`. `Expr` carries `In`, `NotIn`, `Like`, `Contains`, `Not`,
-`InSubquery`, `Exists`, and `NotExists`.
+and `txn.select_with(&ctes, &body)`. `Expr` carries `In`, `NotIn`, `Like`, `Contains`, `BytesPrefix`,
+`Not`, `InSubquery`, `Exists`, and `NotExists`.
 
 ```python
 # Python: object filters plus an order string.
@@ -632,6 +632,7 @@ txn.select("customers", filter={"exists": {"table": "orders", "filter": {"status
 | Not in list | `notInList(col, [...])` | `Expr::NotIn(col, [...])` | `{"col": {"not_in": [...]}}` |
 | Like | `like(col, "%x%")` | `Expr::Like(col, "%x%")` | `{"col": {"like": "%x%"}}` |
 | Contains | `contains(col, "x")` | `Expr::Contains(col, "x")` | `{"col": {"contains": "x"}}` |
+| Bytes prefix | `bytesPrefix(col, "x")` | `Expr::BytesPrefix(col, "x")` | `{"col": {"bytes_prefix": "x"}}` |
 | In subquery | `inSubquery(col, sub)` | `Expr::InSubquery(col, Box<Select>)` | `{"col": {"in_subquery": {...}}}` |
 | Exists / not exists | `exists(sub)` / `notExists(sub)` | `Expr::Exists(...)` / `Expr::NotExists(...)` | top-level `exists` / `not_exists` |
 | And | `and(a, b)` | `Expr::And(vec![...])` | multiple keys, or top-level `and` |

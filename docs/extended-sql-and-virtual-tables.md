@@ -126,9 +126,10 @@ await migrate(db, schema, [{
 }]);
 ```
 
-Use async migrations for virtual tables; `migrateSync` throws because the SQL
-path is async. Rust/CLI declarative migration runners also reject virtual-table
-ops because they intentionally do not embed a SQL execution engine.
+Use async migrations for virtual tables in TypeScript; `migrateSync` throws
+because the SQL path is async. The Rust and Python runners execute
+`create_virtual_table` / `drop_virtual_table` directly through their embedded
+SQL session — no separate async context required.
 
 Rust and Python remote helpers mirror the same operation:
 

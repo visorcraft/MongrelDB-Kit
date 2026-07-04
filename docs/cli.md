@@ -27,6 +27,14 @@ the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 | `init <path>` | Create a new (empty) database directory |
 | `check <path>` | Open a database and verify its internal tables exist |
 | `doctor <path>` | Open a database and run an integrity check |
+| `get <path> <table> <pk>` | Point-read a single row by primary key |
+| `query <path> <table>` | Query rows with `--filter`, `--order`, `--limit`, `--offset`, `--columns`, `--distinct` |
+| `count <path> <table>` | Count rows, optionally matching `--filter` |
+| `insert <path> <table> <row>` | Insert one row (JSON object); prints it with defaults applied |
+| `update <path> <table> <pk> <patch>` | Update a row by primary key with a JSON patch object |
+| `delete <path> <table> <pk>` | Delete a row by primary key |
+| `upsert <path> <table> <row>` | Insert a row, or update on PK conflict with `--update` |
+| `truncate <path> <table>` | Remove all rows from a table |
 | `schema print <path>` | Print the stored schema catalog JSON |
 | `schema validate <schema.json>` | Validate a schema JSON file |
 | `migrate apply <path> <migrations.json>` | Apply pending migrations |
@@ -38,7 +46,7 @@ the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 | `generate types <schema.json> --lang <ts\|rust\|python>` | Generate typed row/insert/update definitions |
 | `fixture create <path> <tables...>` | Dump selected table rows to JSON |
 | `fixture load <path> <fixture.json>` | Load rows from a JSON fixture |
-| `truncate <path> <table>` | Remove all rows from a table |
+| `procedure install\|drop\|list\|describe\|call` | Manage stored procedures |
 | `compact <path>` | Merge all tables' sorted runs into one (maintenance) |
 
 `mongreldb-kit --help` and `mongreldb-kit <command> --help` print the same
@@ -76,6 +84,72 @@ mongreldb-kit doctor ./store.kitdb
 # [ok] internal tables present
 # [ok] 0 applied migration(s)
 # doctor: no problems found
+```
+
+## Data commands (get / query / count / insert / update / delete / upsert)
+
+The CLI does single-row CRUD and filtered queries against a database. Rows are
+JSON objects; primary keys are JSON scalars (numbers, strings, or `null`).
+
+```sh
+# Insert a row (defaults and generated columns are applied).
+mongreldb-kit insert ./store.kitdb users '{"id": 1, "email": "alice@example.com"}'
+
+# Point-read by primary key.
+mongreldb-kit get ./store.kitdb users 1
+
+# Update a row by primary key (JSON patch; only the listed columns change).
+mongreldb-kit update ./store.kitdb users 1 '{"email": "alice@new.example"}'
+
+# Upsert (insert or, on PK conflict, update with the same row).
+mongreldb-kit upsert ./store.kitdb users '{"id": 1, "email": "alice@new.example"}' --update
+
+# Delete by primary key.
+mongreldb-kit delete ./store.kitdb users 1
+```
+
+`query` and `count` take a **friendly filter** (`--filter`), an order string
+(`--order`), and pagination/projection flags:
+
+```sh
+# Filter: amount >= 100 AND region == "east" (multiple keys AND together).
+mongreldb-kit query ./store.kitdb orders \
+  --filter '{"amount":{"gte":100},"region":"east"}' \
+  --order '-amount' --limit 10
+
+# Projection + distinct.
+mongreldb-kit query ./store.kitdb orders --columns 'region,status' --distinct
+
+# Count matching rows.
+mongreldb-kit count ./store.kitdb orders --filter '{"status":"shipped"}'
+```
+
+### Filter expression syntax
+
+`--filter` takes a JSON object. Each key is a column name; the value is either a
+bare scalar (shorthand for `eq`) or a single-operator object
+`{"<op>": <operand>}`. Multiple keys are AND-ed.
+
+| Operator | Operand | Meaning |
+| --- | --- | --- |
+| `eq` | scalar | `column = value` (also the bare-value shorthand) |
+| `ne` | scalar | `column != value` |
+| `gt` / `gte` / `lt` / `lte` | scalar | comparison |
+| `in` / `not_in` | array | membership |
+| `like` | string | SQL `LIKE` (`%`/`_` wildcards), evaluated in Rust |
+| `contains` | string | case-sensitive substring |
+| `bytes_prefix` | string | anchored prefix match `LIKE 'prefix%'` on a bitmap-indexed `bytes` column (exact engine pushdown) |
+| `is_null` / `is_not_null` | `true` | null check |
+
+```sh
+# LIKE with wildcards.
+mongreldb-kit query ./store.kitdb users --filter '{"email":{"like":"%@example.com"}}'
+
+# Anchored prefix on a bytes column (exact pushdown when bitmap-indexed).
+mongreldb-kit query ./store.kitdb events --filter '{"key":{"bytes_prefix":"user:"}}'
+
+# Null check.
+mongreldb-kit query ./store.kitdb users --filter '{"deleted_at":{"is_null":true}}'
 ```
 
 ## compact
@@ -137,11 +211,13 @@ A bad schema exits non-zero with a pinpointed message, e.g.
 ]
 ```
 
-The JSON op vocabulary also includes `create_trigger`, `replace_trigger`,
-`drop_trigger`, `create_virtual_table`, and `drop_virtual_table`. Trigger ops are
-executed by the CLI runner; virtual-table ops are recorded/checksummed but fail
-under the CLI runner because creating virtual tables requires a SQL-capable Kit
-surface. Use TypeScript async migrations for those.
+The JSON op vocabulary also includes `create_trigger`/`replace_trigger`/
+`drop_trigger`, `create_view`/`replace_view`/`drop_view`,
+`create_virtual_table`/`drop_virtual_table`, and `raw_sql`. The CLI runner
+executes all of them: schema/column ops run against the core engine, while the
+SQL-backed ops (views, virtual tables, raw SQL) run through the kit's embedded
+SQL session — no separate daemon or TypeScript process required. See the
+[migration ops table](./migrations.md#supported-operations) for the full list.
 
 **Plan** (and its `dry-run` alias) prints what would be applied without touching
 the database:

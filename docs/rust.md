@@ -239,6 +239,29 @@ let query = Query::Select(Select {
 });
 ```
 
+`Expr` also carries the full predicate set: `Like`, `Contains`, `BytesPrefix`
+(anchored prefix on a bitmap-indexed `Bytes` column — exact pushdown, no
+residual), `IsNull`/`IsNotNull`, `In`/`NotIn`, `InSubquery`, `Exists`/
+`NotExists`, and the logical combinators. The engine pushes `BytesPrefix` down
+to a bitmap key-prefix scan when the column has a bitmap index:
+
+```rust
+// Find events whose `key` (a Bytes column with a bitmap index) starts with the
+// bytes of "user:". Resolves to an exact bitmap-prefix lookup — no full scan.
+let query = Query::Select(Select {
+    table: "events".into(),
+    columns: vec![],
+    filter: Some(Expr::BytesPrefix(
+        Box::new(Expr::Column("key".into())),
+        "user:".into(),
+    )),
+    order_by: vec![],
+    limit: None,
+    offset: None,
+});
+let matched: Vec<Row> = txn.select(&query)?;
+```
+
 ## Migrations
 
 ```rust
@@ -252,9 +275,13 @@ let migrations = vec![
 mongreldb_kit::migrate(&mut db, &migrations)?;
 ```
 
-Trigger migration ops are executed by the Rust runner. Virtual-table and raw SQL
-ops are rejected by the Rust runner because those require a SQL-capable Kit
-surface.
+The Rust runner executes every migration op directly: table/column/index/
+constraint changes run against the core engine, while procedure/trigger ops call
+the engine DDL, and SQL-backed ops — `CreateView`/`ReplaceView`/`DropView`,
+`CreateVirtualTable`/`DropVirtualTable`, and `RawSql` — run through the embedded
+`MongrelSession` (see [Embedded SQL surface](#embedded-sql-surface-and-maintenance)
+below). There is no longer any "requires a SQL-capable Kit surface" caveat — the
+Rust Kit *is* that surface.
 
 ## Triggers and remote SQL
 

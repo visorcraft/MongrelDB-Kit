@@ -193,6 +193,7 @@ db.deleteFrom(table).where(predicate).executeSync();
 - `isNull(column)`, `isNotNull(column)`
 - `inList(column, values)`, `notInList(column, values)`
 - `like(column, pattern)`, `contains(column, substring)`
+- `bytesPrefix(column, prefix)` — anchored `LIKE 'prefix%'` on a bitmap-indexed Bytes column (exact pushdown; see [Query builder](./query-builder.md#bytesprefix--anchored-prefix-on-bytes-columns))
 - `and(...predicates)`, `or(...predicates)`, `not(predicate)`
 
 Joins, aggregates, `groupBy`/`having`, `distinct`, subqueries, `exists`, and CTEs are part of the

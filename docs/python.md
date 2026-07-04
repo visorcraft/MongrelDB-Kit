@@ -236,6 +236,11 @@ Order syntax:
 - `"-id"` — descending
 - `"-placed_at,+id"` — multiple columns
 
+```python
+# Anchored prefix on a bitmap-indexed bytes column (exact engine pushdown).
+events = txn.select("events", filter={"key": {"bytes_prefix": "user:"}}, order="+id")
+```
+
 ### Aggregates and joins
 
 `txn.aggregate` runs group-by/having; build specs with the `agg` helper (`count`, `sum`, `min`,
