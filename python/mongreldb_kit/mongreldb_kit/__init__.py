@@ -757,6 +757,22 @@ def date(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
     return column(name, id, "date", **kwargs)
 
 
+def date64(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
+    return column(name, id, "date64", **kwargs)
+
+
+def time64(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
+    return column(name, id, "time64", **kwargs)
+
+
+def interval_col(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
+    return column(name, id, "interval", **kwargs)
+
+
+def decimal128(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
+    return column(name, id, "decimal128", **kwargs)
+
+
 def index(
     name: str,
     columns: str | list[str],

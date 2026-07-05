@@ -6,11 +6,15 @@ export type ColumnStorageType =
 	| 'float64'
 	| 'timestamp'
 	| 'date'
+	| 'date64'
+	| 'time64'
+	| 'interval'
 	| 'text'
 	| 'bytes'
 	| 'json'
 	| 'embedding'
-	| 'sparse';
+	| 'sparse'
+	| 'decimal128';
 
 export type PkValue = string | bigint | (string | bigint | null)[];
 

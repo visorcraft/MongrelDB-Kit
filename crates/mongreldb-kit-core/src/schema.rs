@@ -23,6 +23,10 @@ pub enum ColumnType {
     Date,
     DateTime,
     TimestampNanos,
+    Date64,
+    Time64,
+    Interval,
+    Decimal128,
     /// A dense float32 vector for nearest-neighbour (ANN) search. The dimension
     /// is carried on the column as `embedding_dim`.
     Embedding,

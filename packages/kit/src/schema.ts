@@ -122,6 +122,38 @@ export function blob<const TName extends string, const TOpts extends ColumnOptio
 	return column(name, 'bytes', opts);
 }
 
+/** Millisecond-precision date (days since epoch × 86400000). */
+export function date64<const TName extends string, const TOpts extends ColumnOptions = {}>(
+	name: TName,
+	opts?: TOpts
+): ColumnSpec<TName, 'date64', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
+	return column(name, 'date64', opts);
+}
+
+/** Nanosecond-precision time-of-day (no date component). */
+export function time64<const TName extends string, const TOpts extends ColumnOptions = {}>(
+	name: TName,
+	opts?: TOpts
+): ColumnSpec<TName, 'time64', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
+	return column(name, 'time64', opts);
+}
+
+/** SQL INTERVAL (months + days + nanoseconds). */
+export function intervalCol<const TName extends string, const TOpts extends ColumnOptions = {}>(
+	name: TName,
+	opts?: TOpts
+): ColumnSpec<TName, 'interval', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
+	return column(name, 'interval', opts);
+}
+
+/** Fixed-point decimal (i128 unscaled value, precision, scale). */
+export function decimal128<const TName extends string, const TOpts extends ColumnOptions = {}>(
+	name: TName,
+	opts?: TOpts
+): ColumnSpec<TName, 'decimal128', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
+	return column(name, 'decimal128', opts);
+}
+
 /** A dense float-vector column of dimension `dim` for ANN (`annSearch`). */
 export function embedding<const TName extends string, const TOpts extends ColumnOptions = {}>(
 	name: TName,

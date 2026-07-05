@@ -99,6 +99,10 @@ pub(crate) fn to_core_type(ty: ColumnType) -> TypeId {
         | ColumnType::Date
         | ColumnType::DateTime => TypeId::Bytes,
         ColumnType::TimestampNanos => TypeId::Int64,
+        ColumnType::Date64 => TypeId::Date64,
+        ColumnType::Time64 => TypeId::Time64,
+        ColumnType::Interval => TypeId::Interval,
+        ColumnType::Decimal128 => TypeId::Decimal128 { precision: 38, scale: 2 },
         // Dimension is filled from the column's `embedding_dim` in
         // `to_core_schema`; a bare type has no dimension context.
         ColumnType::Embedding => TypeId::Embedding { dim: 0 },
