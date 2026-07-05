@@ -479,7 +479,7 @@ db.sql_rows("""
 db.sql_rows("SELECT id FROM users WHERE regexp('^admin.*', name) = 1")
 
 # Catalog introspection.
-db.sql_rows("SELECT type, name FROM sqlite_master ORDER BY name")
+db.sql_rows("SELECT type, name FROM information_schema.tables ORDER BY name")
 
 # Cross-database query.
 db.sql_rows("ATTACH './other-data' AS other")

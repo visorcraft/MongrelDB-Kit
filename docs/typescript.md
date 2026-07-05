@@ -278,7 +278,7 @@ await db.sqlRows(`
 await db.sqlRows("SELECT id FROM users WHERE regexp('^admin.*', name) = 1");
 
 // Catalog introspection.
-await db.sqlRows("SELECT type, name FROM sqlite_master ORDER BY name");
+await db.sqlRows("SELECT type, name FROM information_schema.tables ORDER BY name");
 
 // Cross-database query.
 await db.sqlRows("ATTACH './other-data' AS other");

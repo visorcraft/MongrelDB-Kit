@@ -380,7 +380,7 @@ db.sql_rows("SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM users")?;
 db.sql_rows("SELECT id FROM users WHERE regexp('^admin.*', name) = 1")?;
 
 // Catalog.
-db.sql_rows("SELECT type, name FROM sqlite_master ORDER BY name")?;
+db.sql_rows("SELECT type, name FROM information_schema.tables ORDER BY name")?;
 
 // ATTACH (cross-database).
 db.sql("ATTACH './other' AS other")?;
