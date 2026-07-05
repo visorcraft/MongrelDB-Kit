@@ -203,6 +203,10 @@ pub fn core_to_json(value: &CoreValue, ty: ColumnType) -> Result<Value> {
             Err(_) => Value::Array(b.iter().map(|x| Value::Number((*x).into())).collect()),
         },
         (CoreValue::Embedding(v), _) => serde_json::to_value(v)?,
+        (CoreValue::Decimal(d), _) => Value::String(d.to_string()),
+        (CoreValue::Interval { months, days, nanos }, _) => {
+            serde_json::json!({ "months": months, "days": days, "nanos": nanos })
+        }
     })
 }
 

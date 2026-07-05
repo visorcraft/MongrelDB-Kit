@@ -129,20 +129,27 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'bool':
 			return addon.ColumnType.Bool;
 		case 'int64':
+		case 'timestamp':
 			return addon.ColumnType.Int64;
 		case 'float64':
 			return addon.ColumnType.Float64;
-		case 'text':
-		case 'timestamp':
 		case 'date':
+			return addon.ColumnType.Date32;
+		case 'date64':
+			return addon.ColumnType.Date64;
+		case 'time64':
+			return addon.ColumnType.Time64;
+		case 'interval':
+			return addon.ColumnType.Interval;
+		case 'decimal128':
+			return addon.ColumnType.Decimal128;
+		case 'text':
 		case 'bytes':
 		case 'json':
 			return addon.ColumnType.Bytes;
 		case 'embedding':
 			return addon.ColumnType.Embedding;
 		case 'sparse':
-			// A sparse column is stored as bincoded bytes; the sparse index reads
-			// the tokens from those bytes.
 			return addon.ColumnType.Bytes;
 	}
 }

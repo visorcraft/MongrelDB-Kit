@@ -102,6 +102,10 @@ type ApplicationTypeMap = {
 	float64: number;
 	timestamp: string;
 	date: string;
+	date64: string;
+	time64: string;
+	interval: { months: number; days: number; nanos: number };
+	decimal128: string;
 	text: string;
 	bytes: unknown;
 	json: unknown;

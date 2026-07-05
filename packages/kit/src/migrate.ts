@@ -186,6 +186,14 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 			return ColumnType.Float64;
 		case 'date':
 			return ColumnType.Date32;
+		case 'date64':
+			return ColumnType.Date64;
+		case 'time64':
+			return ColumnType.Time64;
+		case 'interval':
+			return ColumnType.Interval;
+		case 'decimal128':
+			return ColumnType.Decimal128;
 		case 'text':
 		case 'bytes':
 		case 'json':

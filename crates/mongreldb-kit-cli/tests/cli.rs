@@ -93,7 +93,11 @@ fn truncate_removes_table_rows() {
     row.insert("email".into(), json!("alice@example.com"));
     let mut txn = db.begin().unwrap();
     txn.insert("user_accounts", row).unwrap();
-    txn.commit().unwrap();
+    txn.commit();
+
+    // Re-open the DB (drop + open releases the file lock so the CLI can access it).
+    let path = path.clone();
+    drop(db);
 
     bin()
         .arg("truncate")

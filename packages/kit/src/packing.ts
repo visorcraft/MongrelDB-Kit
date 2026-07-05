@@ -119,8 +119,16 @@ export function packRows(table: TableSpec, rows: Record<string, unknown>[]): Buf
 					throw new Error('embedding columns are not supported in bulk insert');
 				case 'sparse':
 					throw new Error('sparse columns are not supported in bulk insert');
+				case 'date64':
+				case 'time64':
+				case 'interval':
+				case 'decimal128':
+					// These types use the per-row insert path (toCells) for now;
+					// packing support will be added once the engine's bulk format
+					// encodes them natively. For now, throw with a clear message.
+					throw new Error(`${col.storageType} columns are not yet supported in bulk insert; use insertInto() instead`);
 				default: {
-					const _exhaustive: never = col.storageType;
+					const _exhaustive: string = col.storageType;
 					throw new Error(`Unsupported storage type for packing: ${_exhaustive}`);
 				}
 			}

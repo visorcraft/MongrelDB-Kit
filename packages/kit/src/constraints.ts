@@ -78,7 +78,7 @@ export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] 
 				};
 			}
 			default: {
-				const _exhaustive: never = col.storageType;
+				const _exhaustive: string = col.storageType;
 				throw new Error(`Unsupported storage type for cell conversion: ${_exhaustive}`);
 			}
 		}

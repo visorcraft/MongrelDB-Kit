@@ -1355,7 +1355,9 @@ fn ts_type(ty: ColumnType) -> &'static str {
         ColumnType::Int8 | ColumnType::Int16 | ColumnType::Int32 => "number",
         ColumnType::Int64 | ColumnType::TimestampNanos => "bigint",
         ColumnType::Float32 | ColumnType::Float64 => "number",
-        ColumnType::Text | ColumnType::Date | ColumnType::DateTime => "string",
+        ColumnType::Text | ColumnType::Date | ColumnType::DateTime
+        | ColumnType::Date64 | ColumnType::Time64 | ColumnType::Interval
+        | ColumnType::Decimal128 => "string",
         ColumnType::Bytes => "Uint8Array",
         ColumnType::Json => "unknown",
         ColumnType::Embedding => "number[]",
@@ -1416,7 +1418,9 @@ fn rust_type(ty: ColumnType) -> &'static str {
         ColumnType::Int64 | ColumnType::TimestampNanos => "i64",
         ColumnType::Float32 => "f32",
         ColumnType::Float64 => "f64",
-        ColumnType::Text | ColumnType::Date | ColumnType::DateTime => "String",
+        ColumnType::Text | ColumnType::Date | ColumnType::DateTime
+        | ColumnType::Date64 | ColumnType::Time64 | ColumnType::Interval
+        | ColumnType::Decimal128 => "String",
         ColumnType::Bytes => "Vec<u8>",
         ColumnType::Json => "serde_json::Value",
         ColumnType::Embedding => "Vec<f32>",
@@ -1489,7 +1493,9 @@ fn python_type(ty: ColumnType) -> &'static str {
         | ColumnType::Int64
         | ColumnType::TimestampNanos => "int",
         ColumnType::Float32 | ColumnType::Float64 => "float",
-        ColumnType::Text | ColumnType::Date | ColumnType::DateTime => "str",
+        ColumnType::Text | ColumnType::Date | ColumnType::DateTime
+        | ColumnType::Date64 | ColumnType::Time64 | ColumnType::Interval
+        | ColumnType::Decimal128 => "str",
         ColumnType::Bytes => "bytes",
         ColumnType::Json => "Any",
         ColumnType::Embedding => "list[float]",
