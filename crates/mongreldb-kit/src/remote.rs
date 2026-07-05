@@ -58,6 +58,19 @@ struct RemoteTable {
 struct SchemaInfo {
     columns: Vec<ColumnMeta>,
 }
+
+/// `POST /compact` response: `{ "compacted": N, "skipped": M }`.
+#[derive(Debug, Deserialize)]
+struct CompactResp {
+    compacted: usize,
+    skipped: usize,
+}
+
+/// `POST /tables/{name}/compact` response: `{ "status": "compacted"|"skipped" }`.
+#[derive(Debug, Deserialize)]
+struct CompactTableResp {
+    status: String,
+}
 #[derive(Debug, Deserialize)]
 struct ColumnMeta {
     id: u16,
@@ -248,6 +261,30 @@ impl RemoteDatabase {
         ))?;
         self.refresh()?;
         Ok(rows)
+    }
+
+    /// Compact every table on the daemon (`POST /compact`). Returns
+    /// `(compacted, skipped)`.
+    pub fn compact(&self) -> Result<(usize, usize)> {
+        let resp: CompactResp = decode(
+            self.client
+                .post(self.url("/compact"))
+                .send()
+                .map_err(ioe)?,
+        )?;
+        Ok((resp.compacted, resp.skipped))
+    }
+
+    /// Compact a single table on the daemon (`POST /tables/{name}/compact`).
+    /// Returns `true` if compacted, `false` if skipped (fewer than 2 runs).
+    pub fn compact_table(&self, name: &str) -> Result<bool> {
+        let resp: CompactTableResp = decode(
+            self.client
+                .post(self.url(&format!("/tables/{name}/compact")))
+                .send()
+                .map_err(ioe)?,
+        )?;
+        Ok(resp.status == "compacted")
     }
 
     fn url(&self, path: &str) -> String {

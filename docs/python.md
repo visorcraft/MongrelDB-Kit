@@ -417,6 +417,11 @@ ipc = db.sql_arrow("SELECT id FROM users ORDER BY id")         # raw Arrow IPC b
 db.sql_rows("CREATE VIEW active AS SELECT id FROM users WHERE active = TRUE")
 db.sql_rows("SELECT * FROM active")  # queries the view
 
+# Convenience wrappers for views + auto-increment:
+db.create_view("active", "SELECT id FROM users WHERE active = TRUE")
+db.drop_view("active")
+next_id = db.reserve_auto_inc("orders")  # Optional[int]
+
 db.analyze()              # ensure_indexes_complete() on every table
 reclaimed = db.vacuum()   # compact_all() + gc(); returns the reclaimed-file count
 

@@ -2629,8 +2629,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.25.0"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.25.0#b7822ffa73936f9a526e9f6749fb075b7fe4f0c7"
+version = "0.26.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.26.0#d8b947e5452bb11273229715f72e11f3f09b8352"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2657,7 +2657,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "bincode",
@@ -2677,7 +2677,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-cli"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2692,7 +2692,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "hex",
  "insta",
@@ -2706,7 +2706,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-python"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "mongreldb-kit",
  "mongreldb-kit-core",
@@ -2716,8 +2716,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-query"
-version = "0.25.0"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.25.0#b7822ffa73936f9a526e9f6749fb075b7fe4f0c7"
+version = "0.26.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.26.0#d8b947e5452bb11273229715f72e11f3f09b8352"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2736,8 +2736,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-server"
-version = "0.25.0"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.25.0#b7822ffa73936f9a526e9f6749fb075b7fe4f0c7"
+version = "0.26.0"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.26.0#d8b947e5452bb11273229715f72e11f3f09b8352"
 dependencies = [
  "arrow",
  "axum",

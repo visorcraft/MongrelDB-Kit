@@ -210,6 +210,12 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
   plain objects.
 - `await db.createVirtualTable(spec)` and `await db.dropVirtualTable(name)` run the SQL DDL for
   module-backed virtual/external tables.
+- `await db.createView(spec)` / `await db.dropView(name)` create/drop a SQL view (`CREATE VIEW` /
+  `DROP VIEW IF EXISTS`). Views are session-scoped — see [SQL views](./migrations.md#sql-views).
+- `db.updateWhere(table, patch, predicate)` and `db.deleteWhere(table, predicate)` are one-shot
+  convenience twins of Rust/Python `update_where`/`delete_where`, wrapping the
+  `updateTable`/`deleteFrom` builders. `updateWhere` returns the updated rows; `deleteWhere`
+  returns the deleted count as a `bigint`.
 - `await db.analyze()` and `await db.vacuum()` rebuild index statistics and reclaim space (the
   engine's `ANALYZE` / `VACUUM` equivalents), routing through the SQL surface.
 - **Async / non-blocking I/O:** the Kit wraps the addon's `spawn_blocking` async variants so hot

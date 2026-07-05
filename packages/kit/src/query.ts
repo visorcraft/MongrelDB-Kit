@@ -34,6 +34,17 @@ declare module './db.js' {
 		insertInto<T extends TableSpec>(table: T): InsertBuilder<T>;
 		updateTable<T extends TableSpec>(table: T): UpdateBuilder<T>;
 		deleteFrom<T extends TableSpec>(table: T): DeleteBuilder<T>;
+		/** One-shot filtered update: `updateTable(table).set(patch).where(pred)`.
+		 * Convenience twin of Rust/Python `update_where`. */
+		updateWhere<T extends TableSpec>(
+			table: T,
+			patch: Update<T>,
+			predicate: Predicate
+		): Row<T>[];
+		/** One-shot filtered delete: `deleteFrom(table).where(pred)`. Returns the
+		 * deleted count as a `bigint`. Convenience twin of Rust/Python
+		 * `delete_where`. */
+		deleteWhere<T extends TableSpec>(table: T, predicate: Predicate): bigint;
 		truncateTable(tableName: string): void;
 		/**
 		 * Materialize `builder` as a named CTE and return a scope whose
@@ -2040,6 +2051,23 @@ export class DeleteBuilder<T extends TableSpec, TResult = bigint> {
 	table: T
 ): DeleteBuilder<T> {
 	return new DeleteBuilder(this, table);
+};
+
+(KitDatabase.prototype as any).updateWhere = function <T extends TableSpec>(
+	this: KitDatabase,
+	table: T,
+	patch: Update<T>,
+	predicate: Predicate
+): Row<T>[] {
+	return new UpdateBuilder(this, table).set(patch).where(predicate).executeSync() as Row<T>[];
+};
+
+(KitDatabase.prototype as any).deleteWhere = function <T extends TableSpec>(
+	this: KitDatabase,
+	table: T,
+	predicate: Predicate
+): bigint {
+	return new DeleteBuilder(this, table).where(predicate).executeSync() as bigint;
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

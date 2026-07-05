@@ -461,6 +461,24 @@ impl PyDatabase {
         self.require_db()?.vacuum().map_err(map_err)
     }
 
+    /// Create a SQL view from a JSON spec `{"name": ..., "sql": "SELECT ..."}`.
+    fn create_view(&self, view_json: &str) -> PyResult<()> {
+        let spec: mongreldb_kit_core::ViewSpec =
+            serde_json::from_str(view_json).map_err(py_json_err)?;
+        self.require_db()?.create_view(&spec).map_err(map_err)
+    }
+
+    /// Drop a SQL view by name (idempotent).
+    fn drop_view(&self, name: &str) -> PyResult<()> {
+        self.require_db()?.drop_view(name).map_err(map_err)
+    }
+
+    /// Reserve (without inserting) the next engine-native AUTO_INCREMENT value
+    /// for `table`. Returns `None` when the table has no auto-increment column.
+    fn reserve_auto_inc(&self, table: &str) -> PyResult<Option<i64>> {
+        self.require_db()?.reserve_auto_inc(table).map_err(map_err)
+    }
+
     /// Run a SQL read/DDL/DML statement and return the result rows as a list
     /// of dicts (column name → value). Empty for DDL/DML. Writes through SQL
     /// bypass kit-level constraints — use the transactional API for those.

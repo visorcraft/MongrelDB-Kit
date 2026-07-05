@@ -169,6 +169,30 @@ class Database:
         """
         return self._handle.vacuum()
 
+    def create_view(self, name: str, sql: str) -> None:
+        """Create a SQL view (``CREATE VIEW <name> AS <select>``).
+
+        The engine overwrites any existing view with the same name, so this
+        also serves as replace. The view lives in the kit's long-lived SQL
+        session — it is not persisted to the catalog, so reopening the
+        database loses it (re-apply a ``create_view`` migration to restore).
+        """
+        self._handle.create_view(json.dumps({"name": name, "sql": sql}))
+
+    def drop_view(self, name: str) -> None:
+        """Drop a SQL view by name (idempotent — ``DROP VIEW IF EXISTS``)."""
+        self._handle.drop_view(name)
+
+    def reserve_auto_inc(self, table: str) -> int | None:
+        """Reserve (without inserting) the next engine-native AUTO_INCREMENT
+        value for ``table``, advancing the per-table counter.
+
+        Returns ``None`` when the table has no auto-increment column. The
+        reservation becomes durable when a row carrying the id commits; an
+        unused reservation just leaves a gap.
+        """
+        return self._handle.reserve_auto_inc(table)
+
     def sql_rows(self, sql: str) -> list[dict[str, Any]]:
         """Run a SQL statement; return the result rows as a list of dicts.
 

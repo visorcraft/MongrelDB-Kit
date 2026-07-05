@@ -12,7 +12,7 @@ use mongreldb_core::{AggState, ApproxAgg, NativeAgg, NativeAggResult, RowId};
 use mongreldb_kit_core::schema::IndexKind as KitIndexKind;
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
-use mongreldb_kit_core::{ProcedureSpec, TriggerSpec};
+use mongreldb_kit_core::{ProcedureSpec, TriggerSpec, ViewSpec};
 use serde_json::Value;
 
 use std::collections::HashMap;
@@ -990,6 +990,35 @@ impl Database {
     pub fn vacuum(&self) -> Result<usize> {
         self.inner.compact().map_err(KitError::from)?;
         self.inner.gc().map_err(KitError::from)
+    }
+
+    /// Create a SQL view (`CREATE VIEW <name> AS <select>`). The engine
+    /// overwrites any existing view with the same name, so this also serves as
+    /// replace. The view lives in the kit's long-lived SQL session — it is not
+    /// persisted to the catalog, so reopening the database loses it (re-apply
+    /// a `CreateView` migration to restore).
+    pub fn create_view(&self, spec: &ViewSpec) -> Result<()> {
+        self.sql(&spec.create_sql())?;
+        Ok(())
+    }
+
+    /// Drop a SQL view by name (idempotent — `DROP VIEW IF EXISTS`).
+    pub fn drop_view(&self, name: &str) -> Result<()> {
+        self.sql(&format!("DROP VIEW IF EXISTS {name}"))?;
+        Ok(())
+    }
+
+    /// Reserve (without inserting) the next engine-native `AUTO_INCREMENT` value
+    /// for `table`, advancing the per-table counter. Returns `None` when the
+    /// table has no auto-increment column. This is the escape hatch for callers
+    /// that stage a row with an explicit id inside a transaction; the
+    /// reservation becomes durable when a row carrying the id commits, and an
+    /// unused reservation just leaves a gap. Parity with the TypeScript kit's
+    /// `reserveAutoIncSync`.
+    pub fn reserve_auto_inc(&self, table: &str) -> Result<Option<i64>> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let mut guard = handle.lock();
+        guard.reserve_auto_inc().map_err(KitError::from)
     }
 
     /// Run a SQL statement through the embedded `MongrelSession` (DataFusion

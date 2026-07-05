@@ -347,6 +347,14 @@ let reclaimed = db.vacuum()?; // compact_all() + gc()
 
 // Rename a table (engine + kit schema catalog + persisted).
 db.rename_table("widgets", "things")?;
+
+// SQL views (session-scoped — live in the kit's long-lived MongrelSession).
+use mongreldb_kit::ViewSpec;
+db.create_view(&ViewSpec::new("active", "SELECT id FROM users WHERE active = TRUE"))?;
+db.drop_view("active")?;
+
+// Reserve the next AUTO_INCREMENT id (parity with TS reserveAutoIncSync).
+let next_id: Option<i64> = db.reserve_auto_inc("orders")?;
 ```
 
 > Writes through `sql()` bypass kit-level constraints (defaults, enums, min/max,

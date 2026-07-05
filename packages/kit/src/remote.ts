@@ -101,4 +101,16 @@ export class RemoteDatabase {
 	dropVirtualTable(name: string): ArrowTable {
 		return this.sql(dropVirtualTableSql(name));
 	}
+
+	/** Compact every table on the daemon (POST /compact). Returns
+	 * `{ compacted, skipped }`. */
+	compact(): { compacted: number; skipped: number } {
+		return this.inner.compact();
+	}
+
+	/** Compact a single table on the daemon (POST /tables/{name}/compact).
+	 * Returns `true` if compacted, `false` if skipped. */
+	compactTable(table: string): boolean {
+		return this.inner.compactTable(table);
+	}
 }

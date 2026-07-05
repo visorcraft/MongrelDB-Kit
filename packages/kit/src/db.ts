@@ -23,8 +23,11 @@ import type { TableSpec, ColumnStorageType, CheckSpec } from './types.js';
 import { procedureJson, type ProcedureCallOptions, type ProcedureCallResult, type ProcedureSpec } from './procedure.js';
 import { triggerJson, type TriggerSpec } from './trigger.js';
 import {
+	createViewSql,
 	createVirtualTableSql,
+	dropViewSql,
 	dropVirtualTableSql,
+	type ViewSpec,
 	type VirtualTableSpec
 } from './external.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
@@ -520,6 +523,19 @@ export class KitDatabase {
 
 	async dropVirtualTable(name: string): Promise<ArrowTable> {
 		return this.sql(dropVirtualTableSql(name));
+	}
+
+	/** Create a SQL view (`CREATE VIEW <name> AS <select>`). The engine
+	 * overwrites any existing view with the same name, so this also serves as
+	 * replace. The view lives in the kit's long-lived SQL session — see
+	 * [SQL views](./migrations.md#sql-views). */
+	async createView(spec: ViewSpec): Promise<ArrowTable> {
+		return this.sql(createViewSql(spec));
+	}
+
+	/** Drop a SQL view by name (idempotent — `DROP VIEW IF EXISTS`). */
+	async dropView(name: string): Promise<ArrowTable> {
+		return this.sql(dropViewSql(name));
 	}
 
 	/** Verify run footer checksums; returns integrity issues grouped by table. */
