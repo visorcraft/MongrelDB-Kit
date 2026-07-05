@@ -453,6 +453,48 @@ The per-table tuning setters (compaction zstd level, result cache size, mutable-
 sync byte threshold, index build policy) are available from Rust via `Database::raw()` and from
 the NAPI addon; the Python facade exposes the highest-value subset above.
 
+### Advanced SQL (recursive CTEs, windows, regex, catalog, ATTACH, SAVEPOINTs)
+
+The embedded DataFusion 54 session supports the full SQL stdlib via
+`sql_rows()`:
+
+```python
+# Recursive CTE (tree traversal).
+db.sql_rows("""
+    WITH RECURSIVE tree AS (
+        SELECT id, 0 AS depth FROM nodes WHERE parent IS NULL
+        UNION ALL
+        SELECT n.id, t.depth + 1 FROM nodes n JOIN tree t ON n.parent = t.id
+    )
+    SELECT id, depth FROM tree ORDER BY id
+""")
+
+# Window function (ranking within partitions).
+db.sql_rows("""
+    SELECT category, ROW_NUMBER() OVER (PARTITION BY category ORDER BY amount DESC) AS rank
+    FROM orders
+""")
+
+# Regex match.
+db.sql_rows("SELECT id FROM users WHERE regexp('^admin.*', name) = 1")
+
+# Catalog introspection.
+db.sql_rows("SELECT type, name FROM sqlite_master ORDER BY name")
+
+# Cross-database query.
+db.sql_rows("ATTACH './other-data' AS other")
+db.sql_rows("SELECT id FROM other_items")
+db.sql_rows("DETACH other")
+
+# Sub-transaction (SAVEPOINT).
+db.sql_rows("BEGIN")
+db.sql_rows("INSERT INTO logs VALUES (1, 'hello')")
+db.sql_rows("SAVEPOINT sp1")
+db.sql_rows("INSERT INTO logs VALUES (2, 'world')")
+db.sql_rows("ROLLBACK TO sp1")  # discards 'world', keeps 'hello'
+db.sql_rows("COMMIT")
+```
+
 ## Key encoding
 
 The byte-identical key encoders used internally are exposed for tooling and tests. Components are

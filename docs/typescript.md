@@ -251,6 +251,49 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
 > VIEW`) created via `db.sql()` persist across subsequent `sql()` / `sqlRows()`
 > calls. See [Migrations → SQL views](./migrations.md#sql-views).
 
+### Advanced SQL via `db.sqlRows()`
+
+The embedded SQL session runs DataFusion 54, which supports the full SQL
+stdlib — recursive CTEs, window functions, regex matching, catalog
+introspection, cross-database queries, and sub-transactions:
+
+```ts
+// Recursive CTE (tree traversal).
+await db.sqlRows(`
+  WITH RECURSIVE tree AS (
+    SELECT id, parent, 0 AS depth FROM nodes WHERE parent IS NULL
+    UNION ALL
+    SELECT n.id, n.parent, t.depth + 1 FROM nodes n JOIN tree t ON n.parent = t.id
+  )
+  SELECT id, depth FROM tree ORDER BY id
+`);
+
+// Window function (ranking within partitions).
+await db.sqlRows(`
+  SELECT category, ROW_NUMBER() OVER (PARTITION BY category ORDER BY amount DESC) AS rank
+  FROM orders
+`);
+
+// Regex match.
+await db.sqlRows("SELECT id FROM users WHERE regexp('^admin.*', name) = 1");
+
+// Catalog introspection.
+await db.sqlRows("SELECT type, name FROM sqlite_master ORDER BY name");
+
+// Cross-database query.
+await db.sqlRows("ATTACH './other-data' AS other");
+await db.sqlRows("SELECT id FROM other_items");
+await db.sqlRows("DETACH other");
+
+// Sub-transaction.
+await db.sqlRows("BEGIN");
+await db.sqlRows("INSERT INTO logs VALUES (1, 'hello')");
+await db.sqlRows("SAVEPOINT sp1");
+await db.sqlRows("INSERT INTO logs VALUES (2, 'world')");
+await db.sqlRows("ROLLBACK TO sp1"); // discards 'world'
+await db.sqlRows("COMMIT");
+```
+
 ## Triggers and SQL helpers
 
 Assuming `users`, `audit`, and `events` table specs already exist:

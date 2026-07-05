@@ -361,6 +361,40 @@ let next_id: Option<i64> = db.reserve_auto_inc("orders")?;
 > length, regex, triggers) — use the `Transaction` API for constrained writes.
 > The engine's own declarative constraints (unique, FK, check) still apply.
 
+### Advanced SQL (recursive CTEs, windows, regex, catalog, ATTACH, SAVEPOINTs)
+
+The embedded DataFusion 54 session supports the full SQL stdlib:
+
+```rust
+// Recursive CTE.
+db.sql_rows("WITH RECURSIVE tree AS (
+    SELECT id, 0 AS depth FROM nodes WHERE parent IS NULL
+    UNION ALL
+    SELECT n.id, t.depth + 1 FROM nodes n JOIN tree t ON n.parent = t.id
+) SELECT id, depth FROM tree ORDER BY id")?;
+
+// Window function.
+db.sql_rows("SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM users")?;
+
+// Regex.
+db.sql_rows("SELECT id FROM users WHERE regexp('^admin.*', name) = 1")?;
+
+// Catalog.
+db.sql_rows("SELECT type, name FROM sqlite_master ORDER BY name")?;
+
+// ATTACH (cross-database).
+db.sql("ATTACH './other' AS other")?;
+db.sql_rows("SELECT id FROM other_items")?;
+
+// SAVEPOINTs.
+db.sql("BEGIN")?;
+db.sql("INSERT INTO logs VALUES (1, 'hello')")?;
+db.sql("SAVEPOINT sp1")?;
+db.sql("INSERT INTO logs VALUES (2, 'world')")?;
+db.sql("ROLLBACK TO sp1")?; // discards 'world'
+db.sql("COMMIT")?;
+```
+
 ## Storage tuning & introspection
 
 The Kit surfaces the engine's power-user knobs for production sizing and
