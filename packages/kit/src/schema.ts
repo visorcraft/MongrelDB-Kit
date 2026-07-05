@@ -152,6 +152,9 @@ export interface IndexOptions {
 	sparse?: boolean;
 	/** Create a MinHash/LSH set-similarity index to accelerate `setSimilarity()`. */
 	minhash?: boolean;
+	/** Create a learned-range (PGM zonemap) index to accelerate range predicates
+	 * (`gt`/`gte`/`lt`/`lte`) on numeric/timestamp columns. */
+	learnedRange?: boolean;
 }
 
 export interface UniqueOptions {
@@ -181,7 +184,9 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 					? 'sparse'
 					: opts.minhash
 						? 'minhash'
-						: 'bitmap'
+						: opts.learnedRange
+							? 'learned_range'
+							: 'bitmap'
 	};
 }
 

@@ -443,6 +443,36 @@ def test_bytes_prefix():
         db.close()
 
 
+def test_learned_range():
+    raw = load_json("learned_range.json")
+    expected = load_json("expected/learned_range.json")
+    table = raw["schema"]["tables"][0]["name"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = kit.Database.create(tmp, raw["schema"])
+        for row in raw["rows"]:
+            txn = db.begin()
+            txn.insert(table, row)
+            txn.commit()
+
+        for scenario in raw["scenarios"]:
+            txn = db.begin()
+            rows = txn.select(scenario["table"], filter=scenario.get("filter"))
+            txn.commit()
+            order = scenario.get("order")
+            if order:
+                desc = order.startswith("-")
+                col = order.lstrip("+-")
+                rows = sorted(
+                    rows,
+                    key=lambda r: (r.get(col) is None, r.get(col)),
+                    reverse=desc,
+                )
+            exp = expected[scenario["name"]]["rows"]
+            assert rows == exp, f"{scenario['name']}: {rows} != {exp}"
+        db.close()
+
+
 def test_views():
     raw = load_json("views.json")
     table = raw["schema"]["tables"][0]["name"]

@@ -32,3 +32,8 @@ fn bytes_prefix() {
 fn views() {
     conformance_runner::run_views().expect("views conformance failed");
 }
+
+#[test]
+fn learned_range() {
+    conformance_runner::run_learned_range().expect("learned_range conformance failed");
+}

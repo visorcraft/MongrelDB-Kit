@@ -858,6 +858,39 @@ describe('mongreldb-kit conformance', () => {
 		}
 	});
 
+	it('declares a learned_range index and runs range queries against the TypeScript kit', () => {
+		const raw = loadJson('learned_range.json');
+		const expected = loadJson('expected/learned_range.json');
+		const schema = schemaFromFixture(raw.schema);
+		const baseTable = schema.table(raw.schema.tables[0].name);
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mongreldb-kit-lr-'));
+		const kit = KitDatabase.openSync(tmpDir, schema);
+		try {
+			for (const row of raw.rows) {
+				kit.insertInto(baseTable).values(normalizeRowForTs(baseTable, row)).executeSync();
+			}
+			for (const scenario of raw.scenarios) {
+				const tspec = schema.table(scenario.table);
+				const builder = kit.selectFrom(tspec);
+				if (scenario.filter) builder.where(buildPredicate(tspec, scenario.filter));
+				const rows = (builder.executeSync() as any[]).map((r) =>
+					normalizeRowForCompare(tspec, r)
+				);
+				const exp = (expected[scenario.name].rows as any[]).map((r) =>
+					normalizeRowForCompare(tspec, r)
+				);
+				if (scenario.order) {
+					sortAggRows(rows, scenario.order);
+					sortAggRows(exp, scenario.order);
+				}
+				expect(rows, `learned_range ${scenario.name}`).toEqual(exp);
+			}
+		} finally {
+			kit.close();
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it('runs SQL view scenarios against the TypeScript kit', async () => {
 		const raw = loadJson('views.json');
 		const schema = schemaFromFixture(raw.schema);

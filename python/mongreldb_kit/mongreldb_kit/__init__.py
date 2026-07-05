@@ -700,8 +700,13 @@ def index(
     kind: str = "bitmap",
 ) -> dict[str, Any]:
     """Declare a secondary index. ``kind`` is ``bitmap`` (default), ``fm``,
-    ``ann``, ``sparse``, or ``minhash`` (set-similarity)."""
-    aliases = {"minhash": "min_hash"}
+    ``ann``, ``sparse``, ``minhash`` (set-similarity), or ``learned_range``
+    (PGM zonemap for range predicates; aliases: ``learned``, ``brin``)."""
+    aliases = {
+        "minhash": "min_hash",
+        "learned": "learned_range",
+        "brin": "learned_range",
+    }
     return {
         "name": name,
         "columns": [columns] if isinstance(columns, str) else list(columns),

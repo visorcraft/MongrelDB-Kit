@@ -48,6 +48,12 @@ the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 | `fixture load <path> <fixture.json>` | Load rows from a JSON fixture |
 | `procedure install\|drop\|list\|describe\|call` | Manage stored procedures |
 | `compact <path>` | Merge all tables' sorted runs into one (maintenance) |
+| `analyze <path>` | Rebuild index statistics for every table (engine `ANALYZE`) |
+| `vacuum <path>` | Reclaim space: compact every table, then gc (engine `VACUUM`) |
+| `rename-table <path> <from> <to>` | Rename a live table (engine + kit schema catalog) |
+| `sql <path> <statement>` | Run a SQL statement (read returns rows as JSON; DDL/DML returns `[]`) |
+| `view create <path> <view.json>` \| `view drop <path> <name>` | Create/drop a SQL view (session-scoped; see [SQL views](./migrations.md#sql-views)) |
+| `index create <path> <table> <name> --column <col> [--kind ...]` \| `index drop <path> <name>` | Create/drop a secondary index (`--kind`: `bitmap`/`fm`/`ann`/`sparse`/`brin`) |
 
 `mongreldb-kit --help` and `mongreldb-kit <command> --help` print the same
 information at the terminal.
@@ -151,6 +157,50 @@ mongreldb-kit query ./store.kitdb events --filter '{"key":{"bytes_prefix":"user:
 # Null check.
 mongreldb-kit query ./store.kitdb users --filter '{"deleted_at":{"is_null":true}}'
 ```
+
+## SQL, views, and indexes
+
+`sql` runs an arbitrary SQL statement through the kit's embedded DataFusion
+frontend. Reads return rows as a pretty-printed JSON array; DDL/DML
+(`CREATE TABLE`, `CREATE VIEW`, `INSERT`, `ANALYZE`, `VACUUM`) return `[]`.
+
+```sh
+mongreldb-kit sql ./store.kitdb "SELECT region, count(*) AS n FROM orders GROUP BY region"
+mongreldb-kit sql ./store.kitdb "VACUUM"
+```
+
+`analyze` and `vacuum` are convenience wrappers for the engine's `ANALYZE`
+(rebuild index statistics) and `VACUUM` (compact + gc) maintenance commands.
+`rename-table` durably renames a table and updates the kit schema catalog.
+
+```sh
+mongreldb-kit analyze ./store.kitdb            # "analyzed all tables"
+mongreldb-kit vacuum ./store.kitdb             # "reclaimed N run(s)"
+mongreldb-kit rename-table ./store.kitdb widgets things
+```
+
+`view create` / `view drop` and `index create` / `index drop` run the
+corresponding DDL. **Views are session-scoped** — a view created via the CLI
+exists only within that single CLI invocation (each invocation opens a fresh
+`Database`/session). For a persistent view, define it in a migration
+(`create_view` op), which re-creates it whenever the migration runs. Indexes
+*are* persistent (they're written to the catalog).
+
+```sh
+# View: create from a JSON spec {"name": ..., "sql": "SELECT ..."}, then drop.
+echo '{"name":"vip","sql":"SELECT id FROM users WHERE score >= 90"}' > vip.json
+mongreldb-kit view create ./store.kitdb vip.json
+mongreldb-kit view drop ./store.kitdb vip
+
+# Index: create a bitmap index on users.email, or a learned-range (PGM) on
+# orders.placed_at for range predicates.
+mongreldb-kit index create ./store.kitdb users idx_users_email --column email --kind bitmap
+mongreldb-kit index create ./store.kitdb orders idx_orders_ts --column placed_at --kind brin
+mongreldb-kit index drop ./store.kitdb idx_users_email
+```
+
+Supported `--kind` values: `bitmap` (default), `fm`, `ann`, `sparse`, `brin`
+(also `learned`/`learned_range`/`range` — aliases for the PGM zonemap).
 
 ## compact
 

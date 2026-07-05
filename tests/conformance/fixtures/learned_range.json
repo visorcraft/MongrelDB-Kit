@@ -1,0 +1,50 @@
+{
+  "schema": {
+    "tables": [
+      {
+        "id": 1,
+        "name": "events",
+        "columns": [
+          {
+            "id": 1,
+            "name": "id",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": true,
+            "generated": false
+          },
+          {
+            "id": 2,
+            "name": "ts",
+            "storage_type": "int64",
+            "application_type": "int64",
+            "nullable": false,
+            "primary_key": false,
+            "generated": false
+          }
+        ],
+        "primary_key": ["id"],
+        "indexes": [
+          { "name": "idx_events_ts_learned", "columns": ["ts"], "unique": false, "kind": "learned_range" }
+        ],
+        "unique_constraints": [],
+        "foreign_keys": [],
+        "check_constraints": []
+      }
+    ]
+  },
+  "rows": [
+    { "id": 1, "ts": 100 },
+    { "id": 2, "ts": 200 },
+    { "id": 3, "ts": 300 },
+    { "id": 4, "ts": 400 },
+    { "id": 5, "ts": 500 }
+  ],
+  "scenarios": [
+    { "name": "range_low_half", "table": "events", "order": "+id", "filter": { "ts": { "lt": 300 } } },
+    { "name": "range_high_half", "table": "events", "order": "+id", "filter": { "ts": { "gte": 300 } } },
+    { "name": "range_gt_200", "table": "events", "order": "+id", "filter": { "ts": { "gt": 200 } } },
+    { "name": "range_exact", "table": "events", "order": "+id", "filter": { "ts": { "eq": 300 } } }
+  ]
+}

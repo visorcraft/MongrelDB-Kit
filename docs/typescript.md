@@ -212,6 +212,22 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
   module-backed virtual/external tables.
 - `await db.analyze()` and `await db.vacuum()` rebuild index statistics and reclaim space (the
   engine's `ANALYZE` / `VACUUM` equivalents), routing through the SQL surface.
+- **Async / non-blocking I/O:** the Kit wraps the addon's `spawn_blocking` async variants so hot
+  read/write paths don't block the Node event loop: `db.putAsync(table, cells)`,
+  `db.getAsync(table, rowId)`, `db.queryAsync(table, conditions)`, `db.countAsync(table)`,
+  `db.countWhereAsync(table, conditions)`, `db.queryArrowAsync(table, conditions)`,
+  `db.setSimilarityAsync(...)`, plus async twins of the maintenance methods (`flushAsync`,
+  `compactAllAsync`, `compactTableAsync`, `snapshotEpochAsync`, `approxAggregateAsync`).
+  **Caveat:** the maintenance twins where the addon has no native async variant
+  (`compactAllAsync`/`compactTableAsync`/`approxAggregateAsync`/`snapshotEpochAsync`) wrap the sync
+  call in a `Promise` — they match the async signature but still block; the `TableHandle` async
+  methods (`putAsync`/`queryAsync`/…) are genuinely non-blocking. See
+  [runTxn](./typescript.md#transactions) for an async transaction helper.
+- **Bulk ingest:** `db.bulkLoadTyped(table, columns)` is the fastest ingest path —
+  column-major `Int64`/`Float64`/`Bool` buffers laid out little-endian. Commits internally (returns
+  the epoch); not transactional; bypasses Kit constraints. For typed columnar loads of numeric
+  tables it beats `insertMany`. Re-exported types: `TypedColumn`, `PutResult`, `RowJs`,
+  `ConditionSpec`, `CommitResultJs`.
 - `db.nativeDb` exposes the underlying `mongreldb` database for raw operations that intentionally
   bypass Kit validation, defaults, and relational guards.
 

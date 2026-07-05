@@ -6,7 +6,11 @@ import type {
 	Transaction,
 	ColumnType as NativeColumnType,
 	IndexKindSpec as NativeIndexKindSpec,
-	ConditionKind as NativeConditionKind
+	ConditionKind as NativeConditionKind,
+	ConditionSpec,
+	PutResult,
+	RowJs,
+	TypedColumn
 } from '@visorcraft/mongreldb/native.js';
 import { Schema } from './schema.js';
 import { rowsToTsv, tsvToRows } from './tsv.js';
@@ -156,7 +160,9 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 								? addon.IndexKindSpec.Sparse
 								: idx.kind === 'minhash'
 									? addon.IndexKindSpec.MinHash
-									: addon.IndexKindSpec.Bitmap
+									: idx.kind === 'learned_range'
+										? addon.IndexKindSpec.LearnedRange
+										: addon.IndexKindSpec.Bitmap
 			};
 		})
 	);
@@ -257,6 +263,49 @@ export function runSyncTxn(
 					while (Date.now() - start < delay) {
 						// busy wait
 					}
+				}
+				continue;
+			}
+			throw err;
+		}
+	}
+	throw lastErr;
+}
+
+/**
+ * Async twin of {@link runSyncTxn}: run `fn` inside a fresh transaction,
+ * committing via the native `Transaction.commitAsync()` (off the Node event
+ * loop) and retrying bounded-exponentially on retryable conflicts. `fn` may
+ * itself be async; the staged writes are committed atomically after it
+ * resolves. Exported so query builders and `KitDatabase` methods can share one
+ * implementation.
+ */
+export async function runTxn(
+	kit: KitDatabase,
+	fn: (txn: Transaction) => Promise<void> | void,
+	opts: { maxRetries?: number; baseDelayMs?: number } = {}
+): Promise<void> {
+	const maxRetries = opts.maxRetries ?? 5;
+	const baseDelayMs = opts.baseDelayMs ?? 1;
+
+	let lastErr: unknown;
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		const txn = kit.begin();
+		try {
+			await fn(txn);
+			await txn.commitAsync();
+			return;
+		} catch (err) {
+			try {
+				txn.rollback();
+			} catch {
+				// ignore rollback errors
+			}
+			lastErr = err;
+			if (attempt < maxRetries && isRetryableConflict(err)) {
+				const delay = baseDelayMs * (attempt + 1);
+				if (delay > 0) {
+					await new Promise((resolve) => setTimeout(resolve, delay));
 				}
 				continue;
 			}
@@ -526,6 +575,41 @@ export class KitDatabase {
 		return this.db.snapshotEpoch();
 	}
 
+	/**
+	 * Async twin of {@link flush}. Yields a microtask between table flushes; the
+	 * underlying engine `flush` is synchronous (the addon ships no
+	 * `flushAsync` on `Database`), so each call still blocks — but the await
+	 * points let other pending microtasks run.
+	 */
+	async flushAsync(): Promise<void> {
+		for (const name of this.db.tableNames()) {
+			await this.db.table(name).flushAsync();
+		}
+	}
+
+	/**
+	 * Async twin of {@link compactAll}. **Caveat:** the addon has no native
+	 * `compactAllAsync`, so this wraps the sync call in a `Promise` — it
+	 * matches the async signature but the underlying compaction still blocks
+	 * the event loop. Use it for signature parity in async maintenance loops.
+	 */
+	async compactAllAsync(): Promise<{ compacted: number; skipped: number }> {
+		return Promise.resolve(this.db.compactAll());
+	}
+
+	/**
+	 * Async twin of {@link compactTable}. Same caveat as
+	 * {@link compactAllAsync}: no native async variant; the call blocks.
+	 */
+	async compactTableAsync(table: string): Promise<boolean> {
+		return Promise.resolve(this.db.compactTable(table));
+	}
+
+	/** Async twin of {@link snapshotEpoch}. Resolves immediately. */
+	async snapshotEpochAsync(): Promise<bigint> {
+		return Promise.resolve(this.db.snapshotEpoch());
+	}
+
 	/** Export every visible row of `table` as a TSV document. */
 	exportTsv(table: string): string {
 		const spec = this.schema.table(table);
@@ -565,6 +649,20 @@ export class KitDatabase {
 		}
 		const raw = this.db.table(table).approxAggregate(agg, columnId, z);
 		return raw === null ? null : (JSON.parse(raw) as ApproxAggregate);
+	}
+
+	/**
+	 * Async twin of {@link approxAggregate}. **Caveat:** the addon has no native
+	 * `approxAggregateAsync`, so this wraps the sync call in a `Promise` — the
+	 * underlying reservoir read still blocks the event loop.
+	 */
+	async approxAggregateAsync(
+		table: string,
+		agg: 'count' | 'sum' | 'avg',
+		column?: string,
+		z = 1.96
+	): Promise<ApproxAggregate | null> {
+		return Promise.resolve(this.approxAggregate(table, agg, column, z));
 	}
 
 	/**
@@ -647,6 +745,117 @@ export class KitDatabase {
 		}
 		scored.sort((a, b) => b.similarity - a.similarity);
 		return scored.slice(0, Math.max(0, k));
+	}
+
+	/**
+	 * Async twin of {@link setSimilarity}. The MinHash candidate fetch runs via
+	 * the native `queryAsync` (genuinely off the event loop via
+	 * `spawn_blocking`); the exact Jaccard re-scoring runs in JS. Falls back to
+	 * a sync `selectFrom().executeSync()` scan when there's no MinHash index.
+	 */
+	async setSimilarityAsync(
+		table: string,
+		column: string,
+		query: string[],
+		k: number
+	): Promise<{ row: Record<string, unknown>; similarity: number }[]> {
+		const spec = this.schema.table(table);
+		const col = spec.columns.find((c) => c.name === column);
+		if (!col) {
+			throw new KitError(`unknown column '${column}' on table '${table}'`);
+		}
+		const q = new Set(query);
+		const hasMinhash = (spec.indexes ?? []).some(
+			(idx) => idx.kind === 'minhash' && idx.columns.includes(column)
+		);
+		let rows: Record<string, unknown>[];
+		if (hasMinhash) {
+			const candidateBudget = Math.max(k * 8, k + 64);
+			const cond: ConditionSpec = {
+				kind: addon.ConditionKind.MinHashSimilar,
+				columnId: col.id,
+				values: query,
+				k: candidateBudget
+			};
+			const rj = await this.db.table(table).queryAsync([cond]);
+			rows = rj.map((r) => rowFromRowJs(spec, r) as Record<string, unknown>);
+		} else {
+			rows = this.selectFrom(spec).executeSync() as Record<string, unknown>[];
+		}
+		const scored: { row: Record<string, unknown>; similarity: number }[] = [];
+		for (const row of rows) {
+			const set = parseStringSet(row[column]);
+			let inter = 0;
+			for (const x of set) if (q.has(x)) inter++;
+			const union = set.size + q.size - inter;
+			const sim = union === 0 ? 0 : inter / union;
+			if (sim > 0) scored.push({ row, similarity: sim });
+		}
+		scored.sort((a, b) => b.similarity - a.similarity);
+		return scored.slice(0, Math.max(0, k));
+	}
+
+	// ── native async TableHandle wrappers ───────────────────────────────────
+	//
+	// These wrap the addon's `spawn_blocking` async variants so hot read/write
+	// paths don't block the Node event loop. The sync counterparts are reached
+	// via `kit.nativeDb.table(name)`; these are the typed Kit-level async
+	// surface. All bypass Kit-level constraint enforcement (defaults, unique
+	// guards, FK checks) — use the transactional `insert*`/`update*`/`delete*`
+	// builders for constrained writes, and these for raw, high-throughput I/O.
+
+	/** Async put of one row (`cells` = `{ columnId, int64|float64|text|... }[]`)
+	 * via the native `putAsync`. Returns the row id and any auto-increment
+	 * value. Bypasses Kit constraints. */
+	putAsync(table: string, cells: RowJs['cells']): Promise<PutResult> {
+		return this.db.table(table).putAsync(cells);
+	}
+
+	/** Async point-read by row id via the native `getAsync`. */
+	getAsync(table: string, rowId: bigint): Promise<RowJs | null> {
+		return this.db.table(table).getAsync(rowId);
+	}
+
+	/** Async condition query via the native `queryAsync` — returns raw
+	 * `RowJs[]` (row id + typed cells). Build conditions with the `ConditionKind`
+	 * constants; the kit's `Predicate`/`compilePredicate` produces these too. */
+	queryAsync(table: string, conditions: ConditionSpec[]): Promise<RowJs[]> {
+		return this.db.table(table).queryAsync(conditions);
+	}
+
+	/** Async count of all rows in `table` via the native `countAsync`. */
+	countAsync(table: string): Promise<bigint> {
+		return this.db.table(table).countAsync();
+	}
+
+	/** Async count of rows matching `conditions` via the native
+	 * `countWhereAsync`. */
+	countWhereAsync(table: string, conditions: ConditionSpec[]): Promise<bigint> {
+		return this.db.table(table).countWhereAsync(conditions);
+	}
+
+	/** Async condition query returning Arrow IPC bytes (zero-copy columnar) via
+	 * the native `queryArrowAsync`. Decode with `apache-arrow`'s
+	 * `tableFromIPC`. */
+	queryArrowAsync(table: string, conditions: ConditionSpec[]): Promise<Buffer> {
+		return this.db.table(table).queryArrowAsync(conditions);
+	}
+
+	/**
+	 * Fastest ingest path: bulk-load typed columns (`Int64`/`Float64`/`Bool` only)
+	 * in one shot, bypassing the per-cell `Value` enum. **Commits internally**
+	 * and returns the commit epoch — not transactional, cannot be staged into a
+	 * `Transaction`. `Bytes`/`Embedding`/text columns are not supported here
+	 * (use {@link InsertManyBuilder} / `putBatch` for those). Bypasses Kit
+	 * constraints (defaults, unique guards, FK checks).
+	 *
+	 * Each `TypedColumn` carries a contiguous little-endian `data` buffer
+	 * (`Int64` = N×8 bytes, `Float64` = N×8 bytes, `Bool` = N bytes) plus an
+	 * optional `validity` bitmap (1 byte per row, `1`=non-null). All columns
+	 * must have the same row count.
+	 */
+	bulkLoadTyped(table: string, columns: TypedColumn[]): bigint {
+		return this.db.table(table).bulkLoadTyped(columns);
 	}
 
 	/** Import a TSV document into `table`; returns the number of rows inserted. */

@@ -141,6 +141,9 @@ pub enum IndexKind {
     /// MinHash/LSH set-similarity index over a JSON-array set column
     /// (accelerates `set_similarity`).
     MinHash,
+    /// Learned zonemap (PGM) index for ordered range predicates on numeric /
+    /// timestamp columns. Accelerates `Range`/`RangeF64` conditions.
+    LearnedRange,
 }
 
 /// An index on one or more columns.

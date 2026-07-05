@@ -14,3 +14,14 @@ export * from './procedure.js';
 export * from './trigger.js';
 export * from './external.js';
 export * from './sql.js';
+
+// Re-export selected native-addon types so callers of the async/bulk-load
+// helpers don't need a direct dependency on `@visorcraft/mongreldb/native.js`.
+export type {
+	ConditionSpec,
+	CommitResultJs,
+	PutResult,
+	RowJs,
+	TypedColumn
+} from '@visorcraft/mongreldb/native.js';
+export { ColumnType, ConditionKind, IndexKindSpec } from '@visorcraft/mongreldb/native.js';

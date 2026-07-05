@@ -372,7 +372,19 @@ fn has_bitmap_index(table: &KitTable, col_name: &str) -> bool {
     table
         .indexes
         .iter()
-        .any(|idx| idx.columns.iter().any(|c| c == col_name))
+        .any(|idx| {
+            // Only a real bitmap index (the default kind) backs `BitmapEq`/
+            // `BitmapIn`. A `LearnedRange`/`Ann`/`Fm`/`Sparse`/`MinHash` index
+            // on the same column does NOT — the engine returns an empty set
+            // for `BitmapEq` against a non-bitmap column, so treating those as
+            // bitmaps here would silently drop matching rows.
+            // Only a real bitmap index (the default kind) backs `BitmapEq`/
+            // `BitmapIn`. A `LearnedRange`/`Ann`/`Fm`/`Sparse`/`MinHash` index
+            // on the same column does NOT — the engine returns an empty set
+            // for `BitmapEq` against a non-bitmap column, so treating those as
+            // bitmaps here would silently drop matching rows.
+            idx.kind == KitIndexKind::Bitmap && idx.columns.iter().any(|c| c == col_name)
+        })
         || table
             .unique_constraints
             .iter()

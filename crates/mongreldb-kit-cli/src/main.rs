@@ -295,6 +295,48 @@ enum Command {
     Procedure(ProcedureCmd),
     /// Compact all tables — merge sorted runs into one for flat query latency.
     Compact { path: PathBuf },
+    /// Rebuild index statistics for every table (engine ANALYZE).
+    Analyze { path: PathBuf },
+    /// Reclaim space: compact every table, then gc (engine VACUUM).
+    Vacuum { path: PathBuf },
+    /// Rename a live table (engine + kit schema catalog).
+    RenameTable {
+        path: PathBuf,
+        from: String,
+        to: String,
+    },
+    /// Run a SQL statement (read returns rows as JSON; DDL/DML returns []).
+    Sql { path: PathBuf, statement: String },
+    /// SQL view commands.
+    #[command(subcommand)]
+    View(ViewCmd),
+    /// Secondary index commands.
+    #[command(subcommand)]
+    Index(IndexCmd),
+}
+
+#[derive(Subcommand)]
+enum ViewCmd {
+    /// Create a view from a JSON spec `{"name": ..., "sql": "SELECT ..."}`.
+    Create { path: PathBuf, view: PathBuf },
+    /// Drop a view by name (idempotent).
+    Drop { path: PathBuf, name: String },
+}
+
+#[derive(Subcommand)]
+enum IndexCmd {
+    /// Create a secondary index on a table column.
+    Create {
+        path: PathBuf,
+        table: String,
+        name: String,
+        #[arg(long)]
+        column: String,
+        #[arg(long, default_value = "bitmap")]
+        kind: String,
+    },
+    /// Drop a secondary index by name.
+    Drop { path: PathBuf, name: String },
 }
 
 #[derive(Subcommand)]
@@ -437,6 +479,24 @@ fn main() -> Result<()> {
             }
         },
         Command::Compact { path } => cmd_compact(&path),
+        Command::Analyze { path } => cmd_analyze(&path),
+        Command::Vacuum { path } => cmd_vacuum(&path),
+        Command::RenameTable { path, from, to } => cmd_rename_table(&path, &from, &to),
+        Command::Sql { path, statement } => cmd_sql(&path, &statement),
+        Command::View(cmd) => match cmd {
+            ViewCmd::Create { path, view } => cmd_view_create(&path, &view),
+            ViewCmd::Drop { path, name } => cmd_view_drop(&path, &name),
+        },
+        Command::Index(cmd) => match cmd {
+            IndexCmd::Create {
+                path,
+                table,
+                name,
+                column,
+                kind,
+            } => cmd_index_create(&path, &table, &name, &column, &kind),
+            IndexCmd::Drop { path, name } => cmd_index_drop(&path, &name),
+        },
     }
 }
 
@@ -459,6 +519,80 @@ fn cmd_compact(path: &Path) -> Result<()> {
     let db = Database::open(path).context("failed to open database")?;
     let (compacted, skipped) = db.compact_all().context("compaction failed")?;
     println!("compacted {compacted} table(s), skipped {skipped}");
+    Ok(())
+}
+
+fn cmd_analyze(path: &Path) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.analyze().context("analyze failed")?;
+    println!("analyzed all tables");
+    Ok(())
+}
+
+fn cmd_vacuum(path: &Path) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let reclaimed = db.vacuum().context("vacuum failed")?;
+    println!("reclaimed {reclaimed} run(s)");
+    Ok(())
+}
+
+fn cmd_rename_table(path: &Path, from: &str, to: &str) -> Result<()> {
+    let mut db = Database::open(path).context("failed to open database")?;
+    db.rename_table(from, to)
+        .context("failed to rename table")?;
+    println!("renamed {from} -> {to}");
+    Ok(())
+}
+
+fn cmd_sql(path: &Path, statement: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let rows = db.sql_rows(statement).context("failed to execute SQL")?;
+    let values: Vec<Value> = rows.into_iter().map(Value::Object).collect();
+    println!("{}", serde_json::to_string_pretty(&Value::Array(values))?);
+    Ok(())
+}
+
+fn cmd_view_create(path: &Path, view_path: &Path) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let spec: ViewSpec = serde_json::from_reader(fs::File::open(view_path)?)
+        .context("failed to read view JSON (expected {\"name\": ..., \"sql\": \"SELECT ...\"})")?;
+    db.sql(&spec.create_sql())
+        .context("failed to create view")?;
+    println!("created view {}", spec.name);
+    Ok(())
+}
+
+fn cmd_view_drop(path: &Path, name: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let sql = format!("DROP VIEW IF EXISTS {name}");
+    db.sql(&sql).context("failed to drop view")?;
+    println!("dropped view {name}");
+    Ok(())
+}
+
+fn cmd_index_create(path: &Path, table: &str, name: &str, column: &str, kind: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    // Map friendly kind aliases to the engine's `CREATE INDEX ... USING <kind>`
+    // vocabulary (commands.rs `index_kind_from_sql`).
+    let sql_kind = match kind {
+        "bitmap" => "bitmap",
+        "fm" | "fm_index" => "fm",
+        "ann" | "hnsw" => "ann",
+        "sparse" => "sparse",
+        "learned" | "brin" | "learned_range" | "range" => "brin",
+        other => bail!("unknown index kind '{other}'"),
+    };
+    let sql = format!("CREATE INDEX {name} ON {table} ({column}) USING {sql_kind}");
+    db.sql(&sql).context("failed to create index")?;
+    println!("created index {name} on {table}.{column} (kind: {kind})");
+    Ok(())
+}
+
+fn cmd_index_drop(path: &Path, name: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let sql = format!("DROP INDEX {name}");
+    db.sql(&sql).context("failed to drop index")?;
+    println!("dropped index {name}");
     Ok(())
 }
 

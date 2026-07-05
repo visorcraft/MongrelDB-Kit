@@ -538,6 +538,48 @@ pub fn run_conformance() -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// LearnedRange index conformance — validates that a `learned_range` index can
+// be declared on a numeric column and range queries return correct rows. The
+// PGM zonemap is a performance optimization; result sets are identical to an
+// unindexed scan, so this pins declare-ability + round-trip correctness.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct LearnedRangeFixture {
+    schema: Schema,
+    rows: Vec<Map<String, Value>>,
+    scenarios: Vec<Scenario>,
+}
+
+pub fn run_learned_range() -> Result<(), String> {
+    let fixtures = fixtures_dir();
+    let fixture: LearnedRangeFixture = load_json(&fixtures.join("learned_range.json"))?;
+    let expected: Map<String, Value> =
+        load_json(&fixtures.join("expected/learned_range.json"))?;
+
+    let table = fixture
+        .schema
+        .tables
+        .first()
+        .ok_or("learned_range fixture has no table")?
+        .name
+        .clone();
+
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let mut db = Database::create(tmp.path(), fixture.schema).map_err(|e| e.to_string())?;
+    for row in &fixture.rows {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        txn.insert(&table, row.clone()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+
+    for scenario in &fixture.scenarios {
+        run_query(&mut db, scenario, expected.get(&scenario.name))?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Aggregate conformance (COUNT / COUNT(col) / COUNT(DISTINCT) / SUM/MIN/MAX/AVG)
 // ---------------------------------------------------------------------------
 

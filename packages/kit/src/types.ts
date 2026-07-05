@@ -51,8 +51,10 @@ export interface IndexSpec {
 	columns: string[];
 	unique: boolean;
 	/** Index kind; defaults to `bitmap`. `fm` enables FM substring search so
-	 * `contains(col, needle)` pushes down to the engine instead of scanning. */
-	kind?: 'bitmap' | 'fm' | 'ann' | 'sparse' | 'minhash';
+	 * `contains(col, needle)` pushes down to the engine instead of scanning.
+	 * `learned_range` builds a PGM zonemap that accelerates range predicates
+	 * (`gt`/`gte`/`lt`/`lte`) on numeric/timestamp columns. */
+	kind?: 'bitmap' | 'fm' | 'ann' | 'sparse' | 'minhash' | 'learned_range';
 }
 
 export interface ForeignKeySpec {
