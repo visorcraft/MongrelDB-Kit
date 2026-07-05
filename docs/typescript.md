@@ -236,6 +236,16 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
   `ConditionSpec`, `CommitResultJs`.
 - `db.nativeDb` exposes the underlying `mongreldb` database for raw operations that intentionally
   bypass Kit validation, defaults, and relational guards.
+- **Storage tuning & introspection:** `db.setSpillThreshold(bytes)`,
+  `db.setRecursiveTriggers(enabled)`, `db.triggerConfig()` / `db.setTriggerConfig(cfg)` (trigger
+  recursion/depth/loop caps), per-table tuning (`setTableCompactionZstdLevel`,
+  `setTableResultCacheMaxBytes`, `setTableMutableRunSpillBytes`, `setTableSyncByteThreshold`,
+  `setTableIndexBuildPolicy`), and per-table introspection (`tableRunCount`, `tableMemtableLen`,
+  `tablePageCacheStats`, `tablePageCacheLen`, `tableDecodedCacheLen`). Re-exported types:
+  `CacheStatsJs`, `TriggerConfigJs`, `IndexBuildPolicyJs`.
+- **WriteBuffer:** `db.writeBuffer(table, threshold?)` creates a micro-batching write buffer —
+  writes are **not durable until `flush()`** (the opposite of `put()`). Auto-flushes at `threshold`
+  rows (default 1000). Bypasses Kit constraints; for high-throughput ingest.
 
 > The kit's SQL session is held for the database's lifetime, so views (`CREATE
 > VIEW`) created via `db.sql()` persist across subsequent `sql()` / `sqlRows()`

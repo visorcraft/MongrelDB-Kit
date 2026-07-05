@@ -479,6 +479,81 @@ impl PyDatabase {
         self.require_db()?.reserve_auto_inc(table).map_err(map_err)
     }
 
+    // ── storage tuning & introspection (Tier 3) ─────────────────────────────
+
+    /// Set the per-table spill threshold (bytes).
+    fn set_spill_threshold(&self, bytes: u64) -> PyResult<()> {
+        self.require_db()?.set_spill_threshold(bytes);
+        Ok(())
+    }
+
+    /// Enable or disable recursive trigger execution (database-wide).
+    fn set_recursive_triggers(&self, enabled: bool) -> PyResult<()> {
+        self.require_db()?.set_recursive_triggers(enabled);
+        Ok(())
+    }
+
+    /// Read the current trigger execution policy as a dict
+    /// `{recursive_triggers, max_depth, max_loop_iterations}`.
+    fn trigger_config(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let c = self.require_db()?.trigger_config();
+        let dict = PyDict::new(py);
+        dict.set_item("recursive_triggers", c.recursive_triggers)?;
+        dict.set_item("max_depth", c.max_depth)?;
+        dict.set_item("max_loop_iterations", c.max_loop_iterations)?;
+        dict.into_py_any(py)
+    }
+
+    /// Set the trigger execution policy from a dict with keys
+    /// `recursive_triggers` (bool), `max_depth` (u32, > 0),
+    /// `max_loop_iterations` (u32).
+    fn set_trigger_config(&self, config: &Bound<'_, PyDict>) -> PyResult<()> {
+        let recursive = config
+            .get_item("recursive_triggers")?
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(false);
+        let max_depth = config
+            .get_item("max_depth")?
+            .and_then(|v| v.extract::<u32>().ok())
+            .unwrap_or(32);
+        let max_loop = config
+            .get_item("max_loop_iterations")?
+            .and_then(|v| v.extract::<u32>().ok())
+            .unwrap_or(10_000);
+        self.require_db()?
+            .set_trigger_config(mongreldb_kit::TriggerConfig {
+                recursive_triggers: recursive,
+                max_depth,
+                max_loop_iterations: max_loop,
+            })
+            .map_err(map_err)
+    }
+
+    /// Number of sorted runs a table currently has (compaction target: 1).
+    fn table_run_count(&self, table: &str) -> PyResult<usize> {
+        self.require_db()?.table_run_count(table).map_err(map_err)
+    }
+
+    /// Page-cache statistics for a table as a dict
+    /// `{hits, misses, try_lock_misses, hit_rate}`.
+    fn table_page_cache_stats(&self, py: Python<'_>, table: &str) -> PyResult<Py<PyAny>> {
+        let s = self
+            .require_db()?
+            .table_page_cache_stats(table)
+            .map_err(map_err)?;
+        let dict = PyDict::new(py);
+        dict.set_item("hits", s.hits)?;
+        dict.set_item("misses", s.misses)?;
+        dict.set_item("try_lock_misses", s.try_lock_misses)?;
+        dict.set_item("hit_rate", s.hit_rate())?;
+        dict.into_py_any(py)
+    }
+
+    /// Memtable length (uncommitted staged rows) for a table.
+    fn table_memtable_len(&self, table: &str) -> PyResult<usize> {
+        self.require_db()?.table_memtable_len(table).map_err(map_err)
+    }
+
     /// Run a SQL read/DDL/DML statement and return the result rows as a list
     /// of dicts (column name → value). Empty for DDL/DML. Writes through SQL
     /// bypass kit-level constraints — use the transactional API for those.

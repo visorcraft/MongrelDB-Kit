@@ -1021,6 +1021,118 @@ impl Database {
         guard.reserve_auto_inc().map_err(KitError::from)
     }
 
+    // ── storage tuning & introspection (Tier 3) ─────────────────────────────
+
+    /// Set the per-table spill threshold (bytes). When a transaction's staged
+    /// bytes for a single table exceed this, rows are written as a uniform-epoch
+    /// pending run instead of streamed Put records.
+    pub fn set_spill_threshold(&self, bytes: u64) {
+        self.inner.set_spill_threshold(bytes);
+    }
+
+    /// Enable or disable recursive trigger execution (database-wide).
+    pub fn set_recursive_triggers(&self, enabled: bool) {
+        self.inner.set_recursive_triggers(enabled);
+    }
+
+    /// Read the current trigger execution policy.
+    pub fn trigger_config(&self) -> mongreldb_core::TriggerConfig {
+        self.inner.trigger_config()
+    }
+
+    /// Set the trigger execution policy. `max_depth` must be > 0.
+    pub fn set_trigger_config(
+        &self,
+        config: mongreldb_core::TriggerConfig,
+    ) -> Result<()> {
+        self.inner.set_trigger_config(config).map_err(KitError::from)
+    }
+
+    /// Set a table's compaction zstd level (-1 = default, 0 = none, 1..22).
+    pub fn set_table_compaction_zstd_level(&self, table: &str, level: i32) -> Result<()> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        handle.lock().set_compaction_zstd_level(level);
+        Ok(())
+    }
+
+    /// Set a table's result-cache max bytes.
+    pub fn set_table_result_cache_max_bytes(&self, table: &str, max_bytes: u64) -> Result<()> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        handle.lock().set_result_cache_max_bytes(max_bytes);
+        Ok(())
+    }
+
+    /// Set a table's mutable-run spill threshold (bytes).
+    pub fn set_table_mutable_run_spill_bytes(&self, table: &str, bytes: u64) -> Result<()> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        handle.lock().set_mutable_run_spill_bytes(bytes);
+        Ok(())
+    }
+
+    /// Set a table's WAL sync byte threshold (bytes between group-syncs).
+    pub fn set_table_sync_byte_threshold(&self, table: &str, threshold: u64) -> Result<()> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        handle.lock().set_sync_byte_threshold(threshold);
+        Ok(())
+    }
+
+    /// Set a table's index build policy (`Deferred` for fast ingest, `Eager`
+    /// for fast first query).
+    pub fn set_table_index_build_policy(
+        &self,
+        table: &str,
+        policy: mongreldb_core::IndexBuildPolicy,
+    ) -> Result<()> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        handle.lock().set_index_build_policy(policy);
+        Ok(())
+    }
+
+    /// Page-cache statistics for a table.
+    pub fn table_page_cache_stats(
+        &self,
+        table: &str,
+    ) -> Result<mongreldb_core::cache::CacheStats> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let stats = handle.lock().page_cache_stats();
+        Ok(stats)
+    }
+
+    /// Number of sorted runs a table currently has (compaction target: 1).
+    pub fn table_run_count(&self, table: &str) -> Result<usize> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let n = handle.lock().run_count();
+        Ok(n)
+    }
+
+    /// Memtable length (uncommitted staged rows) for a table.
+    pub fn table_memtable_len(&self, table: &str) -> Result<usize> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let n = handle.lock().memtable_len();
+        Ok(n)
+    }
+
+    /// Mutable-run length for a table.
+    pub fn table_mutable_run_len(&self, table: &str) -> Result<usize> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let n = handle.lock().mutable_run_len();
+        Ok(n)
+    }
+
+    /// Page-cache entry count for a table.
+    pub fn table_page_cache_len(&self, table: &str) -> Result<usize> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let n = handle.lock().page_cache_len();
+        Ok(n)
+    }
+
+    /// Decoded-page-cache entry count for a table.
+    pub fn table_decoded_cache_len(&self, table: &str) -> Result<usize> {
+        let handle = self.inner.table(table).map_err(KitError::from)?;
+        let n = handle.lock().decoded_cache_len();
+        Ok(n)
+    }
+
     /// Run a SQL statement through the embedded `MongrelSession` (DataFusion
     /// frontend) and return the result as Arrow [`RecordBatch`]es. This is the
     /// Rust analogue of the TypeScript kit's `db.sql(sql)` (which returns Arrow

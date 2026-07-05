@@ -193,6 +193,46 @@ class Database:
         """
         return self._handle.reserve_auto_inc(table)
 
+    # ── storage tuning & introspection (Tier 3) ─────────────────────────────
+
+    def set_spill_threshold(self, bytes: int) -> None:
+        """Set the per-table spill threshold (bytes)."""
+        self._handle.set_spill_threshold(bytes)
+
+    def set_recursive_triggers(self, enabled: bool) -> None:
+        """Enable or disable recursive trigger execution (database-wide)."""
+        self._handle.set_recursive_triggers(enabled)
+
+    def trigger_config(self) -> dict[str, Any]:
+        """Read the trigger execution policy.
+
+        Returns ``{recursive_triggers, max_depth, max_loop_iterations}``.
+        """
+        return self._handle.trigger_config()
+
+    def set_trigger_config(self, config: dict[str, Any]) -> None:
+        """Set the trigger execution policy.
+
+        ``config`` keys: ``recursive_triggers`` (bool), ``max_depth`` (int > 0),
+        ``max_loop_iterations`` (int).
+        """
+        self._handle.set_trigger_config(config)
+
+    def table_run_count(self, table: str) -> int:
+        """Number of sorted runs a table currently has (compaction target: 1)."""
+        return self._handle.table_run_count(table)
+
+    def table_page_cache_stats(self, table: str) -> dict[str, Any]:
+        """Page-cache statistics for a table.
+
+        Returns ``{hits, misses, try_lock_misses, hit_rate}``.
+        """
+        return self._handle.table_page_cache_stats(table)
+
+    def table_memtable_len(self, table: str) -> int:
+        """Memtable length (uncommitted staged rows) for a table."""
+        return self._handle.table_memtable_len(table)
+
     def sql_rows(self, sql: str) -> list[dict[str, Any]]:
         """Run a SQL statement; return the result rows as a list of dicts.
 

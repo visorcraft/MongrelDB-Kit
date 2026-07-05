@@ -361,6 +361,37 @@ let next_id: Option<i64> = db.reserve_auto_inc("orders")?;
 > length, regex, triggers) — use the `Transaction` API for constrained writes.
 > The engine's own declarative constraints (unique, FK, check) still apply.
 
+## Storage tuning & introspection
+
+The Kit surfaces the engine's power-user knobs for production sizing and
+observability. Database-wide tunables (`set_spill_threshold`,
+`set_recursive_triggers`, `trigger_config` / `set_trigger_config`) are atomic
+`&self`; per-table tunables and introspection go through the engine's per-table
+`Mutex`:
+
+```rust
+// Database-wide.
+db.set_spill_threshold(1_000_000);
+db.set_recursive_triggers(true);
+let cfg = db.trigger_config(); // TriggerConfig { recursive_triggers, max_depth, max_loop_iterations }
+db.set_trigger_config(TriggerConfig {
+    recursive_triggers: true, max_depth: 16, max_loop_iterations: 5000
+})?;
+
+// Per-table tuning.
+db.set_table_compaction_zstd_level("widgets", 3)?;
+db.set_table_result_cache_max_bytes("widgets", 64_000_000)?;
+db.set_table_index_build_policy("widgets", IndexBuildPolicy::Eager)?;
+
+// Per-table introspection (read-only).
+let runs = db.table_run_count("widgets")?;          // compaction target: 1
+let stats = db.table_page_cache_stats("widgets")?;  // CacheStats { hits, misses, try_lock_misses }
+let memtable = db.table_memtable_len("widgets")?;
+```
+
+All methods are also reachable via the `Database::raw()` escape hatch
+(`db.raw().table(name)?.lock()`) for the full engine surface.
+
 ## Sequences and defaults
 
 A column whose `DefaultKind::Sequence(name)` default is set is auto-assigned from a named sequence

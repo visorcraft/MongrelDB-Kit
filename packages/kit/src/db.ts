@@ -10,8 +10,11 @@ import type {
 	ConditionSpec,
 	PutResult,
 	RowJs,
-	TypedColumn
+	TypedColumn,
+	CacheStatsJs,
+	TriggerConfigJs
 } from '@visorcraft/mongreldb/native.js';
+import { IndexBuildPolicyJs, WriteBuffer } from '@visorcraft/mongreldb/native.js';
 import { Schema } from './schema.js';
 import { rowsToTsv, tsvToRows } from './tsv.js';
 import { rowFromRowJs } from './rows.js';
@@ -872,6 +875,95 @@ export class KitDatabase {
 	 */
 	bulkLoadTyped(table: string, columns: TypedColumn[]): bigint {
 		return this.db.table(table).bulkLoadTyped(columns);
+	}
+
+	// ── storage tuning & introspection (Tier 3) ─────────────────────────────
+
+	/** Set the per-table spill threshold (bytes). */
+	setSpillThreshold(bytes: bigint | number): void {
+		this.db.setSpillThreshold(Number(bytes));
+	}
+
+	/** Enable or disable recursive trigger execution (database-wide). */
+	setRecursiveTriggers(enabled: boolean): void {
+		this.db.setRecursiveTriggers(enabled);
+	}
+
+	/** Read the current trigger execution policy. */
+	triggerConfig(): TriggerConfigJs {
+		return this.db.triggerConfig();
+	}
+
+	/** Set the trigger execution policy. `max_depth` must be > 0. */
+	setTriggerConfig(config: TriggerConfigJs): void {
+		this.db.setTriggerConfig(config);
+	}
+
+	/** Set a table's compaction zstd level (-1 = default, 0 = none, 1..22). */
+	setTableCompactionZstdLevel(table: string, level: number): void {
+		this.db.setTableCompactionZstdLevel(table, level);
+	}
+
+	/** Set a table's result-cache max bytes. */
+	setTableResultCacheMaxBytes(table: string, maxBytes: bigint | number): void {
+		this.db.setTableResultCacheMaxBytes(table, Number(maxBytes));
+	}
+
+	/** Set a table's mutable-run spill threshold (bytes). */
+	setTableMutableRunSpillBytes(table: string, bytes: bigint | number): void {
+		this.db.setTableMutableRunSpillBytes(table, Number(bytes));
+	}
+
+	/** Set a table's WAL sync byte threshold (bytes between group-syncs). */
+	setTableSyncByteThreshold(table: string, threshold: bigint | number): void {
+		this.db.setTableSyncByteThreshold(table, Number(threshold));
+	}
+
+	/** Set a table's index build policy (`Deferred` for fast ingest, `Eager`
+	 * for fast first query). */
+	setTableIndexBuildPolicy(table: string, policy: IndexBuildPolicyJs): void {
+		this.db.setTableIndexBuildPolicy(table, policy);
+	}
+
+	/** Page-cache statistics for a table. */
+	tablePageCacheStats(table: string): CacheStatsJs {
+		return this.db.tablePageCacheStats(table);
+	}
+
+	/** Number of sorted runs a table currently has (compaction target: 1). */
+	tableRunCount(table: string): number {
+		return this.db.tableRunCount(table);
+	}
+
+	/** Memtable length (uncommitted staged rows) for a table. */
+	tableMemtableLen(table: string): number {
+		return this.db.tableMemtableLen(table);
+	}
+
+	/** Mutable-run length for a table. */
+	tableMutableRunLen(table: string): number {
+		return this.db.tableMutableRunLen(table);
+	}
+
+	/** Page-cache entry count for a table. */
+	tablePageCacheLen(table: string): number {
+		return this.db.tablePageCacheLen(table);
+	}
+
+	/** Decoded-page-cache entry count for a table. */
+	tableDecodedCacheLen(table: string): number {
+		return this.db.tableDecodedCacheLen(table);
+	}
+
+	/**
+	 * Create a {@link WriteBuffer} over `table` — opt-in write micro-batching
+	 * where writes are **not durable until `flush()`** (the opposite contract of
+	 * `put()`). `threshold` rows trigger an auto-flush (default 1000). Useful
+	 * for high-throughput ingest where per-row commit latency isn't acceptable.
+	 * Bypasses Kit constraints (defaults, unique guards, FK checks).
+	 */
+	writeBuffer(table: string, threshold?: number): WriteBuffer {
+		return new WriteBuffer(this.db.table(table), threshold);
 	}
 
 	/** Import a TSV document into `table`; returns the number of rows inserted. */

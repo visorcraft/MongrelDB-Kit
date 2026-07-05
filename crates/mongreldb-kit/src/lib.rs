@@ -20,6 +20,11 @@ pub use db::{
     ApproxAggKind, ApproxAggregate, Database, ExplainPlan, IncrementalAggKind,
     IncrementalAggregate, SimilarRow,
 };
+// Re-export the engine tuning/config types so kit consumers (and the Python
+// binding, which depends only on this crate) can reach them without a direct
+// `mongreldb-core` dependency.
+pub use mongreldb_core::cache::CacheStats;
+pub use mongreldb_core::{IndexBuildPolicy, TriggerConfig};
 pub use error::{KitError, Result};
 pub use migrate::migrate;
 pub use query::JoinRow;

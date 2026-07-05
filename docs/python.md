@@ -434,6 +434,25 @@ db.compact_all(); db.compact_table("things")
 > constrained writes. The engine's own declarative constraints (unique, FK,
 > check) still apply.
 
+### Storage tuning & introspection
+
+```python
+# Database-wide tunables.
+db.set_spill_threshold(1_000_000)
+db.set_recursive_triggers(True)
+cfg = db.trigger_config()  # {recursive_triggers, max_depth, max_loop_iterations}
+db.set_trigger_config({"recursive_triggers": True, "max_depth": 16, "max_loop_iterations": 5000})
+
+# Per-table introspection (read-only).
+runs = db.table_run_count("widgets")          # int — compaction target: 1
+stats = db.table_page_cache_stats("widgets")  # {hits, misses, try_lock_misses, hit_rate}
+memtable = db.table_memtable_len("widgets")   # int — uncommitted staged rows
+```
+
+The per-table tuning setters (compaction zstd level, result cache size, mutable-run spill bytes,
+sync byte threshold, index build policy) are available from Rust via `Database::raw()` and from
+the NAPI addon; the Python facade exposes the highest-value subset above.
+
 ## Key encoding
 
 The byte-identical key encoders used internally are exposed for tooling and tests. Components are

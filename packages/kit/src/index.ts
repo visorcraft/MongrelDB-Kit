@@ -22,6 +22,8 @@ export type {
 	CommitResultJs,
 	PutResult,
 	RowJs,
-	TypedColumn
+	TypedColumn,
+	CacheStatsJs,
+	TriggerConfigJs
 } from '@visorcraft/mongreldb/native.js';
-export { ColumnType, ConditionKind, IndexKindSpec } from '@visorcraft/mongreldb/native.js';
+export { ColumnType, ConditionKind, IndexKindSpec, IndexBuildPolicyJs, WriteBuffer } from '@visorcraft/mongreldb/native.js';
