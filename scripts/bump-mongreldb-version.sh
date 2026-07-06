@@ -54,6 +54,11 @@ sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$
 sed -i "s/mongreldb-query = \"$OLD\"/mongreldb-query = \"$NEW\"/" \
   crates/mongreldb-kit/Cargo.toml
 sed -i -E "s#mongreldb-server = \\{ git = \"https://github.com/visorcraft/MongrelDB.git\", (tag = \"v[0-9.]+\"|rev = \"[a-f0-9]+\") \\}#mongreldb-server = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" tests/conformance/rust/Cargo.toml
+# Also handle the bare-version form (`mongreldb-server = "0.31.1"`), which the
+# git-tag regex above does not match -- unify it onto the git tag so the
+# server shares the workspace's `mongreldb-core` instead of pulling a stale
+# crates.io copy that brings an older core along transitively.
+sed -i -E "s#^mongreldb-server = \"[0-9.]+\"#mongreldb-server = { git = \"https://github.com/visorcraft/MongrelDB.git\", tag = \"v$NEW\" }#" tests/conformance/rust/Cargo.toml
 sed -i "s/mongreldb-core = \"[0-9.]*\"/mongreldb-core = \"$NEW\"/" \
   tests/conformance/rust/Cargo.toml
 sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$NEW\"/" \

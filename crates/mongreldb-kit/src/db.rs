@@ -1021,6 +1021,89 @@ impl Database {
         guard.reserve_auto_inc().map_err(KitError::from)
     }
 
+    // ── user/role/credentials management ─────────────────────────────────
+
+    /// Create a catalog user with an Argon2id-hashed password.
+    pub fn create_user(&self, username: &str, password: &str) -> Result<()> {
+        self.inner.create_user(username, password).map_err(KitError::from)?;
+        Ok(())
+    }
+
+    /// Drop a user by username.
+    pub fn drop_user(&self, username: &str) -> Result<()> {
+        self.inner.drop_user(username).map_err(KitError::from)
+    }
+
+    /// Change a user's password.
+    pub fn alter_user_password(&self, username: &str, new_password: &str) -> Result<()> {
+        self.inner
+            .alter_user_password(username, new_password)
+            .map_err(KitError::from)
+    }
+
+    /// Verify credentials. Returns `Some(entry)` on success.
+    pub fn verify_user(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<Option<mongreldb_core::auth::UserEntry>> {
+        self.inner.verify_user(username, password).map_err(KitError::from)
+    }
+
+    /// Grant or revoke admin privileges on a user.
+    pub fn set_user_admin(&self, username: &str, is_admin: bool) -> Result<()> {
+        self.inner.set_user_admin(username, is_admin).map_err(KitError::from)
+    }
+
+    /// List all usernames.
+    pub fn users(&self) -> Vec<String> {
+        self.inner.users().into_iter().map(|u| u.username).collect()
+    }
+
+    /// Create a role.
+    pub fn create_role(&self, name: &str) -> Result<()> {
+        self.inner.create_role(name).map_err(KitError::from)?;
+        Ok(())
+    }
+
+    /// Drop a role.
+    pub fn drop_role(&self, name: &str) -> Result<()> {
+        self.inner.drop_role(name).map_err(KitError::from)
+    }
+
+    /// List all role names.
+    pub fn roles(&self) -> Vec<String> {
+        self.inner.roles().into_iter().map(|r| r.name).collect()
+    }
+
+    /// Grant a role to a user.
+    pub fn grant_role(&self, username: &str, role_name: &str) -> Result<()> {
+        self.inner.grant_role(username, role_name).map_err(KitError::from)
+    }
+
+    /// Revoke a role from a user.
+    pub fn revoke_role(&self, username: &str, role_name: &str) -> Result<()> {
+        self.inner.revoke_role(username, role_name).map_err(KitError::from)
+    }
+
+    /// Grant a permission to a role.
+    pub fn grant_permission(
+        &self,
+        role_name: &str,
+        permission: mongreldb_core::auth::Permission,
+    ) -> Result<()> {
+        self.inner.grant_permission(role_name, permission).map_err(KitError::from)
+    }
+
+    /// Revoke a permission from a role.
+    pub fn revoke_permission(
+        &self,
+        role_name: &str,
+        permission: mongreldb_core::auth::Permission,
+    ) -> Result<()> {
+        self.inner.revoke_permission(role_name, permission).map_err(KitError::from)
+    }
+
     // ── storage tuning & introspection (Tier 3) ─────────────────────────────
 
     /// Set the per-table spill threshold (bytes). When a transaction's staged

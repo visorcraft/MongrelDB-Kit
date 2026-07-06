@@ -97,6 +97,20 @@ type MongrelDatabase = NativeDatabase & {
 	triggers(): { json: string }[];
 	trigger(name: string): { json: string } | null;
 	sql(sql: string): Promise<Buffer>;
+	// User/role/credentials (NAPI addon methods)
+	createUser(username: string, password: string): void;
+	dropUser(username: string): void;
+	alterUserPassword(username: string, newPassword: string): void;
+	verifyUser(username: string, password: string): boolean;
+	setUserAdmin(username: string, isAdmin: boolean): void;
+	users(): string[];
+	createRole(name: string): void;
+	dropRole(name: string): void;
+	roles(): string[];
+	grantRole(username: string, roleName: string): void;
+	revokeRole(username: string, roleName: string): void;
+	grantPermission(roleName: string, permission: string): void;
+	revokePermission(roleName: string, permission: string): void;
 };
 
 type MongrelModule = {
@@ -976,6 +990,75 @@ export class KitDatabase {
 	 */
 	writeBuffer(table: string, threshold?: number): WriteBuffer {
 		return new WriteBuffer(this.db.table(table), threshold);
+	}
+
+	// ── user/role/credentials management ─────────────────────────────────────
+
+	/** Create a catalog user with an Argon2id-hashed password. */
+	createUser(username: string, password: string): void {
+		this.db.createUser(username, password);
+	}
+
+	/** Drop a user by username. */
+	dropUser(username: string): void {
+		this.db.dropUser(username);
+	}
+
+	/** Change a user's password. */
+	alterUserPassword(username: string, newPassword: string): void {
+		this.db.alterUserPassword(username, newPassword);
+	}
+
+	/** Verify credentials. Returns `true` on success. */
+	verifyUser(username: string, password: string): boolean {
+		return this.db.verifyUser(username, password);
+	}
+
+	/** Grant or revoke admin privileges on a user. */
+	setUserAdmin(username: string, isAdmin: boolean): void {
+		this.db.setUserAdmin(username, isAdmin);
+	}
+
+	/** List all usernames. */
+	users(): string[] {
+		return this.db.users();
+	}
+
+	/** Create a role. */
+	createRole(name: string): void {
+		this.db.createRole(name);
+	}
+
+	/** Drop a role. */
+	dropRole(name: string): void {
+		this.db.dropRole(name);
+	}
+
+	/** List all role names. */
+	roles(): string[] {
+		return this.db.roles();
+	}
+
+	/** Grant a role to a user. */
+	grantRole(username: string, roleName: string): void {
+		this.db.grantRole(username, roleName);
+	}
+
+	/** Revoke a role from a user. */
+	revokeRole(username: string, roleName: string): void {
+		this.db.revokeRole(username, roleName);
+	}
+
+	/** Grant a permission to a role. Permission format: `"all"`, `"ddl"`,
+	 * `"admin"`, or `"select:table"`, `"insert:table"`, `"update:table"`,
+	 * `"delete:table"`. */
+	grantPermission(roleName: string, permission: string): void {
+		this.db.grantPermission(roleName, permission);
+	}
+
+	/** Revoke a permission from a role. */
+	revokePermission(roleName: string, permission: string): void {
+		this.db.revokePermission(roleName, permission);
 	}
 
 	/** Import a TSV document into `table`; returns the number of rows inserted. */

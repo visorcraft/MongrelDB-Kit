@@ -55,6 +55,12 @@ Monitor these signals:
 - Do not expose `__kit_` tables through application APIs.
 - Validate any use of raw escape hatches (`nativeDb`, `db.inner`, `db._handle`).
 - Rotate secrets only when the kit explicitly supports re-encryption.
+- For the HTTP daemon, start with `--auth-token <token>` (Bearer) and/or
+  `--auth-users` (HTTP Basic against catalog users). Create the first admin
+  user before enabling `--auth-users` — see the engine
+  [Users, Roles & Permissions](https://github.com/visorcraft/MongrelDB/blob/master/docs/14-auth.md)
+  guide. Grant the least privilege per role (`select:table` rather than
+  `all`) and reserve `admin` for break-glass accounts.
 
 ## Upgrades
 

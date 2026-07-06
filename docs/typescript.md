@@ -353,6 +353,41 @@ try {
 }
 ```
 
+## Users, roles & permissions
+
+The Kit forwards the engine's catalog-stored auth model — Argon2id-hashed
+users, roles that bundle permissions, and `GRANT`/`REVOKE` table-level
+access control. Permission strings use the compact form: `"all"`, `"admin"`,
+`"ddl"`, or `"select:table"`, `"insert:table"`, `"update:table"`,
+`"delete:table"`.
+
+```ts
+// db is a KitDatabase opened with KitDatabase.openSync(...)
+db.createUser('alice', 's3cret-pw');
+db.alterUserPassword('alice', 'new-pw');
+console.log(db.verifyUser('alice', 'new-pw')); // true
+db.setUserAdmin('alice', true);                // admin bypasses all permission checks
+console.log(db.users());                       // ['alice']
+
+db.createRole('analyst');
+db.grantPermission('analyst', 'select:orders');
+db.grantPermission('analyst', 'insert:orders');
+db.grantRole('alice', 'analyst');
+console.log(db.roles());                       // ['analyst']
+
+// Reverse
+db.revokePermission('analyst', 'insert:orders');
+db.revokeRole('alice', 'analyst');
+db.dropRole('analyst');
+db.dropUser('alice');
+```
+
+The full model (including SQL DDL like `CREATE USER` / `GRANT` and the HTTP
+daemon's Bearer + Basic auth modes) is documented in the engine
+[Users, Roles & Permissions](https://github.com/visorcraft/MongrelDB/blob/master/docs/14-auth.md)
+guide. The Kit CLI exposes the same operations as
+[`user` and `role` subcommands](./cli.md#user--manage-catalog-users).
+
 ## Running this example
 
 Save the file as `kit-demo.ts` and run it with Node 22+:

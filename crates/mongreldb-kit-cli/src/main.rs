@@ -6,8 +6,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use mongreldb_kit::{
     migrate as run_migrations, AggFunc, Aggregate, AggregateQuery, Column, ColumnType, Database,
-    Direction, Expr, Literal, Migration, MigrationOp, OnConflict, OrderBy, Query, Schema, Select,
-    Table,
+    Direction, Expr, Literal, Migration, MigrationOp, OnConflict, OrderBy, Permission, Query,
+    Schema, Select, Table,
 };
 use mongreldb_kit_core::migrations::plan_migrations;
 use mongreldb_kit_core::{ProcedureSpec, TriggerSpec, ViewSpec, VirtualTableSpec};
@@ -313,6 +313,12 @@ enum Command {
     /// Secondary index commands.
     #[command(subcommand)]
     Index(IndexCmd),
+    /// User and credential commands.
+    #[command(subcommand)]
+    User(UserCmd),
+    /// Role and permission commands.
+    #[command(subcommand)]
+    Role(RoleCmd),
 }
 
 #[derive(Subcommand)]
@@ -337,6 +343,67 @@ enum IndexCmd {
     },
     /// Drop a secondary index by name.
     Drop { path: PathBuf, name: String },
+}
+
+#[derive(Subcommand)]
+enum UserCmd {
+    /// Create a catalog user with an Argon2id-hashed password.
+    Create {
+        path: PathBuf,
+        username: String,
+        password: String,
+    },
+    /// Drop a user by username.
+    Drop { path: PathBuf, username: String },
+    /// Change a user's password.
+    Passwd {
+        path: PathBuf,
+        username: String,
+        password: String,
+    },
+    /// Verify credentials; prints "ok" or "invalid".
+    Verify {
+        path: PathBuf,
+        username: String,
+        password: String,
+    },
+    /// Grant or revoke admin privileges on a user.
+    Admin {
+        path: PathBuf,
+        username: String,
+        /// `true` to grant admin, `false` to revoke.
+        granted: bool,
+    },
+    /// List all usernames.
+    List { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum RoleCmd {
+    /// Create a role.
+    Create { path: PathBuf, name: String },
+    /// Drop a role.
+    Drop { path: PathBuf, name: String },
+    /// List all role names.
+    List { path: PathBuf },
+    /// Grant a role to a user.
+    Grant {
+        path: PathBuf,
+        username: String,
+        role: String,
+    },
+    /// Revoke a role from a user.
+    Revoke {
+        path: PathBuf,
+        username: String,
+        role: String,
+    },
+    /// Grant a permission to a role.
+    /// Permission format: `all`, `ddl`, `admin`, `select:table`,
+    /// `insert:table`, `update:table`, `delete:table`.
+    Allow { path: PathBuf, role: String, permission: String },
+    /// Revoke a permission from a role.
+    Deny { path: PathBuf, role: String, permission: String },
 }
 
 #[derive(Subcommand)]
@@ -497,6 +564,43 @@ fn main() -> Result<()> {
             } => cmd_index_create(&path, &table, &name, &column, &kind),
             IndexCmd::Drop { path, name } => cmd_index_drop(&path, &name),
         },
+        Command::User(cmd) => match cmd {
+            UserCmd::Create {
+                path,
+                username,
+                password,
+            } => cmd_user_create(&path, &username, &password),
+            UserCmd::Drop { path, username } => cmd_user_drop(&path, &username),
+            UserCmd::Passwd {
+                path,
+                username,
+                password,
+            } => cmd_user_passwd(&path, &username, &password),
+            UserCmd::Verify {
+                path,
+                username,
+                password,
+            } => cmd_user_verify(&path, &username, &password),
+            UserCmd::Admin {
+                path,
+                username,
+                granted,
+            } => cmd_user_admin(&path, &username, granted),
+            UserCmd::List { path } => cmd_user_list(&path),
+        },
+        Command::Role(cmd) => match cmd {
+            RoleCmd::Create { path, name } => cmd_role_create(&path, &name),
+            RoleCmd::Drop { path, name } => cmd_role_drop(&path, &name),
+            RoleCmd::List { path } => cmd_role_list(&path),
+            RoleCmd::Grant { path, username, role } => cmd_role_grant(&path, &username, &role),
+            RoleCmd::Revoke { path, username, role } => cmd_role_revoke(&path, &username, &role),
+            RoleCmd::Allow { path, role, permission } => {
+                cmd_role_allow(&path, &role, &permission)
+            }
+            RoleCmd::Deny { path, role, permission } => {
+                cmd_role_deny(&path, &role, &permission)
+            }
+        },
     }
 }
 
@@ -594,6 +698,148 @@ fn cmd_index_drop(path: &Path, name: &str) -> Result<()> {
     db.sql(&sql).context("failed to drop index")?;
     println!("dropped index {name}");
     Ok(())
+}
+
+// ── User / role / permission commands ──────────────────────────────────────
+//
+// These wrap the kit `Database` auth helpers. Permissions use the same
+// `select:table` / `insert:table` / `all` / `ddl` / `admin` vocabulary as the
+// NAPI and Python bindings so the CLI, Kit, and language facades agree.
+
+fn cmd_user_create(path: &Path, username: &str, password: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.create_user(username, password).context("failed to create user")?;
+    println!("created user {username}");
+    Ok(())
+}
+
+fn cmd_user_drop(path: &Path, username: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.drop_user(username).context("failed to drop user")?;
+    println!("dropped user {username}");
+    Ok(())
+}
+
+fn cmd_user_passwd(path: &Path, username: &str, password: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.alter_user_password(username, password)
+        .context("failed to change password")?;
+    println!("password changed for {username}");
+    Ok(())
+}
+
+fn cmd_user_verify(path: &Path, username: &str, password: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let ok = db
+        .verify_user(username, password)
+        .context("failed to verify user")?
+        .is_some();
+    if ok {
+        println!("ok");
+    } else {
+        println!("invalid");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn cmd_user_admin(path: &Path, username: &str, granted: bool) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.set_user_admin(username, granted)
+        .context("failed to set admin flag")?;
+    println!("admin={granted} for {username}");
+    Ok(())
+}
+
+fn cmd_user_list(path: &Path) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let names = db.users();
+    println!("{}", serde_json::to_string_pretty(&names)?);
+    Ok(())
+}
+
+fn cmd_role_create(path: &Path, name: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.create_role(name).context("failed to create role")?;
+    println!("created role {name}");
+    Ok(())
+}
+
+fn cmd_role_drop(path: &Path, name: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.drop_role(name).context("failed to drop role")?;
+    println!("dropped role {name}");
+    Ok(())
+}
+
+fn cmd_role_list(path: &Path) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let names = db.roles();
+    println!("{}", serde_json::to_string_pretty(&names)?);
+    Ok(())
+}
+
+fn cmd_role_grant(path: &Path, username: &str, role: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.grant_role(username, role)
+        .context("failed to grant role")?;
+    println!("granted role {role} to {username}");
+    Ok(())
+}
+
+fn cmd_role_revoke(path: &Path, username: &str, role: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    db.revoke_role(username, role)
+        .context("failed to revoke role")?;
+    println!("revoked role {role} from {username}");
+    Ok(())
+}
+
+fn cmd_role_allow(path: &Path, role: &str, permission: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let perm = parse_permission(permission)?;
+    db.grant_permission(role, perm)
+        .context("failed to grant permission")?;
+    println!("granted {permission} to role {role}");
+    Ok(())
+}
+
+fn cmd_role_deny(path: &Path, role: &str, permission: &str) -> Result<()> {
+    let db = Database::open(path).context("failed to open database")?;
+    let perm = parse_permission(permission)?;
+    db.revoke_permission(role, perm)
+        .context("failed to revoke permission")?;
+    println!("revoked {permission} from role {role}");
+    Ok(())
+}
+
+/// Parse a permission string into a core `Permission`. Same vocabulary as the
+/// NAPI and Python bindings: `all`, `ddl`, `admin`, `select:table`,
+/// `insert:table`, `update:table`, `delete:table`.
+fn parse_permission(s: &str) -> Result<Permission> {
+    use Permission::*;
+    let lower = s.to_ascii_lowercase();
+    let table_of = |rest: &str| rest.trim().to_string();
+    Ok(match lower.as_str() {
+        "all" => All,
+        "ddl" => Ddl,
+        "admin" => Admin,
+        _ if lower.starts_with("select:") => Select {
+            table: table_of(&lower["select:".len()..]),
+        },
+        _ if lower.starts_with("insert:") => Insert {
+            table: table_of(&lower["insert:".len()..]),
+        },
+        _ if lower.starts_with("update:") => Update {
+            table: table_of(&lower["update:".len()..]),
+        },
+        _ if lower.starts_with("delete:") => Delete {
+            table: table_of(&lower["delete:".len()..]),
+        },
+        other => bail!(
+            "unknown permission '{other}' (expected all, ddl, admin, select:table, insert:table, update:table, delete:table)"
+        ),
+    })
 }
 
 fn cmd_procedure_install(path: &Path, procedure_path: &Path) -> Result<()> {

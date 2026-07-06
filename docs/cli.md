@@ -54,6 +54,8 @@ the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 | `sql <path> <statement>` | Run a SQL statement (read returns rows as JSON; DDL/DML returns `[]`) |
 | `view create <path> <view.json>` \| `view drop <path> <name>` | Create/drop a SQL view (session-scoped; see [SQL views](./migrations.md#sql-views)) |
 | `index create <path> <table> <name> --column <col> [--kind ...]` \| `index drop <path> <name>` | Create/drop a secondary index (`--kind`: `bitmap`/`fm`/`ann`/`sparse`/`brin`) |
+| `user create\|drop\|passwd\|verify\|admin\|list` | Manage catalog users (Argon2id-hashed passwords) |
+| `role create\|drop\|list\|grant\|revoke\|allow\|deny` | Manage roles and table-level permissions |
 
 `mongreldb-kit --help` and `mongreldb-kit <command> --help` print the same
 information at the terminal.
@@ -469,6 +471,68 @@ mongreldb-kit fixture create ./store.kitdb customers
 target table. Remove dependent rows first, or define the referencing foreign key with
 `on_delete: cascade` and delete the parent rows instead — `truncate` itself always refuses when
 references exist.
+
+## user — manage catalog users
+
+Catalog users have Argon2id-hashed passwords and live alongside the schema
+catalog (invisible to `table_names()`). Each user can be flagged admin to
+short-circuit permission checks. See the engine
+[Users, Roles & Permissions](https://github.com/visorcraft/MongrelDB/blob/master/docs/14-auth.md)
+guide for the full model.
+
+```sh
+# Create, verify, and list
+mongreldb-kit user create ./store.kitdb alice 's3cret-pw'
+mongreldb-kit user verify ./store.kitdb alice 's3cret-pw'   # prints ok / invalid (exit 1 on mismatch)
+mongreldb-kit user list   ./store.kitdb                     # ["alice"]
+
+# Change a password
+mongreldb-kit user passwd ./store.kitdb alice 'new-pw'
+
+# Grant or revoke admin (admin bypasses all permission checks)
+mongreldb-kit user admin  ./store.kitdb alice true
+mongreldb-kit user admin  ./store.kitdb alice false
+
+# Drop
+mongreldb-kit user drop   ./store.kitdb alice
+```
+
+## role — manage roles and permissions
+
+Roles are named bundles of permissions; a user's effective permissions are
+the union across all their roles. The permission string vocabulary is the
+same as the NAPI and Python bindings:
+
+| Permission string | Meaning |
+| --- | --- |
+| `all` | Every permission on every table |
+| `admin` | User/role management (`CREATE USER`, `GRANT`, `CREATE ROLE`) |
+| `ddl` | Schema changes (`CREATE TABLE`, `DROP TABLE`, `ALTER TABLE`) |
+| `select:<table>` | `SELECT` on a specific table |
+| `insert:<table>` | `INSERT` on a specific table |
+| `update:<table>` | `UPDATE` on a specific table |
+| `delete:<table>` | `DELETE` on a specific table |
+
+```sh
+# Create a role and grant table-level permissions
+mongreldb-kit role create ./store.kitdb analyst
+mongreldb-kit role allow  ./store.kitdb analyst select:orders
+mongreldb-kit role allow  ./store.kitdb analyst insert:orders
+mongreldb-kit role allow  ./store.kitdb analyst all        # GRANT ALL
+
+# Grant/revoke the role on users
+mongreldb-kit role grant  ./store.kitdb alice   analyst
+mongreldb-kit role list   ./store.kitdb                      # ["analyst"]
+
+# Reverse
+mongreldb-kit role deny   ./store.kitdb analyst insert:orders
+mongreldb-kit role revoke ./store.kitdb alice   analyst
+mongreldb-kit role drop   ./store.kitdb analyst
+```
+
+> The same operations are available via SQL DDL (`CREATE USER`, `GRANT`, …)
+> through `mongreldb-kit sql`, which is convenient for batching auth changes
+> with schema changes in a migration.
 
 ## Notes
 

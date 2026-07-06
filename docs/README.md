@@ -99,6 +99,7 @@ Start here, then dive into the topic that fits your task.
 | [Stored procedures](./stored-procedures.md) | Declarative routines callable from embedded, remote, and CLI Kit clients. |
 | [Triggers](./triggers.md) | Engine-side declarative triggers, migration helpers, remote APIs, and trigger validation errors. |
 | [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md) | SQL function helpers, `db.sqlRows`, and virtual/external table module specs. |
+| Users, roles & permissions | Catalog-stored users (Argon2id), roles, `GRANT`/`REVOKE`, and HTTP Basic + Bearer daemon auth. Documented in each [language guide](#language-guides) and the [CLI `user`/`role` commands](./cli.md#user--manage-catalog-users); the full model lives in the engine [auth guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/14-auth.md). |
 | [Errors](./errors.md) | The error taxonomy, codes, and how to handle each category. |
 | [Internal tables](./internal-tables.md) | The reserved `__kit_*` tables and what each one stores. |
 | [CLI](./cli.md) | The `mongreldb-kit` command line: `check`, `diff`, `generate`, `migrate`, and more. |

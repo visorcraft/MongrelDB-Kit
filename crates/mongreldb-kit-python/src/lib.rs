@@ -479,6 +479,77 @@ impl PyDatabase {
         self.require_db()?.reserve_auto_inc(table).map_err(map_err)
     }
 
+    // ── user/role/credentials management ─────────────────────────────────
+
+    /// Create a user with a password.
+    fn create_user(&self, username: &str, password: &str) -> PyResult<()> {
+        self.require_db()?.create_user(username, password).map_err(map_err)
+    }
+
+    /// Drop a user.
+    fn drop_user(&self, username: &str) -> PyResult<()> {
+        self.require_db()?.drop_user(username).map_err(map_err)
+    }
+
+    /// Change a user's password.
+    fn alter_user_password(&self, username: &str, new_password: &str) -> PyResult<()> {
+        self.require_db()?.alter_user_password(username, new_password).map_err(map_err)
+    }
+
+    /// Verify credentials. Returns True on success.
+    fn verify_user(&self, username: &str, password: &str) -> PyResult<bool> {
+        let result = self.require_db()?.verify_user(username, password).map_err(map_err)?;
+        Ok(result.is_some())
+    }
+
+    /// Grant or revoke admin.
+    fn set_user_admin(&self, username: &str, is_admin: bool) -> PyResult<()> {
+        self.require_db()?.set_user_admin(username, is_admin).map_err(map_err)
+    }
+
+    /// List usernames.
+    fn users(&self) -> PyResult<Vec<String>> {
+        Ok(self.require_db()?.users())
+    }
+
+    /// Create a role.
+    fn create_role(&self, name: &str) -> PyResult<()> {
+        self.require_db()?.create_role(name).map_err(map_err)
+    }
+
+    /// Drop a role.
+    fn drop_role(&self, name: &str) -> PyResult<()> {
+        self.require_db()?.drop_role(name).map_err(map_err)
+    }
+
+    /// List role names.
+    fn roles(&self) -> PyResult<Vec<String>> {
+        Ok(self.require_db()?.roles())
+    }
+
+    /// Grant a role to a user.
+    fn grant_role(&self, username: &str, role_name: &str) -> PyResult<()> {
+        self.require_db()?.grant_role(username, role_name).map_err(map_err)
+    }
+
+    /// Revoke a role from a user.
+    fn revoke_role(&self, username: &str, role_name: &str) -> PyResult<()> {
+        self.require_db()?.revoke_role(username, role_name).map_err(map_err)
+    }
+
+    /// Grant a permission to a role. Format: "all", "ddl", "admin",
+    /// "select:table", "insert:table", "update:table", "delete:table".
+    fn grant_permission(&self, role_name: &str, permission: &str) -> PyResult<()> {
+        let perm = parse_perm(permission)?;
+        self.require_db()?.grant_permission(role_name, perm).map_err(map_err)
+    }
+
+    /// Revoke a permission from a role.
+    fn revoke_permission(&self, role_name: &str, permission: &str) -> PyResult<()> {
+        let perm = parse_perm(permission)?;
+        self.require_db()?.revoke_permission(role_name, perm).map_err(map_err)
+    }
+
     // ── storage tuning & introspection (Tier 3) ─────────────────────────────
 
     /// Set the per-table spill threshold (bytes).
@@ -1534,4 +1605,30 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     set_code(m, "IntegrityError", "INTEGRITY")?;
 
     Ok(())
+}
+
+fn parse_perm(s: &str) -> PyResult<mongreldb_kit::Permission> {
+    let lower = s.to_ascii_lowercase();
+    Ok(match lower.as_str() {
+        "all" => mongreldb_kit::Permission::All,
+        "ddl" => mongreldb_kit::Permission::Ddl,
+        "admin" => mongreldb_kit::Permission::Admin,
+        _ if lower.starts_with("select:") => mongreldb_kit::Permission::Select {
+            table: lower[7..].to_string(),
+        },
+        _ if lower.starts_with("insert:") => mongreldb_kit::Permission::Insert {
+            table: lower[7..].to_string(),
+        },
+        _ if lower.starts_with("update:") => mongreldb_kit::Permission::Update {
+            table: lower[7..].to_string(),
+        },
+        _ if lower.starts_with("delete:") => mongreldb_kit::Permission::Delete {
+            table: lower[7..].to_string(),
+        },
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown permission '{other}'. Use: all, ddl, admin, select:table, insert:table, update:table, delete:table"
+            )));
+        }
+    })
 }

@@ -524,6 +524,46 @@ except DuplicateError as exc:
 
 Available exceptions: `ValidationError`, `DuplicateError`, `ForeignKeyError`, `RestrictError`, `TriggerValidationError`, `MigrationError`, `ConflictError`, `StorageError`, `IntegrityError`.
 
+## Users, roles & permissions
+
+The Kit forwards the engine's catalog-stored auth model — Argon2id-hashed
+users, roles that bundle permissions, and `GRANT`/`REVOKE` table-level
+access control. Permission strings use the compact form: `"all"`, `"admin"`,
+`"ddl"`, or `"select:table"`, `"insert:table"`, `"update:table"`,
+`"delete:table"`.
+
+```python
+from mongreldb_kit import Database
+
+db = Database.open("./store.kitdb")
+
+# Users
+db.create_user("alice", "s3cret-pw")
+db.alter_user_password("alice", "new-pw")
+assert db.verify_user("alice", "new-pw") is True
+db.set_user_admin("alice", True)            # admin bypasses all permission checks
+assert db.users() == ["alice"]
+
+# Roles + permissions
+db.create_role("analyst")
+db.grant_permission("analyst", "select:orders")
+db.grant_permission("analyst", "insert:orders")
+db.grant_role("alice", "analyst")
+assert db.roles() == ["analyst"]
+
+# Reverse
+db.revoke_role("alice", "analyst")
+db.revoke_permission("analyst", "insert:orders")
+db.drop_role("analyst")
+db.drop_user("alice")
+```
+
+The full model (including SQL DDL like `CREATE USER` / `GRANT` and the HTTP
+daemon's Bearer + Basic auth modes) is documented in the engine
+[Users, Roles & Permissions](https://github.com/visorcraft/MongrelDB/blob/master/docs/14-auth.md)
+guide. The Kit CLI exposes the same operations as
+[`user` and `role` subcommands](./cli.md#user--manage-catalog-users).
+
 ## Triggers and remote SQL
 
 Embedded Python can install, replace, list, and drop engine-side triggers by

@@ -459,6 +459,45 @@ match db.begin() {
 
 `Conflict` is the retryable category; see [Errors](./errors.md) for the cross-language mapping.
 
+## Users, roles & permissions
+
+The Kit forwards the engine's catalog-stored auth model — Argon2id-hashed
+users, roles that bundle permissions, and `GRANT`/`REVOKE` table-level
+access control. The `Permission` enum is re-exported from the kit crate so
+you do not need a direct `mongreldb-core` dependency.
+
+```rust
+use mongreldb_kit::{Database, Permission};
+
+let db = Database::open("./store.kitdb")?;
+
+// Users
+db.create_user("alice", "s3cret-pw")?;
+db.alter_user_password("alice", "new-pw")?;
+assert!(db.verify_user("alice", "new-pw")?.is_some());
+db.set_user_admin("alice", true)?; // admin bypasses all permission checks
+let names: Vec<String> = db.users(); // ["alice"]
+
+// Roles + permissions
+db.create_role("analyst")?;
+db.grant_permission("analyst", Permission::Select { table: "orders".into() })?;
+db.grant_permission("analyst", Permission::Insert { table: "orders".into() })?;
+db.grant_role("alice", "analyst")?;
+let roles: Vec<String> = db.roles(); // ["analyst"]
+
+// Reverse
+db.revoke_role("alice", "analyst")?;
+db.revoke_permission("analyst", Permission::Insert { table: "orders".into() })?;
+db.drop_role("analyst")?;
+db.drop_user("alice")?;
+```
+
+The full model (including SQL DDL like `CREATE USER` / `GRANT` and the HTTP
+daemon's Bearer + Basic auth modes) is documented in the engine
+[Users, Roles & Permissions](https://github.com/visorcraft/MongrelDB/blob/master/docs/14-auth.md)
+guide. The Kit CLI exposes the same operations as
+[`user` and `role` subcommands](./cli.md#user--manage-catalog-users).
+
 ## Running this example
 
 ```sh

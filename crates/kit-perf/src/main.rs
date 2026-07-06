@@ -34,9 +34,7 @@ fn users_schema() -> Schema {
         indexes: vec![],
         foreign_keys: vec![],
         unique_constraints: vec![],
-        clustered: false,
         check_constraints: vec![],
-        clustered: false,
     }])
     .unwrap()
 }
