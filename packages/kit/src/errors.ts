@@ -11,7 +11,11 @@ export type KitErrorCode =
 	| 'SCHEMA_DRIFT'
 	| 'TIMEOUT'
 	| 'UNSUPPORTED'
-	| 'INTEGRITY';
+	| 'INTEGRITY'
+	| 'AUTH_REQUIRED'
+	| 'AUTH_NOT_REQUIRED'
+	| 'INVALID_CREDENTIALS'
+	| 'PERMISSION_DENIED';
 
 export class KitError extends Error {
 	readonly code: KitErrorCode;
@@ -124,6 +128,45 @@ export class KitUnsupportedError extends KitError {
 	constructor(message: string) {
 		super(message, 'UNSUPPORTED');
 		this.name = 'KitUnsupportedError';
+	}
+}
+
+/** Thrown when a `require_auth` database is opened without credentials, or an
+ * operation runs on a handle with no cached principal. HTTP 401 equivalent. */
+export class KitAuthRequiredError extends KitError {
+	constructor(message: string) {
+		super(message, 'AUTH_REQUIRED');
+		this.name = 'KitAuthRequiredError';
+	}
+}
+
+/** Thrown when a credentialed constructor is used on a credentialless database
+ * (the caller picked the wrong constructor). */
+export class KitAuthNotRequiredError extends KitError {
+	constructor(message: string) {
+		super(message, 'AUTH_NOT_REQUIRED');
+		this.name = 'KitAuthNotRequiredError';
+	}
+}
+
+/** Thrown when `openWithCredentials` verification fails (bad username/password).
+ * HTTP 401 equivalent. */
+export class KitInvalidCredentialsError extends KitError {
+	readonly username: string;
+
+	constructor(username: string) {
+		super(`invalid credentials for user "${username}"`, 'INVALID_CREDENTIALS');
+		this.name = 'KitInvalidCredentialsError';
+		this.username = username;
+	}
+}
+
+/** Thrown when an operation's required permission is not satisfied by the
+ * cached principal. HTTP 403 equivalent. */
+export class KitPermissionDeniedError extends KitError {
+	constructor(message: string) {
+		super(message, 'PERMISSION_DENIED');
+		this.name = 'KitPermissionDeniedError';
 	}
 }
 

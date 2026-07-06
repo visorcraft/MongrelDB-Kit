@@ -259,6 +259,137 @@ impl Database {
         })
     }
 
+    /// Open an existing kit database that has `require_auth = true`,
+    /// verifying credentials up front. Every subsequent operation is checked
+    /// against the authenticated principal's permissions.
+    ///
+    /// Returns an error if the database does not have `require_auth` enabled
+    /// (use [`open`](Self::open) for credentialless databases) or if the
+    /// credentials are invalid.
+    ///
+    /// See `docs/auth-enforcement-spec.md`.
+    pub fn open_with_credentials(path: &Path, username: &str, password: &str) -> Result<Self> {
+        let inner = Arc::new(CoreDatabase::open_with_credentials(
+            path, username, password,
+        )?);
+        let schema = load_schema(path)?;
+        ensure_internal_tables(&inner)?;
+        reap_rotated_wal_segments(&inner);
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
+        })
+    }
+
+    /// Create a fresh kit database with `require_auth = true`, a single admin
+    /// user, and the given schema. The returned handle is already authenticated
+    /// as the admin.
+    ///
+    /// See `docs/auth-enforcement-spec.md`.
+    pub fn create_with_credentials(
+        path: &Path,
+        schema: KitSchema,
+        admin_username: &str,
+        admin_password: &str,
+    ) -> Result<Self> {
+        std::fs::create_dir_all(path)?;
+        let inner = Arc::new(CoreDatabase::create_with_credentials(
+            path,
+            admin_username,
+            admin_password,
+        )?);
+        ensure_internal_tables(&inner)?;
+        store_schema(path, &schema)?;
+        for table in &schema.tables {
+            create_core_table(&inner, &table.name, to_core_schema(table))?;
+        }
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
+        })
+    }
+
+    /// Open an existing page-encrypted kit database that has `require_auth =
+    /// true`, combining the encryption passphrase with credential verification.
+    pub fn open_encrypted_with_credentials(
+        path: &Path,
+        passphrase: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<Self> {
+        let inner = Arc::new(CoreDatabase::open_encrypted_with_credentials(
+            path, passphrase, username, password,
+        )?);
+        let schema = load_schema(path)?;
+        ensure_internal_tables(&inner)?;
+        reap_rotated_wal_segments(&inner);
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
+        })
+    }
+
+    /// Create a fresh page-encrypted kit database with `require_auth = true`
+    /// and a single admin user. Composes encryption-at-rest with credential
+    /// enforcement.
+    pub fn create_encrypted_with_credentials(
+        path: &Path,
+        schema: KitSchema,
+        passphrase: &str,
+        admin_username: &str,
+        admin_password: &str,
+    ) -> Result<Self> {
+        std::fs::create_dir_all(path)?;
+        let inner = Arc::new(CoreDatabase::create_encrypted_with_credentials(
+            path,
+            passphrase,
+            admin_username,
+            admin_password,
+        )?);
+        ensure_internal_tables(&inner)?;
+        store_schema(path, &schema)?;
+        for table in &schema.tables {
+            create_core_table(&inner, &table.name, to_core_schema(table))?;
+        }
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
+        })
+    }
+
+    /// Convert a credentialless kit database to a credentialed one in place.
+    /// Creates the first admin user, sets `require_auth = true`, and caches
+    /// the admin principal on this handle.
+    pub fn enable_auth(&self, admin_username: &str, admin_password: &str) -> Result<()> {
+        self.inner
+            .enable_auth(admin_username, admin_password)
+            .map_err(KitError::from)
+    }
+
+    /// Returns `true` if this database has `require_auth = true`.
+    pub fn require_auth_enabled(&self) -> bool {
+        self.inner.require_auth_enabled()
+    }
+
+    /// Re-resolve the cached principal from the on-disk catalog, picking up
+    /// role/permission changes made by other handles. No-op on credentialless
+    /// databases.
+    pub fn refresh_principal(&self) -> Result<()> {
+        self.inner.refresh_principal().map_err(KitError::from)
+    }
+
     /// Register a named default provider used by `DefaultKind::CustomName`
     /// columns. Returns the database for chaining.
     pub fn register_default(
@@ -1025,7 +1156,9 @@ impl Database {
 
     /// Create a catalog user with an Argon2id-hashed password.
     pub fn create_user(&self, username: &str, password: &str) -> Result<()> {
-        self.inner.create_user(username, password).map_err(KitError::from)?;
+        self.inner
+            .create_user(username, password)
+            .map_err(KitError::from)?;
         Ok(())
     }
 
@@ -1047,12 +1180,16 @@ impl Database {
         username: &str,
         password: &str,
     ) -> Result<Option<mongreldb_core::auth::UserEntry>> {
-        self.inner.verify_user(username, password).map_err(KitError::from)
+        self.inner
+            .verify_user(username, password)
+            .map_err(KitError::from)
     }
 
     /// Grant or revoke admin privileges on a user.
     pub fn set_user_admin(&self, username: &str, is_admin: bool) -> Result<()> {
-        self.inner.set_user_admin(username, is_admin).map_err(KitError::from)
+        self.inner
+            .set_user_admin(username, is_admin)
+            .map_err(KitError::from)
     }
 
     /// List all usernames.
@@ -1078,12 +1215,16 @@ impl Database {
 
     /// Grant a role to a user.
     pub fn grant_role(&self, username: &str, role_name: &str) -> Result<()> {
-        self.inner.grant_role(username, role_name).map_err(KitError::from)
+        self.inner
+            .grant_role(username, role_name)
+            .map_err(KitError::from)
     }
 
     /// Revoke a role from a user.
     pub fn revoke_role(&self, username: &str, role_name: &str) -> Result<()> {
-        self.inner.revoke_role(username, role_name).map_err(KitError::from)
+        self.inner
+            .revoke_role(username, role_name)
+            .map_err(KitError::from)
     }
 
     /// Grant a permission to a role.
@@ -1092,7 +1233,9 @@ impl Database {
         role_name: &str,
         permission: mongreldb_core::auth::Permission,
     ) -> Result<()> {
-        self.inner.grant_permission(role_name, permission).map_err(KitError::from)
+        self.inner
+            .grant_permission(role_name, permission)
+            .map_err(KitError::from)
     }
 
     /// Revoke a permission from a role.
@@ -1101,7 +1244,9 @@ impl Database {
         role_name: &str,
         permission: mongreldb_core::auth::Permission,
     ) -> Result<()> {
-        self.inner.revoke_permission(role_name, permission).map_err(KitError::from)
+        self.inner
+            .revoke_permission(role_name, permission)
+            .map_err(KitError::from)
     }
 
     // ── storage tuning & introspection (Tier 3) ─────────────────────────────

@@ -401,9 +401,17 @@ enum RoleCmd {
     /// Grant a permission to a role.
     /// Permission format: `all`, `ddl`, `admin`, `select:table`,
     /// `insert:table`, `update:table`, `delete:table`.
-    Allow { path: PathBuf, role: String, permission: String },
+    Allow {
+        path: PathBuf,
+        role: String,
+        permission: String,
+    },
     /// Revoke a permission from a role.
-    Deny { path: PathBuf, role: String, permission: String },
+    Deny {
+        path: PathBuf,
+        role: String,
+        permission: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -592,14 +600,26 @@ fn main() -> Result<()> {
             RoleCmd::Create { path, name } => cmd_role_create(&path, &name),
             RoleCmd::Drop { path, name } => cmd_role_drop(&path, &name),
             RoleCmd::List { path } => cmd_role_list(&path),
-            RoleCmd::Grant { path, username, role } => cmd_role_grant(&path, &username, &role),
-            RoleCmd::Revoke { path, username, role } => cmd_role_revoke(&path, &username, &role),
-            RoleCmd::Allow { path, role, permission } => {
-                cmd_role_allow(&path, &role, &permission)
-            }
-            RoleCmd::Deny { path, role, permission } => {
-                cmd_role_deny(&path, &role, &permission)
-            }
+            RoleCmd::Grant {
+                path,
+                username,
+                role,
+            } => cmd_role_grant(&path, &username, &role),
+            RoleCmd::Revoke {
+                path,
+                username,
+                role,
+            } => cmd_role_revoke(&path, &username, &role),
+            RoleCmd::Allow {
+                path,
+                role,
+                permission,
+            } => cmd_role_allow(&path, &role, &permission),
+            RoleCmd::Deny {
+                path,
+                role,
+                permission,
+            } => cmd_role_deny(&path, &role, &permission),
         },
     }
 }
@@ -708,7 +728,8 @@ fn cmd_index_drop(path: &Path, name: &str) -> Result<()> {
 
 fn cmd_user_create(path: &Path, username: &str, password: &str) -> Result<()> {
     let db = Database::open(path).context("failed to open database")?;
-    db.create_user(username, password).context("failed to create user")?;
+    db.create_user(username, password)
+        .context("failed to create user")?;
     println!("created user {username}");
     Ok(())
 }

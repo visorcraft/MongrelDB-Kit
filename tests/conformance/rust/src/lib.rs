@@ -61,6 +61,10 @@ fn error_code(e: &KitError) -> String {
         KitError::TriggerValidation(_) => "TRIGGER_VALIDATION",
         KitError::Storage(_) => "STORAGE",
         KitError::Integrity(_) => "INTEGRITY",
+        KitError::AuthRequired(_) => "AUTH_REQUIRED",
+        KitError::AuthNotRequired(_) => "AUTH_NOT_REQUIRED",
+        KitError::InvalidCredentials(_) => "INVALID_CREDENTIALS",
+        KitError::PermissionDenied(_) => "PERMISSION_DENIED",
     }
     .to_string()
 }

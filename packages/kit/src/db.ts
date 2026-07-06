@@ -111,6 +111,10 @@ type MongrelDatabase = NativeDatabase & {
 	revokeRole(username: string, roleName: string): void;
 	grantPermission(roleName: string, permission: string): void;
 	revokePermission(roleName: string, permission: string): void;
+	// Credential enforcement (NAPI addon methods)
+	enableAuth(adminUsername: string, adminPassword: string): void;
+	requireAuthEnabled(): boolean;
+	refreshPrincipal(): void;
 };
 
 type MongrelModule = {
@@ -119,6 +123,10 @@ type MongrelModule = {
 		withPath(path: string): MongrelDatabase;
 		createEncrypted(path: string, passphrase: string): MongrelDatabase;
 		openEncrypted(path: string, passphrase: string): MongrelDatabase;
+		openWithCredentials(path: string, username: string, password: string): MongrelDatabase;
+		createWithCredentials(path: string, adminUsername: string, adminPassword: string): MongrelDatabase;
+		openEncryptedWithCredentials(path: string, passphrase: string, username: string, password: string): MongrelDatabase;
+		createEncryptedWithCredentials(path: string, passphrase: string, adminUsername: string, adminPassword: string): MongrelDatabase;
 	};
 	ColumnType: typeof NativeColumnType;
 	IndexKindSpec: typeof NativeIndexKindSpec;
@@ -373,14 +381,28 @@ export class KitDatabase {
 	static openSync(
 		path: string,
 		schema: Schema,
-		options?: { encryption?: { passphrase: string } }
+		options?: {
+			encryption?: { passphrase: string };
+			credentials?: { username: string; password: string };
+		}
 	): KitDatabase {
+		if (options?.encryption?.passphrase && options?.credentials) {
+			const { passphrase } = options.encryption;
+			const { username, password } = options.credentials;
+			const db = addon.Database.openEncryptedWithCredentials(path, passphrase, username, password);
+			return KitDatabase.initialize(db, schema);
+		}
 		if (options?.encryption?.passphrase) {
 			try {
 				return KitDatabase.openEncryptedSync(path, schema, options.encryption.passphrase);
 			} catch {
 				return KitDatabase.createEncryptedSync(path, schema, options.encryption.passphrase);
 			}
+		}
+		if (options?.credentials) {
+			const { username, password } = options.credentials;
+			const db = addon.Database.openWithCredentials(path, username, password);
+			return KitDatabase.initialize(db, schema);
 		}
 
 		let db: MongrelDatabase;
@@ -406,6 +428,37 @@ export class KitDatabase {
 			throw new Error('openEncryptedSync requires a non-empty passphrase');
 		}
 		const db = addon.Database.openEncrypted(path, passphrase);
+		return KitDatabase.initialize(db, schema);
+	}
+
+	/** Create a fresh database with `require_auth = true`, a single admin user,
+	 * and the given schema. The returned handle is already authenticated as
+	 * the admin. */
+	static createWithCredentialsSync(
+		path: string,
+		schema: Schema,
+		adminUsername: string,
+		adminPassword: string
+	): KitDatabase {
+		const db = addon.Database.createWithCredentials(path, adminUsername, adminPassword);
+		return KitDatabase.initialize(db, schema);
+	}
+
+	/** Create a fresh encrypted database with `require_auth = true` and a single
+	 * admin user. Composes encryption-at-rest with credential enforcement. */
+	static createEncryptedWithCredentialsSync(
+		path: string,
+		schema: Schema,
+		passphrase: string,
+		adminUsername: string,
+		adminPassword: string
+	): KitDatabase {
+		const db = addon.Database.createEncryptedWithCredentials(
+			path,
+			passphrase,
+			adminUsername,
+			adminPassword
+		);
 		return KitDatabase.initialize(db, schema);
 	}
 
@@ -1059,6 +1112,26 @@ export class KitDatabase {
 	/** Revoke a permission from a role. */
 	revokePermission(roleName: string, permission: string): void {
 		this.db.revokePermission(roleName, permission);
+	}
+
+	// ── credential enforcement ─────────────────────────────────────────────
+
+	/** Convert a credentialless database to a credentialed one in place.
+	 * Creates the first admin user, sets `require_auth = true`, and caches the
+	 * admin principal on this handle. */
+	enableAuth(adminUsername: string, adminPassword: string): void {
+		this.db.enableAuth(adminUsername, adminPassword);
+	}
+
+	/** Returns `true` if this database has `require_auth = true`. */
+	requireAuthEnabled(): boolean {
+		return this.db.requireAuthEnabled();
+	}
+
+	/** Re-resolve the cached principal from the on-disk catalog, picking up
+	 * role/permission changes made by other handles. */
+	refreshPrincipal(): void {
+		this.db.refreshPrincipal();
 	}
 
 	/** Import a TSV document into `table`; returns the number of rows inserted. */

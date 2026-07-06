@@ -29,6 +29,14 @@ pub enum KitError {
     Storage(String),
     #[error("integrity error: {0}")]
     Integrity(String),
+    #[error("authentication required: {0}")]
+    AuthRequired(String),
+    #[error("authentication not required: {0}")]
+    AuthNotRequired(String),
+    #[error("invalid credentials: {0}")]
+    InvalidCredentials(String),
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
 }
 
 impl From<std::io::Error> for KitError {
@@ -63,6 +71,13 @@ impl From<mongreldb_core::MongrelError> for KitError {
             | MongrelError::Decryption(_) => KitError::Integrity(e.to_string()),
             MongrelError::Full(msg) => KitError::Storage(msg),
             MongrelError::Other(msg) => KitError::Storage(msg),
+            MongrelError::AuthRequired => KitError::AuthRequired(e.to_string()),
+            MongrelError::AuthNotRequired => KitError::AuthNotRequired(e.to_string()),
+            MongrelError::InvalidCredentials { username } => KitError::InvalidCredentials(username),
+            MongrelError::PermissionDenied {
+                required,
+                principal,
+            } => KitError::PermissionDenied(format!("{principal} lacks {required}")),
             _ => KitError::Storage(e.to_string()),
         }
     }

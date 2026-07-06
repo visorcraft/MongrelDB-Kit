@@ -102,6 +102,71 @@ class Database:
         schema_json = schema if isinstance(schema, str) else json.dumps(schema)
         return Database(_Database.create_encrypted(path, schema_json, passphrase))
 
+    @staticmethod
+    def open_with_credentials(path: str, username: str, password: str) -> "Database":
+        """Open an existing database that has ``require_auth = true``,
+        verifying credentials. Every subsequent operation is checked against
+        the authenticated principal's permissions.
+        """
+        return Database(_Database.open_with_credentials(path, username, password))
+
+    @staticmethod
+    def create_with_credentials(
+        path: str, schema: Any, admin_username: str, admin_password: str
+    ) -> "Database":
+        """Create a fresh database with ``require_auth = true``, a single admin
+        user, and the given schema. The returned handle is already authenticated
+        as the admin.
+        """
+        schema_json = schema if isinstance(schema, str) else json.dumps(schema)
+        return Database(
+            _Database.create_with_credentials(path, schema_json, admin_username, admin_password)
+        )
+
+    @staticmethod
+    def open_encrypted_with_credentials(
+        path: str, passphrase: str, username: str, password: str
+    ) -> "Database":
+        """Open an existing encrypted database that has ``require_auth = true``."""
+        return Database(
+            _Database.open_encrypted_with_credentials(path, passphrase, username, password)
+        )
+
+    @staticmethod
+    def create_encrypted_with_credentials(
+        path: str,
+        schema: Any,
+        passphrase: str,
+        admin_username: str,
+        admin_password: str,
+    ) -> "Database":
+        """Create a fresh encrypted database with ``require_auth = true`` and a
+        single admin user. Composes encryption-at-rest with credential enforcement.
+        """
+        schema_json = schema if isinstance(schema, str) else json.dumps(schema)
+        return Database(
+            _Database.create_encrypted_with_credentials(
+                path, schema_json, passphrase, admin_username, admin_password
+            )
+        )
+
+    def enable_auth(self, admin_username: str, admin_password: str) -> None:
+        """Convert a credentialless database to a credentialed one in place.
+        Creates the first admin user, sets ``require_auth = true``, and caches
+        the admin principal on this handle.
+        """
+        self._handle.enable_auth(admin_username, admin_password)
+
+    def require_auth_enabled(self) -> bool:
+        """Returns ``True`` if this database has ``require_auth = true``."""
+        return self._handle.require_auth_enabled()
+
+    def refresh_principal(self) -> None:
+        """Re-resolve the cached principal from the on-disk catalog, picking up
+        role/permission changes made by other handles.
+        """
+        self._handle.refresh_principal()
+
     def begin(self) -> "Transaction":
         return Transaction(self._handle.begin())
 

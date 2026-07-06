@@ -73,6 +73,26 @@ create_exception!(
     IntegrityError,
     pyo3::exceptions::PyException
 );
+create_exception!(
+    mongreldb_kit_py,
+    AuthRequiredError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    AuthNotRequiredError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    InvalidCredentialsError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    PermissionDeniedError,
+    pyo3::exceptions::PyException
+);
 
 fn map_err(e: KitError) -> PyErr {
     let msg = e.to_string();
@@ -86,6 +106,10 @@ fn map_err(e: KitError) -> PyErr {
         KitError::TriggerValidation(_) => TriggerValidationError::new_err(msg),
         KitError::Storage(_) => StorageError::new_err(msg),
         KitError::Integrity(_) => IntegrityError::new_err(msg),
+        KitError::AuthRequired(_) => AuthRequiredError::new_err(msg),
+        KitError::AuthNotRequired(_) => AuthNotRequiredError::new_err(msg),
+        KitError::InvalidCredentials(_) => InvalidCredentialsError::new_err(msg),
+        KitError::PermissionDenied(_) => PermissionDeniedError::new_err(msg),
     }
 }
 
@@ -165,6 +189,101 @@ impl PyDatabase {
         Ok(Self {
             db: Some(Rc::new(db)),
         })
+    }
+
+    /// Open an existing database that has require_auth = true, verifying
+    /// credentials. Every subsequent operation is checked against the
+    /// authenticated principal's permissions.
+    #[staticmethod]
+    fn open_with_credentials(path: &str, username: &str, password: &str) -> PyResult<Self> {
+        let db = Database::open_with_credentials(Path::new(path), username, password)
+            .map_err(map_err)?;
+        Ok(Self {
+            db: Some(Rc::new(db)),
+        })
+    }
+
+    /// Create a fresh database with require_auth = true, a single admin user,
+    /// and the given schema.
+    #[staticmethod]
+    fn create_with_credentials(
+        path: &str,
+        schema_json: &str,
+        admin_username: &str,
+        admin_password: &str,
+    ) -> PyResult<Self> {
+        let schema: KitSchema = serde_json::from_str(schema_json).map_err(py_json_err)?;
+        let db = Database::create_with_credentials(
+            Path::new(path),
+            schema,
+            admin_username,
+            admin_password,
+        )
+        .map_err(map_err)?;
+        Ok(Self {
+            db: Some(Rc::new(db)),
+        })
+    }
+
+    /// Open an existing encrypted database that has require_auth = true.
+    #[staticmethod]
+    fn open_encrypted_with_credentials(
+        path: &str,
+        passphrase: &str,
+        username: &str,
+        password: &str,
+    ) -> PyResult<Self> {
+        let db = Database::open_encrypted_with_credentials(
+            Path::new(path),
+            passphrase,
+            username,
+            password,
+        )
+        .map_err(map_err)?;
+        Ok(Self {
+            db: Some(Rc::new(db)),
+        })
+    }
+
+    /// Create a fresh encrypted database with require_auth = true and a
+    /// single admin user.
+    #[staticmethod]
+    fn create_encrypted_with_credentials(
+        path: &str,
+        schema_json: &str,
+        passphrase: &str,
+        admin_username: &str,
+        admin_password: &str,
+    ) -> PyResult<Self> {
+        let schema: KitSchema = serde_json::from_str(schema_json).map_err(py_json_err)?;
+        let db = Database::create_encrypted_with_credentials(
+            Path::new(path),
+            schema,
+            passphrase,
+            admin_username,
+            admin_password,
+        )
+        .map_err(map_err)?;
+        Ok(Self {
+            db: Some(Rc::new(db)),
+        })
+    }
+
+    /// Convert a credentialless database to a credentialed one in place.
+    fn enable_auth(&self, admin_username: &str, admin_password: &str) -> PyResult<()> {
+        self.require_db()?
+            .enable_auth(admin_username, admin_password)
+            .map_err(map_err)
+    }
+
+    /// Returns True if this database has require_auth = true.
+    fn require_auth_enabled(&self) -> PyResult<bool> {
+        Ok(self.require_db()?.require_auth_enabled())
+    }
+
+    /// Re-resolve the cached principal from the on-disk catalog.
+    fn refresh_principal(&self) -> PyResult<()> {
+        self.require_db()?.refresh_principal().map_err(map_err)
     }
 
     fn begin<'py>(
@@ -483,7 +602,9 @@ impl PyDatabase {
 
     /// Create a user with a password.
     fn create_user(&self, username: &str, password: &str) -> PyResult<()> {
-        self.require_db()?.create_user(username, password).map_err(map_err)
+        self.require_db()?
+            .create_user(username, password)
+            .map_err(map_err)
     }
 
     /// Drop a user.
@@ -493,18 +614,25 @@ impl PyDatabase {
 
     /// Change a user's password.
     fn alter_user_password(&self, username: &str, new_password: &str) -> PyResult<()> {
-        self.require_db()?.alter_user_password(username, new_password).map_err(map_err)
+        self.require_db()?
+            .alter_user_password(username, new_password)
+            .map_err(map_err)
     }
 
     /// Verify credentials. Returns True on success.
     fn verify_user(&self, username: &str, password: &str) -> PyResult<bool> {
-        let result = self.require_db()?.verify_user(username, password).map_err(map_err)?;
+        let result = self
+            .require_db()?
+            .verify_user(username, password)
+            .map_err(map_err)?;
         Ok(result.is_some())
     }
 
     /// Grant or revoke admin.
     fn set_user_admin(&self, username: &str, is_admin: bool) -> PyResult<()> {
-        self.require_db()?.set_user_admin(username, is_admin).map_err(map_err)
+        self.require_db()?
+            .set_user_admin(username, is_admin)
+            .map_err(map_err)
     }
 
     /// List usernames.
@@ -529,25 +657,33 @@ impl PyDatabase {
 
     /// Grant a role to a user.
     fn grant_role(&self, username: &str, role_name: &str) -> PyResult<()> {
-        self.require_db()?.grant_role(username, role_name).map_err(map_err)
+        self.require_db()?
+            .grant_role(username, role_name)
+            .map_err(map_err)
     }
 
     /// Revoke a role from a user.
     fn revoke_role(&self, username: &str, role_name: &str) -> PyResult<()> {
-        self.require_db()?.revoke_role(username, role_name).map_err(map_err)
+        self.require_db()?
+            .revoke_role(username, role_name)
+            .map_err(map_err)
     }
 
     /// Grant a permission to a role. Format: "all", "ddl", "admin",
     /// "select:table", "insert:table", "update:table", "delete:table".
     fn grant_permission(&self, role_name: &str, permission: &str) -> PyResult<()> {
         let perm = parse_perm(permission)?;
-        self.require_db()?.grant_permission(role_name, perm).map_err(map_err)
+        self.require_db()?
+            .grant_permission(role_name, perm)
+            .map_err(map_err)
     }
 
     /// Revoke a permission from a role.
     fn revoke_permission(&self, role_name: &str, permission: &str) -> PyResult<()> {
         let perm = parse_perm(permission)?;
-        self.require_db()?.revoke_permission(role_name, perm).map_err(map_err)
+        self.require_db()?
+            .revoke_permission(role_name, perm)
+            .map_err(map_err)
     }
 
     // ── storage tuning & introspection (Tier 3) ─────────────────────────────
@@ -1593,6 +1729,19 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("StorageError", py.get_type::<StorageError>())?;
     m.add("IntegrityError", py.get_type::<IntegrityError>())?;
+    m.add("AuthRequiredError", py.get_type::<AuthRequiredError>())?;
+    m.add(
+        "AuthNotRequiredError",
+        py.get_type::<AuthNotRequiredError>(),
+    )?;
+    m.add(
+        "InvalidCredentialsError",
+        py.get_type::<InvalidCredentialsError>(),
+    )?;
+    m.add(
+        "PermissionDeniedError",
+        py.get_type::<PermissionDeniedError>(),
+    )?;
 
     set_code(m, "ValidationError", "VALIDATION")?;
     set_code(m, "DuplicateError", "DUPLICATE")?;
@@ -1603,6 +1752,10 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     set_code(m, "TriggerValidationError", "TRIGGER_VALIDATION")?;
     set_code(m, "StorageError", "STORAGE")?;
     set_code(m, "IntegrityError", "INTEGRITY")?;
+    set_code(m, "AuthRequiredError", "AUTH_REQUIRED")?;
+    set_code(m, "AuthNotRequiredError", "AUTH_NOT_REQUIRED")?;
+    set_code(m, "InvalidCredentialsError", "INVALID_CREDENTIALS")?;
+    set_code(m, "PermissionDeniedError", "PERMISSION_DENIED")?;
 
     Ok(())
 }

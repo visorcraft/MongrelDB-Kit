@@ -26,6 +26,7 @@ pub use db::{
 pub use error::{KitError, Result};
 pub use migrate::migrate;
 pub use mongreldb_core::auth::{Permission, RoleEntry, UserEntry};
+pub use mongreldb_core::auth_state::{AuthState, RequiredPermission, TableAuthChecker};
 pub use mongreldb_core::cache::CacheStats;
 pub use mongreldb_core::{IndexBuildPolicy, TriggerConfig};
 pub use query::JoinRow;
