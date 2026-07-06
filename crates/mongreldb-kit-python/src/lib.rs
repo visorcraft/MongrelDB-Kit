@@ -276,6 +276,11 @@ impl PyDatabase {
             .map_err(map_err)
     }
 
+    /// Disable require_auth, reverting to credentialless mode (recovery).
+    fn disable_auth(&self) -> PyResult<()> {
+        self.require_db()?.disable_auth().map_err(map_err)
+    }
+
     /// Returns True if this database has require_auth = true.
     fn require_auth_enabled(&self) -> PyResult<bool> {
         Ok(self.require_db()?.require_auth_enabled())

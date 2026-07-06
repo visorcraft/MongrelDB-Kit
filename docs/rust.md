@@ -498,6 +498,38 @@ daemon's Bearer + Basic auth modes) is documented in the engine
 guide. The Kit CLI exposes the same operations as
 [`user` and `role` subcommands](./cli.md#user--manage-catalog-users).
 
+### Credential enforcement
+
+A database with `require_auth` set rejects every open that does not supply
+valid credentials. Use the credentialed constructors to create or open such a
+database, and `enable_auth`/`disable_auth` to flip the flag in code.
+
+```rust
+use mongreldb_kit::Database;
+
+// Create a new database with require_auth on, bootstrapping the first admin.
+let db = Database::create_with_credentials(
+    "./store.kitdb",
+    schema,
+    "alice",
+    "s3cret-pw",
+)?;
+
+// Open an existing require_auth database.
+let db = Database::open_with_credentials("./store.kitdb", "alice", "s3cret-pw")?;
+
+assert!(db.require_auth_enabled());
+
+// Turn require_auth on for an existing credentialless database.
+db.enable_auth("alice", "s3cret-pw")?;
+
+// Recovery: clear require_auth (needs an open handle).
+db.disable_auth()?;
+```
+
+The full model and recovery flow are documented in the engine
+[credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md).
+
 ## Running this example
 
 ```sh

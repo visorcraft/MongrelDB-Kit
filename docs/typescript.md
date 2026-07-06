@@ -388,6 +388,34 @@ daemon's Bearer + Basic auth modes) is documented in the engine
 guide. The Kit CLI exposes the same operations as
 [`user` and `role` subcommands](./cli.md#user--manage-catalog-users).
 
+### Credential enforcement
+
+A database with `require_auth` set rejects every open that does not supply valid
+credentials. Use the credentialed constructors to open or create such a
+database, and the `enableAuth`/`disableAuth` helpers to flip the flag in code.
+`requireAuthEnabled()` reports the current state.
+
+```ts
+// Create a new database with require_auth on, bootstrapping the first admin.
+const db = KitDatabase.createWithCredentialsSync('./app-data', schema, 'alice', 's3cret-pw');
+
+// Open an existing require_auth database.
+const db2 = KitDatabase.openSync('./app-data', schema, {
+  credentials: { username: 'alice', password: 's3cret-pw' },
+});
+
+console.log(db.requireAuthEnabled()); // true
+
+// Turn require_auth on for an existing credentialless database.
+db.enableAuth('alice', 's3cret-pw');
+
+// Recovery: clear require_auth (needs an open handle).
+db.disableAuth();
+```
+
+The full model and recovery flow are documented in the engine
+[credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md).
+
 ## Running this example
 
 Save the file as `kit-demo.ts` and run it with Node 22+:

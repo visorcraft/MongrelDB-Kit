@@ -56,6 +56,8 @@ the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 | `index create <path> <table> <name> --column <col> [--kind ...]` \| `index drop <path> <name>` | Create/drop a secondary index (`--kind`: `bitmap`/`fm`/`ann`/`sparse`/`brin`) |
 | `user create\|drop\|passwd\|verify\|admin\|list` | Manage catalog users (Argon2id-hashed passwords) |
 | `role create\|drop\|list\|grant\|revoke\|allow\|deny` | Manage roles and table-level permissions |
+| `auth enable <path> --admin-user <user> --admin-password <pw>` | Enable `require_auth` on an existing credentialless database |
+| `auth disable-offline <path> [--passphrase <pw>] [--yes]` | Disable `require_auth` (offline recovery) |
 
 `mongreldb-kit --help` and `mongreldb-kit <command> --help` print the same
 information at the terminal.
@@ -70,6 +72,21 @@ application that opens it with a `Schema`).
 mongreldb-kit init ./store.kitdb
 # initialized ./store.kitdb
 ```
+
+To create the database with credential enforcement from the start, pass
+`--require-auth` with the bootstrap admin's credentials. The admin user is
+created (Argon2id-hashed, flagged admin) and the database is marked
+`require_auth`, so all subsequent opens must supply credentials:
+
+```sh
+mongreldb-kit init ./store.kitdb \
+  --require-auth --admin-user alice --admin-password 's3cret-pw'
+# initialized ./store.kitdb (require_auth enabled, admin user 'alice')
+```
+
+See the engine
+[credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md)
+for the full model.
 
 ## check
 
@@ -533,6 +550,52 @@ mongreldb-kit role drop   ./store.kitdb analyst
 > The same operations are available via SQL DDL (`CREATE USER`, `GRANT`, …)
 > through `mongreldb-kit sql`, which is convenient for batching auth changes
 > with schema changes in a migration.
+
+## auth enable / disable-offline — credential enforcement
+
+`auth enable` turns on `require_auth` for an existing credentialless database:
+it bootstraps the first admin user (Argon2id-hashed, admin flag set) and flips
+the database's `require_auth` bit. After this, every open must supply valid
+credentials or it is rejected.
+
+```sh
+mongreldb-kit auth enable ./store.kitdb --admin-user alice --admin-password 's3cret-pw'
+# require_auth enabled on ./store.kitdb (admin user 'alice')
+```
+
+`auth disable-offline` is the recovery path for when credentials are lost — it
+clears `require_auth` directly on the catalog without authenticating. It will
+prompt for confirmation unless `--yes` is given; `--passphrase` decrypts an
+encrypted catalog when applicable.
+
+```sh
+mongreldb-kit auth disable-offline ./store.kitdb            # prompts to confirm
+mongreldb-kit auth disable-offline ./store.kitdb --yes      # skip the prompt
+```
+
+Both open the catalog directly (no daemon required). Once `require_auth` is
+enabled, the standard open/create commands and the language bindings must pass
+`--user`/`--password` (or the language equivalents) or they will fail with an
+auth error. See the engine
+[credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md)
+for the full model and recovery flow.
+
+## Global auth flags
+
+Several commands accept credentials so they can open a `require_auth` database:
+
+| Flag | Purpose |
+| --- | --- |
+| `--user <user>` | Catalog username to authenticate as |
+| `--password <pw>` | Password for `--user` (passed literally on the command line) |
+| `--password-stdin` | Read the password from stdin instead of `--password` (avoids leaking it in shell history / process lists) |
+
+```sh
+mongreldb-kit query ./store.kitdb users --user alice --password 's3cret-pw'
+echo 's3cret-pw' | mongreldb-kit query ./store.kitdb users --user alice --password-stdin
+```
+
+Prefer `--password-stdin` in scripts and CI.
 
 ## Notes
 

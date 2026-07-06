@@ -378,6 +378,13 @@ impl Database {
             .map_err(KitError::from)
     }
 
+    /// Disable `require_auth`, reverting to credentialless mode. The recovery
+    /// path — requires an open (already-authenticated) handle. Users and roles
+    /// are preserved but no longer enforced.
+    pub fn disable_auth(&self) -> Result<()> {
+        self.inner.disable_auth().map_err(KitError::from)
+    }
+
     /// Returns `true` if this database has `require_auth = true`.
     pub fn require_auth_enabled(&self) -> bool {
         self.inner.require_auth_enabled()

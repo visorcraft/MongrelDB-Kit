@@ -157,6 +157,12 @@ class Database:
         """
         self._handle.enable_auth(admin_username, admin_password)
 
+    def disable_auth(self) -> None:
+        """Disable ``require_auth``, reverting to credentialless mode (recovery).
+        Users and roles are preserved but no longer enforced.
+        """
+        self._handle.disable_auth()
+
     def require_auth_enabled(self) -> bool:
         """Returns ``True`` if this database has ``require_auth = true``."""
         return self._handle.require_auth_enabled()

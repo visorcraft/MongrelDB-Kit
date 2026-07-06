@@ -113,6 +113,7 @@ type MongrelDatabase = NativeDatabase & {
 	revokePermission(roleName: string, permission: string): void;
 	// Credential enforcement (NAPI addon methods)
 	enableAuth(adminUsername: string, adminPassword: string): void;
+	disableAuth(): void;
 	requireAuthEnabled(): boolean;
 	refreshPrincipal(): void;
 };
@@ -1121,6 +1122,12 @@ export class KitDatabase {
 	 * admin principal on this handle. */
 	enableAuth(adminUsername: string, adminPassword: string): void {
 		this.db.enableAuth(adminUsername, adminPassword);
+	}
+
+	/** Disable `require_auth`, reverting to credentialless mode (recovery).
+	 * Users and roles are preserved but no longer enforced. */
+	disableAuth(): void {
+		this.db.disableAuth();
 	}
 
 	/** Returns `true` if this database has `require_auth = true`. */

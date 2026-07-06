@@ -55,6 +55,16 @@ Monitor these signals:
 - Do not expose `__kit_` tables through application APIs.
 - Validate any use of raw escape hatches (`nativeDb`, `db.inner`, `db._handle`).
 - Rotate secrets only when the kit explicitly supports re-encryption.
+- Enable credential enforcement (`require_auth`) on production databases so
+  every open must authenticate — create or enable it with a bootstrap admin
+  (`auth enable`, or `--require-auth --admin-user --admin-password` on `init`).
+  Once enabled, store the admin credentials offline for recovery; the only
+  way back to a credentialless database is the offline
+  `auth disable-offline` path. The `_meta/` table namespace (catalog users,
+  roles, schema) is the enforcement boundary — application tables cannot bypass
+  it even via raw escape hatches. See the engine
+  [credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md)
+  for the full model.
 - For the HTTP daemon, start with `--auth-token <token>` (Bearer) and/or
   `--auth-users` (HTTP Basic against catalog users). Create the first admin
   user before enabling `--auth-users` — see the engine
