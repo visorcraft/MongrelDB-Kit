@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ColumnType, ConditionKind } from '@visorcraft/mongreldb/native.js';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, real, json, index, unique, foreignKey } from './schema.js';
+import { Schema, table, int, text, real, json, timestamp, date, index, unique, foreignKey } from './schema.js';
 import { sequenceDefault } from './defaults.js';
 import {
 	migrate,
@@ -843,6 +843,48 @@ describe('migration ops', () => {
 
 			const row = db.insertInto(widgetsV2).values({ name: 'a' }).executeSync();
 			expect(row.id).toBe(1n);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('creates timestamp and date columns as Bytes so inserts round-trip', () => {
+		const events = table('events', {
+			columns: [
+				int('id', { primaryKey: true }),
+				timestamp('created_at', { nullable: false }),
+				date('event_date', { nullable: false })
+			],
+			primaryKey: ['id']
+		});
+
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([]));
+		try {
+			const migrations: Migration[] = [
+				{
+					version: 1,
+					name: 'create_events',
+					up: (ctx) => {
+						ctx.ensureTable(events);
+					}
+				}
+			];
+
+			db.migrateSync(new Schema([events]), migrations);
+
+			const createdAt = '2026-07-06T12:34:56.789Z';
+			const eventDate = '2026-07-06';
+			const row = db
+				.insertInto(events)
+				.values({ id: 1n, created_at: createdAt, event_date: eventDate })
+				.executeSync();
+			expect(row.created_at).toBe(createdAt);
+			expect(row.event_date).toBe(eventDate);
+
+			const selected = db.selectFrom(events).executeSync();
+			expect(selected).toEqual([{ id: 1n, created_at: createdAt, event_date: eventDate }]);
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });

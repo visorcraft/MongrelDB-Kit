@@ -180,12 +180,15 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'bool':
 			return ColumnType.Bool;
 		case 'int64':
-		case 'timestamp':
 			return ColumnType.Int64;
 		case 'float64':
 			return ColumnType.Float64;
+		case 'timestamp':
 		case 'date':
-			return ColumnType.Date32;
+		case 'text':
+		case 'bytes':
+		case 'json':
+			return ColumnType.Bytes;
 		case 'date64':
 			return ColumnType.Date64;
 		case 'time64':
@@ -193,17 +196,13 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'interval':
 			return ColumnType.Interval;
 		case 'decimal128':
-			case 'uuid':
-				return ColumnType.Uuid;
-			case 'json_native':
-				return ColumnType.Json;
-			case 'array':
-				return ColumnType.Array;
 			return ColumnType.Decimal128;
-		case 'text':
-		case 'bytes':
-		case 'json':
-			return ColumnType.Bytes;
+		case 'uuid':
+			return ColumnType.Uuid;
+		case 'json_native':
+			return ColumnType.Json;
+		case 'array':
+			return ColumnType.Array;
 		case 'embedding':
 			return ColumnType.Embedding;
 		case 'sparse':
@@ -523,7 +522,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.20.1';
+	return '0.20.3';
 }
 
 function makeContext(kit: KitDatabase): MigrationContext {

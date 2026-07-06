@@ -13,12 +13,16 @@ from mongreldb_kit import (
     ForeignKeyError,
     RestrictError,
     bool_,
+    date,
+    date64,
+    datetime,
     fk,
     float_,
     index,
     int,
     table,
     text,
+    timestamp,
     unique,
 )
 
@@ -99,6 +103,52 @@ def test_create_open_and_crud():
     with db2.begin() as txn:
         row = txn.get_by_pk("users", 1)
         assert row["name"] == "Alice Smith"
+
+
+def test_timestamp_and_date_columns_round_trip():
+    path = tmp_db()
+    schema = {
+        "tables": [
+            table(
+                name="events",
+                id=1,
+                columns=[
+                    int("id", 1, primary_key=True),
+                    timestamp("created_at", 2),
+                    datetime("occurred_at", 3),
+                    date("event_date", 4),
+                    date64("logged_at", 5),
+                ],
+                primary_key="id",
+            )
+        ]
+    }
+
+    db = Database.create(path, schema)
+    with db.begin() as txn:
+        row = txn.insert(
+            "events",
+            {
+                "id": 1,
+                "created_at": 1751802896789000000,
+                "occurred_at": "2026-07-06T12:34:56Z",
+                "event_date": "2026-07-06",
+                "logged_at": 1751750400000,
+            },
+        )
+        assert row["created_at"] == 1751802896789000000
+        assert row["occurred_at"] == "2026-07-06T12:34:56Z"
+        assert row["event_date"] == "2026-07-06"
+        assert row["logged_at"] == 1751750400000
+        txn.commit()
+
+    with db.begin() as txn:
+        rows = txn.select("events")
+        assert len(rows) == 1
+        assert rows[0]["created_at"] == 1751802896789000000
+        assert rows[0]["occurred_at"] == "2026-07-06T12:34:56Z"
+        assert rows[0]["event_date"] == "2026-07-06"
+        assert rows[0]["logged_at"] == 1751750400000
 
 
 def test_select_filters_and_orders():
