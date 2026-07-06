@@ -127,7 +127,14 @@ they are thin wrappers over the generic `column()`:
 | `text(name, opts?)` | `text` | `string` |
 | `timestamp(name, opts?)` | `timestamp` | `string` (ISO 8601) |
 | `date(name, opts?)` | `date` | `string` (`YYYY-MM-DD`) |
+| `date64(name, opts?)` | `date64` | `string` (ms precision) |
+| `time64(name, opts?)` | `time64` | `string` (ns time-of-day) |
+| `intervalCol(name, opts?)` | `interval` | `{ months, days, nanos }` |
+| `decimal128(name, opts?)` | `decimal128` | `string` (exact decimal) |
+| `uuid(name, opts?)` | `uuid` | `string` (RFC 4122 hex) |
 | `json(name, opts?)` | `json` | `unknown` — stored as text; see below |
+| `jsonNative(name, opts?)` | `json_native` | `unknown` — stored as native JSON |
+| `arrayCol(name, opts?)` | `array` | `unknown[]` — variable-length array |
 | `blob(name, opts?)` | `bytes` | inferred `unknown`; runtime value is `Uint8Array` |
 | `column(name, storageType, opts?)` | any of the above | per storage type |
 

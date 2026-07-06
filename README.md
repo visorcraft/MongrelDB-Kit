@@ -19,7 +19,7 @@ The repository also ships the `mongreldb-kit` CLI for schema validation, migrati
 
 ## What It Provides
 
-- Schema helpers for typed tables, stable table/column ids, defaults, indexes, checks, unique constraints, and foreign keys.
+- Schema helpers for typed tables, stable table/column ids, defaults, indexes, checks, unique constraints, and foreign keys. Full type set: int64, float64, bool, text, bytes (BLOB), JSON, timestamp, date, date64, time64, interval, decimal128, UUID, JSON (native), and array columns.
 - Synchronous TypeScript CRUD/query builder with predicates, ordering, projections, aggregates, joins, subqueries, CTEs, batch inserts, updates, and deletes.
 - Rust and Python APIs backed by the same Rust core and verified with cross-language conformance fixtures.
 - Migration runner with content-addressed checksums, stored schema catalog, table renames, and SQL views.
