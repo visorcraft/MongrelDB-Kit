@@ -14,7 +14,10 @@ export type ColumnStorageType =
 	| 'json'
 	| 'embedding'
 	| 'sparse'
-	| 'decimal128';
+	| 'decimal128'
+	| 'uuid'
+	| 'json_native'
+	| 'array';
 
 export type PkValue = string | bigint | (string | bigint | null)[];
 
@@ -106,6 +109,9 @@ type ApplicationTypeMap = {
 	time64: string;
 	interval: { months: number; days: number; nanos: number };
 	decimal128: string;
+	uuid: string;
+	json_native: unknown;
+	array: unknown[];
 	text: string;
 	bytes: unknown;
 	json: unknown;

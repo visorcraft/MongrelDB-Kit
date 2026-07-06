@@ -104,7 +104,7 @@ fn parse_cell(raw: &str, ty: ColumnType) -> Result<Value> {
         | ColumnType::Date64
         | ColumnType::Time64
         | ColumnType::Interval
-        | ColumnType::Decimal128 => Value::String(text),
+        | ColumnType::Decimal128 | ColumnType::Uuid | ColumnType::JsonNative | ColumnType::Array => Value::String(text),
         ColumnType::Bytes | ColumnType::Json | ColumnType::Embedding | ColumnType::Sparse => {
             serde_json::from_str(&text).unwrap_or(Value::String(text))
         }

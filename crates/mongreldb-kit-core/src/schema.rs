@@ -27,6 +27,12 @@ pub enum ColumnType {
     Time64,
     Interval,
     Decimal128,
+    /// RFC 4122 UUID (16 bytes, big-endian).
+    Uuid,
+    /// Native JSON value (stored as typed bytes).
+    JsonNative,
+    /// Variable-length array of homogeneous values.
+    Array,
     /// A dense float32 vector for nearest-neighbour (ANN) search. The dimension
     /// is carried on the column as `embedding_dim`.
     Embedding,

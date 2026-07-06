@@ -109,6 +109,9 @@ pub(crate) fn to_core_type(ty: ColumnType) -> TypeId {
             precision: 38,
             scale: 2,
         },
+        ColumnType::Uuid => TypeId::Uuid,
+        ColumnType::JsonNative => TypeId::Json,
+        ColumnType::Array => TypeId::Array { element_type: 0 },
         // Dimension is filled from the column's `embedding_dim` in
         // `to_core_schema`; a bare type has no dimension context.
         ColumnType::Embedding => TypeId::Embedding { dim: 0 },

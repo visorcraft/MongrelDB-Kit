@@ -193,6 +193,12 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'interval':
 			return ColumnType.Interval;
 		case 'decimal128':
+			case 'uuid':
+				return ColumnType.Uuid;
+			case 'json_native':
+				return ColumnType.Json;
+			case 'array':
+				return ColumnType.Array;
 			return ColumnType.Decimal128;
 		case 'text':
 		case 'bytes':

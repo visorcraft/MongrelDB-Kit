@@ -1361,7 +1361,7 @@ fn ts_type(ty: ColumnType) -> &'static str {
         | ColumnType::Date64
         | ColumnType::Time64
         | ColumnType::Interval
-        | ColumnType::Decimal128 => "string",
+        | ColumnType::Decimal128 | ColumnType::Uuid | ColumnType::JsonNative | ColumnType::Array => "string",
         ColumnType::Bytes => "Uint8Array",
         ColumnType::Json => "unknown",
         ColumnType::Embedding => "number[]",

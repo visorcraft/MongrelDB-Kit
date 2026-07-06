@@ -265,7 +265,7 @@ fn type_check(table: &Table, col: &Column, value: &Value) -> Result<(), Validati
         | ColumnType::Date64
         | ColumnType::Time64
         | ColumnType::Interval
-        | ColumnType::Decimal128 => value.is_string() || value.is_number(),
+        | ColumnType::Decimal128 | ColumnType::Uuid | ColumnType::JsonNative | ColumnType::Array => value.is_string() || value.is_number() || value.is_array(),
         ColumnType::Embedding => value
             .as_array()
             .is_some_and(|a| a.iter().all(|v| v.is_number())),

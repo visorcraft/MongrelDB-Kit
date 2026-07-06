@@ -935,3 +935,18 @@ def _uq_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     raise TypeError(f"expected UniqueConstraint or dict, got {type(value).__name__}")
+
+
+def uuid(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
+    """Declare a UUID column (RFC 4122, 16-byte fixed-width)."""
+    return column(name, id, "uuid", **kwargs)
+
+
+def json_native(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
+    """Declare a native JSON column (stored as typed bytes)."""
+    return column(name, id, "json_native", **kwargs)
+
+
+def array_col(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
+    """Declare a variable-length array column."""
+    return column(name, id, "array", **kwargs)

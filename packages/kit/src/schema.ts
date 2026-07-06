@@ -154,6 +154,30 @@ export function decimal128<const TName extends string, const TOpts extends Colum
 	return column(name, 'decimal128', opts);
 }
 
+/** RFC 4122 UUID (16 bytes, big-endian for sort order). */
+export function uuid<const TName extends string, const TOpts extends ColumnOptions = {}>(
+	name: TName,
+	opts?: TOpts
+): ColumnSpec<TName, 'uuid', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
+	return column(name, 'uuid', opts);
+}
+
+/** Native JSON value (parsed, validated, typed as JSON at the storage level). */
+export function jsonNative<const TName extends string, const TOpts extends ColumnOptions = {}>(
+	name: TName,
+	opts?: TOpts
+): ColumnSpec<TName, 'json_native', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
+	return column(name, 'json_native', opts);
+}
+
+/** Variable-length array of homogeneous values (e.g. int[], text[]). */
+export function arrayCol<const TName extends string, const TOpts extends ColumnOptions = {}>(
+	name: TName,
+	opts?: TOpts
+): ColumnSpec<TName, 'array', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
+	return column(name, 'array', opts);
+}
+
 /** A dense float-vector column of dimension `dim` for ANN (`annSearch`). */
 export function embedding<const TName extends string, const TOpts extends ColumnOptions = {}>(
 	name: TName,

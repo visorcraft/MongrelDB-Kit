@@ -123,6 +123,9 @@ export function packRows(table: TableSpec, rows: Record<string, unknown>[]): Buf
 				case 'time64':
 				case 'interval':
 				case 'decimal128':
+				case 'uuid':
+				case 'json_native':
+				case 'array':
 					// These types use the per-row insert path (toCells) for now;
 					// packing support will be added once the engine's bulk format
 					// encodes them natively. For now, throw with a clear message.
