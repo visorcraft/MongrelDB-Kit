@@ -14,5 +14,5 @@ resolver = "2"
 # one `mongreldb-core` type instance. `[patch.crates-io]` is stripped by
 # `cargo publish`, so published kits are unaffected.
 [patch.crates-io]
-mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.30.2" }
-mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.30.2" }
+mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.31.1" }
+mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.31.1" }

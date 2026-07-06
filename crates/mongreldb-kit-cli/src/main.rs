@@ -1361,7 +1361,10 @@ fn ts_type(ty: ColumnType) -> &'static str {
         | ColumnType::Date64
         | ColumnType::Time64
         | ColumnType::Interval
-        | ColumnType::Decimal128 | ColumnType::Uuid | ColumnType::JsonNative | ColumnType::Array => "string",
+        | ColumnType::Decimal128
+        | ColumnType::Uuid
+        | ColumnType::JsonNative
+        | ColumnType::Array => "string",
         ColumnType::Bytes => "Uint8Array",
         ColumnType::Json => "unknown",
         ColumnType::Embedding => "number[]",
@@ -1428,7 +1431,10 @@ fn rust_type(ty: ColumnType) -> &'static str {
         | ColumnType::Date64
         | ColumnType::Time64
         | ColumnType::Interval
-        | ColumnType::Decimal128 => "String",
+        | ColumnType::Decimal128
+        | ColumnType::Uuid
+        | ColumnType::JsonNative
+        | ColumnType::Array => "String",
         ColumnType::Bytes => "Vec<u8>",
         ColumnType::Json => "serde_json::Value",
         ColumnType::Embedding => "Vec<f32>",
@@ -1507,7 +1513,10 @@ fn python_type(ty: ColumnType) -> &'static str {
         | ColumnType::Date64
         | ColumnType::Time64
         | ColumnType::Interval
-        | ColumnType::Decimal128 => "str",
+        | ColumnType::Decimal128
+        | ColumnType::Uuid
+        | ColumnType::JsonNative
+        | ColumnType::Array => "str",
         ColumnType::Bytes => "bytes",
         ColumnType::Json => "Any",
         ColumnType::Embedding => "list[float]",

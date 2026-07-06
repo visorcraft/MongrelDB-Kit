@@ -223,6 +223,12 @@ pub fn core_to_json(value: &CoreValue, ty: ColumnType) -> Result<Value> {
         ) => {
             serde_json::json!({ "months": months, "days": days, "nanos": nanos })
         }
+        (CoreValue::Uuid(b), _) => {
+            let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+            serde_json::Value::String(hex)
+        }
+        (CoreValue::Json(b), _) => serde_json::from_slice(b.as_slice())
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(b).into_owned())),
     })
 }
 
