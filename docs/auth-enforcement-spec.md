@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed (not yet implemented) |
+| **Status** | Approved — design finalized, implementation pending (Phase 1 next) |
 | **Spec ID** | `auth-enforcement` |
 | **Affects** | `mongreldb-core`, `mongreldb-query`, `mongreldb-server`, `mongreldb-node`, `mongreldb-kit`, `mongreldb-kit-python`, `mongreldb-kit-cli` |
 | **Default behavior** | Unchanged — databases remain credentialless and "create-and-go" by default |
@@ -467,43 +467,39 @@ The work is large; the phases are independently shippable.
 Each phase ends green (full gate) and can release independently. Phases 1–2
 land the engine feature behind Rust-only APIs; Phases 3–5 propagate it.
 
-## 9. Open questions
+## 9. Resolved decisions
 
-These need a decision before implementation, not during it:
+All five design questions are locked. Implementation must conform to these
+decisions; do not re-litigate them mid-implementation.
 
-1. **Procedure-level permissions.** Should `ProcedureEntry` gain a
-   `required_permission: Permission` field (defaulting to `All`) so
-   `call_procedure` can enforce something finer than "must have `All`"?
-   *Recommendation:* defer to v2; v1 requires `All` to call procedures on a
-   `require_auth` database, with a documented escape hatch (mark the
-   procedure `SECURITY DEFINER`-style in v2).
+1. **Procedure-level permissions — defer to v2.** v1 requires `All` to call
+   procedures on a `require_auth` database. A future `SECURITY DEFINER`-style
+   marker on `ProcedureEntry` can refine this; it is explicitly out of scope
+   for the initial implementation.
 
-2. **`All` semantics under enforcement.** Today `Permission::All` satisfies
-   every check via `satisfies()`. Should `All`-but-not-`Admin` be possible
-   (i.e. a role that can do everything except create users)? Today the only
-   way to get admin-bypass is `is_admin = true`; `All` does not grant admin.
-   *Recommendation:* keep as-is — the four-way split (`All`, `Ddl`, `Admin`,
-   table-level) is already enough for most deployments, and `is_admin`
-   remains the only superuser flag.
+2. **`All` does not imply `Admin`.** Keep the current semantics: the
+   four-way split (`All`, `Ddl`, `Admin`, table-level) is sufficient, and
+   `Principal::is_admin` remains the sole superuser short-circuit. A role
+   granted `All` can do every table/DDL operation but cannot create users
+   or grant permissions — only `is_admin = true` grants that.
 
-3. **Should credentialed open cache the principal indefinitely, or
-   re-verify periodically?** v1 caches once (cheap checks, matches the
-   encryption-KEK model). A "re-verify on every transaction" mode would
-   catch revoked users faster at ~50ms/txn cost. *Recommendation:* v1
-   caches; add a `Database::refresh_principal()` method for explicit
-   re-verification, callable by long-lived daemons after a `REVOKE`.
+3. **Cache the principal once at open; re-verify explicitly.** v1 caches
+   the `Principal` for the lifetime of the open handle (cheap per-op checks,
+   matches the encryption-KEK model). Long-lived daemons call the new
+   `Database::refresh_principal()` after a `REVOKE` to pick up the change;
+   there is no automatic periodic re-verification and no per-transaction
+   Argon2id cost.
 
-4. **CLI: should `--password` read from a tty prompt when omitted, or only
-   from the flag/env?** *Recommendation:* support `--password-stdin` and
-   `MONGREL_PASSWORD` env var; never prompt (CLI is often scripted). Flag
-   wins, then env, then stdin.
+4. **CLI credentials: flag, then env, then stdin — never a TTY prompt.**
+   `--password <pw>` takes precedence; otherwise `MONGREL_PASSWORD`; otherwise
+   `--password-stdin` reads one line from stdin. The CLI never prompts
+   interactively because it is typically scripted.
 
-5. **Should `require_auth` databases refuse to open via the daemon's
-   token-only mode?** I.e., is a Bearer token sufficient, or must every
-   request also map to a catalog user? *Recommendation:* token-only is
-   insufficient for a `require_auth` database — the daemon must run with
-   `--auth-users` (or both) so each request resolves a real `Principal`.
-   Documented as a startup check.
+5. **Token-only daemon mode is insufficient for a `require_auth` database.**
+   The daemon must run with `--auth-users` (or `--auth-users` plus
+   `--auth-token`) so every request resolves to a real catalog `Principal`.
+   `--auth-token` alone is rejected at startup when the catalog has
+   `require_auth = true`, with a clear error pointing at `--auth-users`.
 
 ## 10. Out-of-scope follow-ups (parking lot)
 
