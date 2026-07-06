@@ -1,6 +1,6 @@
 [package]
 name = "mongreldb-kit"
-version = "0.22.0"
+version = "0.23.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Schema-aware, storage-backed application persistence layer for MongrelDB with migrations, relational constraints, and a query builder."
@@ -10,11 +10,11 @@ categories = ["database"]
 
 [dependencies]
 bincode = "1"
-mongreldb-kit-core = { path = "../mongreldb-kit-core", version = "0.22.0" }
-mongreldb-core = { version = "0.34.0", features = ["encryption"] }
+mongreldb-kit-core = { path = "../mongreldb-kit-core", version = "0.23.0" }
+mongreldb-core = { version = "0.35.0", features = ["encryption"] }
 # SQL frontend — powers `Database::sql()` / `sql_arrow()` (read path, views,
 # `ANALYZE`/`VACUUM`-equivalent helpers). Published from the engine repo.
-mongreldb-query = "0.34.0"
+mongreldb-query = "0.35.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"

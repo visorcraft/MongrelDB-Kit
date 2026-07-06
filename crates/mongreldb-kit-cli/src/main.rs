@@ -200,6 +200,18 @@ impl From<CliMigration> for Migration {
 #[command(name = "mongreldb-kit")]
 #[command(about = "MongrelDB Kit command-line interface")]
 struct Cli {
+    /// Username for credentialed databases (require_auth = true).
+    #[arg(long, global = true, env = "MONGREL_USER")]
+    user: Option<String>,
+
+    /// Password for credentialed databases. Used with --user.
+    #[arg(long, global = true, env = "MONGREL_PASSWORD")]
+    password: Option<String>,
+
+    /// Read the password from stdin (one line). Requires --user.
+    #[arg(long, global = true)]
+    password_stdin: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -207,7 +219,18 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Create a new database directory.
-    Init { path: PathBuf },
+    Init {
+        path: PathBuf,
+        /// Create with require_auth = true and an initial admin user.
+        #[arg(long)]
+        require_auth: bool,
+        /// Admin username (requires --require-auth).
+        #[arg(long, requires = "require_auth")]
+        admin_user: Option<String>,
+        /// Admin password (requires --require-auth). Also via MONGREL_PASSWORD.
+        #[arg(long, requires = "require_auth", env = "MONGREL_PASSWORD")]
+        admin_password: Option<String>,
+    },
     /// Open a database and verify internal tables exist.
     Check { path: PathBuf },
     /// Open a database and run an integrity check.
@@ -319,6 +342,9 @@ enum Command {
     /// Role and permission commands.
     #[command(subcommand)]
     Role(RoleCmd),
+    /// Auth enforcement commands (enable/disable require_auth).
+    #[command(subcommand)]
+    Auth(AuthCmd),
 }
 
 #[derive(Subcommand)]
@@ -415,6 +441,28 @@ enum RoleCmd {
 }
 
 #[derive(Subcommand)]
+enum AuthCmd {
+    /// Disable require_auth on a database offline (recovery).
+    DisableOffline {
+        path: PathBuf,
+        /// Encryption passphrase. Also via MONGREL_PASSPHRASE.
+        #[arg(long, env = "MONGREL_PASSPHRASE")]
+        passphrase: Option<String>,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Enable require_auth on an existing credentialless database.
+    Enable {
+        path: PathBuf,
+        #[arg(long)]
+        admin_user: String,
+        /// Admin password. Also via MONGREL_PASSWORD.
+        #[arg(long, env = "MONGREL_PASSWORD")]
+        admin_password: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum SchemaCmd {
     /// Print the stored schema catalog JSON.
     Print { path: PathBuf },
@@ -479,14 +527,62 @@ enum ProcedureCmd {
     },
 }
 
+#[derive(Clone)]
+struct Credentials {
+    user: String,
+    password: String,
+}
+
+/// Read an environment variable, returning `None` for empty strings too.
+fn resolve_credentials(cli: &Cli) -> Result<Option<Credentials>> {
+    let user = match &cli.user {
+        Some(u) => u.clone(),
+        None => return Ok(None),
+    };
+    // clap's env = attribute already resolved MONGREL_PASSWORD into
+    // cli.password; stdin is the fallback when neither flag nor env is set.
+    let password = if let Some(pw) = &cli.password {
+        pw.clone()
+    } else if cli.password_stdin {
+        let mut line = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut line)
+            .context("failed to read password from stdin")?;
+        line.trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string()
+    } else {
+        bail!("--user requires --password, MONGREL_PASSWORD, or --password-stdin");
+    };
+    Ok(Some(Credentials { user, password }))
+}
+
+fn open_db(path: &Path, creds: Option<&Credentials>) -> Result<Database> {
+    match creds {
+        Some(c) => Database::open_with_credentials(path, &c.user, &c.password)
+            .context("failed to open database with credentials"),
+        None => Database::open(path).context("failed to open database"),
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let creds = resolve_credentials(&cli)?;
     match cli.command {
-        Command::Init { path } => cmd_init(&path),
-        Command::Check { path } => cmd_check(&path),
-        Command::Doctor { path } => cmd_doctor(&path),
-        Command::Truncate { path, table } => cmd_truncate(&path, &table),
-        Command::Get { path, table, pk } => cmd_get(&path, &table, &pk),
+        Command::Init {
+            path,
+            require_auth,
+            admin_user,
+            admin_password,
+        } => cmd_init(
+            &path,
+            require_auth,
+            admin_user.as_deref(),
+            admin_password.as_deref(),
+        ),
+        Command::Check { path } => cmd_check(&path, creds.as_ref()),
+        Command::Doctor { path } => cmd_doctor(&path, creds.as_ref()),
+        Command::Truncate { path, table } => cmd_truncate(&path, &table, creds.as_ref()),
+        Command::Get { path, table, pk } => cmd_get(&path, &table, &pk, creds.as_ref()),
         Command::Query {
             path,
             table,
@@ -505,62 +601,79 @@ fn main() -> Result<()> {
             offset,
             columns,
             distinct,
+            creds.as_ref(),
         ),
-        Command::Insert { path, table, row } => cmd_insert(&path, &table, &row),
+        Command::Insert { path, table, row } => cmd_insert(&path, &table, &row, creds.as_ref()),
         Command::Update {
             path,
             table,
             pk,
             patch,
-        } => cmd_update(&path, &table, &pk, &patch),
-        Command::Delete { path, table, pk } => cmd_delete(&path, &table, &pk),
+        } => cmd_update(&path, &table, &pk, &patch, creds.as_ref()),
+        Command::Delete { path, table, pk } => cmd_delete(&path, &table, &pk, creds.as_ref()),
         Command::Upsert {
             path,
             table,
             row,
             update,
-        } => cmd_upsert(&path, &table, &row, update),
+        } => cmd_upsert(&path, &table, &row, update, creds.as_ref()),
         Command::Count {
             path,
             table,
             filter,
-        } => cmd_count(&path, &table, filter.as_deref()),
+        } => cmd_count(&path, &table, filter.as_deref(), creds.as_ref()),
         Command::Schema(cmd) => match cmd {
-            SchemaCmd::Print { path } => cmd_schema_print(&path),
+            SchemaCmd::Print { path } => cmd_schema_print(&path, creds.as_ref()),
             SchemaCmd::Validate { schema } => cmd_schema_validate(&schema),
         },
         Command::Migrate(cmd) => match cmd {
-            MigrateCmd::Apply { path, migrations } => cmd_migrate_apply(&path, &migrations),
-            MigrateCmd::Status { path } => cmd_migrate_status(&path),
-            MigrateCmd::Plan { path, migrations } => cmd_migrate_plan(&path, &migrations),
-            MigrateCmd::DryRun { path, migrations } => cmd_migrate_plan(&path, &migrations),
+            MigrateCmd::Apply { path, migrations } => {
+                cmd_migrate_apply(&path, &migrations, creds.as_ref())
+            }
+            MigrateCmd::Status { path } => cmd_migrate_status(&path, creds.as_ref()),
+            MigrateCmd::Plan { path, migrations } => {
+                cmd_migrate_plan(&path, &migrations, creds.as_ref())
+            }
+            MigrateCmd::DryRun { path, migrations } => {
+                cmd_migrate_plan(&path, &migrations, creds.as_ref())
+            }
         },
-        Command::Diff { schema, path } => cmd_diff(&schema, &path),
+        Command::Diff { schema, path } => cmd_diff(&schema, &path, creds.as_ref()),
         Command::Generate(cmd) => match cmd {
-            GenerateCmd::Migration { schema, from } => cmd_generate_migration(&schema, &from),
+            GenerateCmd::Migration { schema, from } => {
+                cmd_generate_migration(&schema, &from, creds.as_ref())
+            }
             GenerateCmd::Types { schema, lang } => cmd_generate_types(&schema, &lang),
         },
         Command::Fixture(cmd) => match cmd {
-            FixtureCmd::Create { path, tables } => cmd_fixture_create(&path, &tables),
-            FixtureCmd::Load { path, fixture } => cmd_fixture_load(&path, &fixture),
+            FixtureCmd::Create { path, tables } => {
+                cmd_fixture_create(&path, &tables, creds.as_ref())
+            }
+            FixtureCmd::Load { path, fixture } => cmd_fixture_load(&path, &fixture, creds.as_ref()),
         },
         Command::Procedure(cmd) => match cmd {
-            ProcedureCmd::Install { path, procedure } => cmd_procedure_install(&path, &procedure),
-            ProcedureCmd::Drop { path, name } => cmd_procedure_drop(&path, &name),
-            ProcedureCmd::List { path } => cmd_procedure_list(&path),
-            ProcedureCmd::Describe { path, name } => cmd_procedure_describe(&path, &name),
+            ProcedureCmd::Install { path, procedure } => {
+                cmd_procedure_install(&path, &procedure, creds.as_ref())
+            }
+            ProcedureCmd::Drop { path, name } => cmd_procedure_drop(&path, &name, creds.as_ref()),
+            ProcedureCmd::List { path } => cmd_procedure_list(&path, creds.as_ref()),
+            ProcedureCmd::Describe { path, name } => {
+                cmd_procedure_describe(&path, &name, creds.as_ref())
+            }
             ProcedureCmd::Call { path, name, args } => {
-                cmd_procedure_call(&path, &name, args.as_deref())
+                cmd_procedure_call(&path, &name, args.as_deref(), creds.as_ref())
             }
         },
-        Command::Compact { path } => cmd_compact(&path),
-        Command::Analyze { path } => cmd_analyze(&path),
-        Command::Vacuum { path } => cmd_vacuum(&path),
-        Command::RenameTable { path, from, to } => cmd_rename_table(&path, &from, &to),
-        Command::Sql { path, statement } => cmd_sql(&path, &statement),
+        Command::Compact { path } => cmd_compact(&path, creds.as_ref()),
+        Command::Analyze { path } => cmd_analyze(&path, creds.as_ref()),
+        Command::Vacuum { path } => cmd_vacuum(&path, creds.as_ref()),
+        Command::RenameTable { path, from, to } => {
+            cmd_rename_table(&path, &from, &to, creds.as_ref())
+        }
+        Command::Sql { path, statement } => cmd_sql(&path, &statement, creds.as_ref()),
         Command::View(cmd) => match cmd {
-            ViewCmd::Create { path, view } => cmd_view_create(&path, &view),
-            ViewCmd::Drop { path, name } => cmd_view_drop(&path, &name),
+            ViewCmd::Create { path, view } => cmd_view_create(&path, &view, creds.as_ref()),
+            ViewCmd::Drop { path, name } => cmd_view_drop(&path, &name, creds.as_ref()),
         },
         Command::Index(cmd) => match cmd {
             IndexCmd::Create {
@@ -569,115 +682,147 @@ fn main() -> Result<()> {
                 name,
                 column,
                 kind,
-            } => cmd_index_create(&path, &table, &name, &column, &kind),
-            IndexCmd::Drop { path, name } => cmd_index_drop(&path, &name),
+            } => cmd_index_create(&path, &table, &name, &column, &kind, creds.as_ref()),
+            IndexCmd::Drop { path, name } => cmd_index_drop(&path, &name, creds.as_ref()),
         },
         Command::User(cmd) => match cmd {
             UserCmd::Create {
                 path,
                 username,
                 password,
-            } => cmd_user_create(&path, &username, &password),
-            UserCmd::Drop { path, username } => cmd_user_drop(&path, &username),
+            } => cmd_user_create(&path, &username, &password, creds.as_ref()),
+            UserCmd::Drop { path, username } => cmd_user_drop(&path, &username, creds.as_ref()),
             UserCmd::Passwd {
                 path,
                 username,
                 password,
-            } => cmd_user_passwd(&path, &username, &password),
+            } => cmd_user_passwd(&path, &username, &password, creds.as_ref()),
             UserCmd::Verify {
                 path,
                 username,
                 password,
-            } => cmd_user_verify(&path, &username, &password),
+            } => cmd_user_verify(&path, &username, &password, creds.as_ref()),
             UserCmd::Admin {
                 path,
                 username,
                 granted,
-            } => cmd_user_admin(&path, &username, granted),
-            UserCmd::List { path } => cmd_user_list(&path),
+            } => cmd_user_admin(&path, &username, granted, creds.as_ref()),
+            UserCmd::List { path } => cmd_user_list(&path, creds.as_ref()),
         },
         Command::Role(cmd) => match cmd {
-            RoleCmd::Create { path, name } => cmd_role_create(&path, &name),
-            RoleCmd::Drop { path, name } => cmd_role_drop(&path, &name),
-            RoleCmd::List { path } => cmd_role_list(&path),
+            RoleCmd::Create { path, name } => cmd_role_create(&path, &name, creds.as_ref()),
+            RoleCmd::Drop { path, name } => cmd_role_drop(&path, &name, creds.as_ref()),
+            RoleCmd::List { path } => cmd_role_list(&path, creds.as_ref()),
             RoleCmd::Grant {
                 path,
                 username,
                 role,
-            } => cmd_role_grant(&path, &username, &role),
+            } => cmd_role_grant(&path, &username, &role, creds.as_ref()),
             RoleCmd::Revoke {
                 path,
                 username,
                 role,
-            } => cmd_role_revoke(&path, &username, &role),
+            } => cmd_role_revoke(&path, &username, &role, creds.as_ref()),
             RoleCmd::Allow {
                 path,
                 role,
                 permission,
-            } => cmd_role_allow(&path, &role, &permission),
+            } => cmd_role_allow(&path, &role, &permission, creds.as_ref()),
             RoleCmd::Deny {
                 path,
                 role,
                 permission,
-            } => cmd_role_deny(&path, &role, &permission),
+            } => cmd_role_deny(&path, &role, &permission, creds.as_ref()),
+        },
+        Command::Auth(cmd) => match cmd {
+            AuthCmd::DisableOffline {
+                path,
+                passphrase,
+                yes,
+            } => cmd_auth_disable_offline(&path, passphrase.as_deref(), yes),
+            AuthCmd::Enable {
+                path,
+                admin_user,
+                admin_password,
+            } => cmd_auth_enable(&path, &admin_user, admin_password.as_deref()),
         },
     }
 }
 
-fn cmd_init(path: &Path) -> Result<()> {
+fn cmd_init(
+    path: &Path,
+    require_auth: bool,
+    admin_user: Option<&str>,
+    admin_password: Option<&str>,
+) -> Result<()> {
+    if require_auth {
+        let admin_user = admin_user.context("--admin-user is required with --require-auth")?;
+        let admin_password = admin_password
+            .context("--admin-password (or MONGREL_PASSWORD) is required with --require-auth")?;
+        let schema = Schema::new(Vec::new()).context("failed to build empty schema")?;
+        Database::create_with_credentials(path, schema, admin_user, admin_password)
+            .context("failed to create credentialed database")?;
+        println!(
+            "initialized {} (require_auth = true, admin user: {})",
+            path.display(),
+            admin_user
+        );
+        return Ok(());
+    }
+
     let schema = Schema::new(Vec::new()).context("failed to build empty schema")?;
     Database::create(path, schema).context("failed to create database")?;
     println!("initialized {}", path.display());
     Ok(())
 }
 
-fn cmd_check(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_check(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.check_internal_tables()
         .context("internal table check failed")?;
     println!("OK: {}", path.display());
     Ok(())
 }
 
-fn cmd_compact(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_compact(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let (compacted, skipped) = db.compact_all().context("compaction failed")?;
     println!("compacted {compacted} table(s), skipped {skipped}");
     Ok(())
 }
 
-fn cmd_analyze(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_analyze(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.analyze().context("analyze failed")?;
     println!("analyzed all tables");
     Ok(())
 }
 
-fn cmd_vacuum(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_vacuum(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let reclaimed = db.vacuum().context("vacuum failed")?;
     println!("reclaimed {reclaimed} run(s)");
     Ok(())
 }
 
-fn cmd_rename_table(path: &Path, from: &str, to: &str) -> Result<()> {
-    let mut db = Database::open(path).context("failed to open database")?;
+fn cmd_rename_table(path: &Path, from: &str, to: &str, creds: Option<&Credentials>) -> Result<()> {
+    let mut db = open_db(path, creds)?;
     db.rename_table(from, to)
         .context("failed to rename table")?;
     println!("renamed {from} -> {to}");
     Ok(())
 }
 
-fn cmd_sql(path: &Path, statement: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_sql(path: &Path, statement: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let rows = db.sql_rows(statement).context("failed to execute SQL")?;
     let values: Vec<Value> = rows.into_iter().map(Value::Object).collect();
     println!("{}", serde_json::to_string_pretty(&Value::Array(values))?);
     Ok(())
 }
 
-fn cmd_view_create(path: &Path, view_path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_view_create(path: &Path, view_path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let spec: ViewSpec = serde_json::from_reader(fs::File::open(view_path)?)
         .context("failed to read view JSON (expected {\"name\": ..., \"sql\": \"SELECT ...\"})")?;
     db.sql(&spec.create_sql())
@@ -686,16 +831,23 @@ fn cmd_view_create(path: &Path, view_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_view_drop(path: &Path, name: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_view_drop(path: &Path, name: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let sql = format!("DROP VIEW IF EXISTS {name}");
     db.sql(&sql).context("failed to drop view")?;
     println!("dropped view {name}");
     Ok(())
 }
 
-fn cmd_index_create(path: &Path, table: &str, name: &str, column: &str, kind: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_index_create(
+    path: &Path,
+    table: &str,
+    name: &str,
+    column: &str,
+    kind: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     // Map friendly kind aliases to the engine's `CREATE INDEX ... USING <kind>`
     // vocabulary (commands.rs `index_kind_from_sql`).
     let sql_kind = match kind {
@@ -712,8 +864,8 @@ fn cmd_index_create(path: &Path, table: &str, name: &str, column: &str, kind: &s
     Ok(())
 }
 
-fn cmd_index_drop(path: &Path, name: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_index_drop(path: &Path, name: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let sql = format!("DROP INDEX {name}");
     db.sql(&sql).context("failed to drop index")?;
     println!("dropped index {name}");
@@ -726,31 +878,46 @@ fn cmd_index_drop(path: &Path, name: &str) -> Result<()> {
 // `select:table` / `insert:table` / `all` / `ddl` / `admin` vocabulary as the
 // NAPI and Python bindings so the CLI, Kit, and language facades agree.
 
-fn cmd_user_create(path: &Path, username: &str, password: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_user_create(
+    path: &Path,
+    username: &str,
+    password: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.create_user(username, password)
         .context("failed to create user")?;
     println!("created user {username}");
     Ok(())
 }
 
-fn cmd_user_drop(path: &Path, username: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_user_drop(path: &Path, username: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.drop_user(username).context("failed to drop user")?;
     println!("dropped user {username}");
     Ok(())
 }
 
-fn cmd_user_passwd(path: &Path, username: &str, password: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_user_passwd(
+    path: &Path,
+    username: &str,
+    password: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.alter_user_password(username, password)
         .context("failed to change password")?;
     println!("password changed for {username}");
     Ok(())
 }
 
-fn cmd_user_verify(path: &Path, username: &str, password: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_user_verify(
+    path: &Path,
+    username: &str,
+    password: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     let ok = db
         .verify_user(username, password)
         .context("failed to verify user")?
@@ -764,60 +931,80 @@ fn cmd_user_verify(path: &Path, username: &str, password: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_user_admin(path: &Path, username: &str, granted: bool) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_user_admin(
+    path: &Path,
+    username: &str,
+    granted: bool,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.set_user_admin(username, granted)
         .context("failed to set admin flag")?;
     println!("admin={granted} for {username}");
     Ok(())
 }
 
-fn cmd_user_list(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_user_list(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let names = db.users();
     println!("{}", serde_json::to_string_pretty(&names)?);
     Ok(())
 }
 
-fn cmd_role_create(path: &Path, name: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_role_create(path: &Path, name: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.create_role(name).context("failed to create role")?;
     println!("created role {name}");
     Ok(())
 }
 
-fn cmd_role_drop(path: &Path, name: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_role_drop(path: &Path, name: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.drop_role(name).context("failed to drop role")?;
     println!("dropped role {name}");
     Ok(())
 }
 
-fn cmd_role_list(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_role_list(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let names = db.roles();
     println!("{}", serde_json::to_string_pretty(&names)?);
     Ok(())
 }
 
-fn cmd_role_grant(path: &Path, username: &str, role: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_role_grant(
+    path: &Path,
+    username: &str,
+    role: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.grant_role(username, role)
         .context("failed to grant role")?;
     println!("granted role {role} to {username}");
     Ok(())
 }
 
-fn cmd_role_revoke(path: &Path, username: &str, role: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_role_revoke(
+    path: &Path,
+    username: &str,
+    role: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.revoke_role(username, role)
         .context("failed to revoke role")?;
     println!("revoked role {role} from {username}");
     Ok(())
 }
 
-fn cmd_role_allow(path: &Path, role: &str, permission: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_role_allow(
+    path: &Path,
+    role: &str,
+    permission: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     let perm = parse_permission(permission)?;
     db.grant_permission(role, perm)
         .context("failed to grant permission")?;
@@ -825,8 +1012,13 @@ fn cmd_role_allow(path: &Path, role: &str, permission: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_role_deny(path: &Path, role: &str, permission: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_role_deny(
+    path: &Path,
+    role: &str,
+    permission: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     let perm = parse_permission(permission)?;
     db.revoke_permission(role, perm)
         .context("failed to revoke permission")?;
@@ -863,8 +1055,12 @@ fn parse_permission(s: &str) -> Result<Permission> {
     })
 }
 
-fn cmd_procedure_install(path: &Path, procedure_path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_procedure_install(
+    path: &Path,
+    procedure_path: &Path,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     let value: Value = serde_json::from_reader(fs::File::open(procedure_path)?)
         .context("failed to read procedure JSON")?;
     let spec = ProcedureSpec::new(value);
@@ -875,23 +1071,23 @@ fn cmd_procedure_install(path: &Path, procedure_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_procedure_drop(path: &Path, name: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_procedure_drop(path: &Path, name: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     db.drop_procedure(name)
         .context("failed to drop procedure")?;
     println!("dropped {name}");
     Ok(())
 }
 
-fn cmd_procedure_list(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_procedure_list(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let names: Vec<String> = db.raw().procedures().into_iter().map(|p| p.name).collect();
     println!("{}", serde_json::to_string_pretty(&names)?);
     Ok(())
 }
 
-fn cmd_procedure_describe(path: &Path, name: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_procedure_describe(path: &Path, name: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let proc = db
         .raw()
         .procedure(name)
@@ -900,8 +1096,13 @@ fn cmd_procedure_describe(path: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_procedure_call(path: &Path, name: &str, args: Option<&str>) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_procedure_call(
+    path: &Path,
+    name: &str,
+    args: Option<&str>,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     let args: Map<String, Value> = match args {
         Some(args) => serde_json::from_str(args).context("failed to parse args JSON")?,
         None => Map::new(),
@@ -913,8 +1114,8 @@ fn cmd_procedure_call(path: &Path, name: &str, args: Option<&str>) -> Result<()>
     Ok(())
 }
 
-fn cmd_doctor(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_doctor(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let mut ok = true;
 
     match db.check_internal_tables() {
@@ -941,8 +1142,8 @@ fn cmd_doctor(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_truncate(path: &Path, table: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_truncate(path: &Path, table: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let mut txn = db.begin().context("failed to begin transaction")?;
     txn.truncate(table)
         .context(format!("failed to truncate {table}"))?;
@@ -1068,8 +1269,8 @@ fn optional_filter(filter: Option<&str>) -> Result<Option<Expr>> {
     }
 }
 
-fn cmd_get(path: &Path, table: &str, pk: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_get(path: &Path, table: &str, pk: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let txn = db.begin().context("failed to begin transaction")?;
     let row = txn
         .get_by_pk(table, &parse_scalar(pk))
@@ -1094,8 +1295,9 @@ fn cmd_query(
     offset: Option<usize>,
     columns: Option<Vec<String>>,
     distinct: bool,
+    creds: Option<&Credentials>,
 ) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+    let db = open_db(path, creds)?;
     let txn = db.begin().context("failed to begin transaction")?;
     let select = Select {
         table: table.to_string(),
@@ -1121,8 +1323,8 @@ fn cmd_query(
     Ok(())
 }
 
-fn cmd_insert(path: &Path, table: &str, row: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_insert(path: &Path, table: &str, row: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let mut txn = db.begin().context("failed to begin transaction")?;
     let inserted = txn
         .insert(table, parse_object(row, "row")?)
@@ -1136,8 +1338,14 @@ fn cmd_insert(path: &Path, table: &str, row: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_update(path: &Path, table: &str, pk: &str, patch: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_update(
+    path: &Path,
+    table: &str,
+    pk: &str,
+    patch: &str,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     let mut txn = db.begin().context("failed to begin transaction")?;
     let updated = txn
         .update(table, &parse_scalar(pk), parse_object(patch, "patch")?)
@@ -1151,8 +1359,8 @@ fn cmd_update(path: &Path, table: &str, pk: &str, patch: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_delete(path: &Path, table: &str, pk: &str) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_delete(path: &Path, table: &str, pk: &str, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let mut txn = db.begin().context("failed to begin transaction")?;
     txn.delete(table, &parse_scalar(pk))
         .context(format!("failed to delete from {table}"))?;
@@ -1162,8 +1370,14 @@ fn cmd_delete(path: &Path, table: &str, pk: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_upsert(path: &Path, table: &str, row: &str, update: bool) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_upsert(
+    path: &Path,
+    table: &str,
+    row: &str,
+    update: bool,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     let mut txn = db.begin().context("failed to begin transaction")?;
     let row_map = parse_object(row, "row")?;
     let returning: Vec<String> = row_map.keys().cloned().collect();
@@ -1181,8 +1395,13 @@ fn cmd_upsert(path: &Path, table: &str, row: &str, update: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_count(path: &Path, table: &str, filter: Option<&str>) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_count(
+    path: &Path,
+    table: &str,
+    filter: Option<&str>,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     let txn = db.begin().context("failed to begin transaction")?;
     let query = AggregateQuery {
         table: table.to_string(),
@@ -1208,8 +1427,8 @@ fn cmd_count(path: &Path, table: &str, filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_schema_print(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_schema_print(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let json = serde_json::to_string_pretty(db.schema()).context("failed to serialize schema")?;
     println!("{json}");
     Ok(())
@@ -1298,8 +1517,12 @@ fn cmd_schema_validate(schema_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_migrate_apply(path: &Path, migrations_path: &Path) -> Result<()> {
-    let mut db = Database::open(path).context("failed to open database")?;
+fn cmd_migrate_apply(
+    path: &Path,
+    migrations_path: &Path,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let mut db = open_db(path, creds)?;
     let migrations = read_migrations(migrations_path)?;
     let applied = db
         .applied_migrations()
@@ -1316,8 +1539,8 @@ fn cmd_migrate_apply(path: &Path, migrations_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_migrate_status(path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_migrate_status(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let applied = db
         .applied_migrations()
         .context("failed to read applied migrations")?;
@@ -1332,8 +1555,12 @@ fn cmd_migrate_status(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_migrate_plan(path: &Path, migrations_path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_migrate_plan(
+    path: &Path,
+    migrations_path: &Path,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    let db = open_db(path, creds)?;
     let migrations = read_migrations(migrations_path)?;
     let applied = db
         .applied_migrations()
@@ -1350,9 +1577,9 @@ fn cmd_migrate_plan(path: &Path, migrations_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_diff(schema_path: &Path, path: &Path) -> Result<()> {
+fn cmd_diff(schema_path: &Path, path: &Path, creds: Option<&Credentials>) -> Result<()> {
     let code = read_schema(schema_path)?;
-    let db = Database::open(path).context("failed to open database")?;
+    let db = open_db(path, creds)?;
     let stored = db.schema();
 
     let mut drift = false;
@@ -1545,9 +1772,13 @@ fn diff_indexes(name: &str, stored: &Table, code: &Table, note: &mut impl FnMut(
     }
 }
 
-fn cmd_generate_migration(schema_path: &Path, from: &Path) -> Result<()> {
+fn cmd_generate_migration(
+    schema_path: &Path,
+    from: &Path,
+    creds: Option<&Credentials>,
+) -> Result<()> {
     let code = read_schema(schema_path)?;
-    let db = Database::open(from).context("failed to open database")?;
+    let db = open_db(from, creds)?;
     let stored = db.schema();
     let applied = db
         .applied_migrations()
@@ -1863,8 +2094,8 @@ fn gen_python(schema: &Schema) -> String {
     out
 }
 
-fn cmd_fixture_create(path: &Path, tables: &[String]) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_fixture_create(path: &Path, tables: &[String], creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let mut out: Map<String, Value> = Map::new();
 
     let txn = db.begin().context("failed to begin transaction")?;
@@ -1893,8 +2124,8 @@ fn cmd_fixture_create(path: &Path, tables: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn cmd_fixture_load(path: &Path, fixture_path: &Path) -> Result<()> {
-    let db = Database::open(path).context("failed to open database")?;
+fn cmd_fixture_load(path: &Path, fixture_path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
     let fixture: Map<String, Value> =
         serde_json::from_reader(fs::File::open(fixture_path)?).context("failed to read fixture")?;
 
@@ -1931,6 +2162,55 @@ fn read_migrations(path: &Path) -> Result<Vec<Migration>> {
     let cli_migrations: Vec<CliMigration> =
         serde_json::from_str(&text).context("failed to parse migrations JSON")?;
     Ok(cli_migrations.into_iter().map(Into::into).collect())
+}
+
+// ── Auth enforcement commands ──────────────────────────────────────────────
+//
+// `enable` flips require_auth on an existing credentialless database via the
+// kit `Database::enable_auth` helper. `disable-offline` is a recovery path that
+// must edit the catalog file directly (the engine has no in-process
+// `disable_auth`); it is a stub for now and will be filled in by a later phase.
+
+fn cmd_auth_enable(path: &Path, admin_user: &str, admin_password: Option<&str>) -> Result<()> {
+    let admin_password =
+        admin_password.context("--admin-password (or MONGREL_PASSWORD) is required")?;
+    let db = Database::open(path).context("failed to open database")?;
+    db.enable_auth(admin_user, admin_password)
+        .context("failed to enable require_auth")?;
+    println!("require_auth enabled, admin user: {admin_user}");
+    Ok(())
+}
+
+fn cmd_auth_disable_offline(path: &Path, passphrase: Option<&str>, yes: bool) -> Result<()> {
+    eprintln!(
+        "WARNING: disabling require_auth offline on {}",
+        path.display()
+    );
+    if let Some(pw) = passphrase {
+        eprintln!("note: passphrase provided ({} chars)", pw.len());
+    }
+    if !yes {
+        eprintln!("this will rewrite the catalog to drop require_auth.");
+        eprint!("proceed? [y/N] ");
+        let mut line = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut line)
+            .context("failed to read confirmation from stdin")?;
+        if !line
+            .trim_start()
+            .chars()
+            .next()
+            .map(|c| c.eq_ignore_ascii_case(&'y'))
+            .unwrap_or(false)
+        {
+            println!("aborted");
+            return Ok(());
+        }
+    }
+    // TODO: implement offline disable via direct catalog edit (Phase 5).
+    // The engine has no in-process `disable_auth` method yet; the offline path
+    // must open the catalog file (encrypted or plain) and rewrite the
+    // require_auth flag. See the auth spec for the on-disk format.
+    bail!("auth disable-offline is not yet implemented (see auth spec, Phase 5)");
 }
 
 #[cfg(test)]
