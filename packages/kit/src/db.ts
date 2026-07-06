@@ -129,12 +129,15 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'bool':
 			return addon.ColumnType.Bool;
 		case 'int64':
-		case 'timestamp':
 			return addon.ColumnType.Int64;
 		case 'float64':
 			return addon.ColumnType.Float64;
+		case 'timestamp':
 		case 'date':
-			return addon.ColumnType.Date32;
+		case 'text':
+		case 'bytes':
+		case 'json':
+			return addon.ColumnType.Bytes;
 		case 'date64':
 			return addon.ColumnType.Date64;
 		case 'time64':
@@ -142,17 +145,13 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 		case 'interval':
 			return addon.ColumnType.Interval;
 		case 'decimal128':
-			case 'uuid':
-				return addon.ColumnType.Uuid;
-			case 'json_native':
-				return addon.ColumnType.Json;
-			case 'array':
-				return addon.ColumnType.Array;
 			return addon.ColumnType.Decimal128;
-		case 'text':
-		case 'bytes':
-		case 'json':
-			return addon.ColumnType.Bytes;
+		case 'uuid':
+			return addon.ColumnType.Uuid;
+		case 'json_native':
+			return addon.ColumnType.Json;
+		case 'array':
+			return addon.ColumnType.Array;
 		case 'embedding':
 			return addon.ColumnType.Embedding;
 		case 'sparse':
