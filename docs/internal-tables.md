@@ -137,4 +137,3 @@ than the TTL.
 - [Constraints](./constraints.md) — the unique and foreign-key rules the guard tables enforce.
 - [Defaults & sequences](./defaults.md) — auto-increment semantics and the TypeScript/Rust/Python implementation split.
 - [CLI](./cli.md) — `check` and `doctor` verify these tables exist.
-- [Specification](./spec.md) — key encoding and the concurrency model in depth.

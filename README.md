@@ -52,7 +52,6 @@ The repository also ships the `mongreldb-kit` CLI for schema validation, migrati
 - [Internal tables](docs/internal-tables.md)
 - [Testing](docs/testing.md)
 - [Production checklist](docs/production-checklist.md)
-- [Specification](docs/spec.md)
 
 ## Quick Example
 

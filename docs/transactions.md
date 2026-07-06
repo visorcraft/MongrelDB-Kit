@@ -160,7 +160,7 @@ retryable error rather than overwriting the winner.
   snapshot isolation: a child insert and a concurrent parent delete each touch the parent's
   `__kit_row_guards` row, forcing a write-write conflict so one side retries and observes the
   other instead of both committing against stale snapshots. See
-  [Internal tables](./internal-tables.md) and the [specification](./spec.md).
+  [Internal tables](./internal-tables.md).
 
 ## Auto-increment gaps on rollback
 
@@ -203,4 +203,3 @@ binding's conflict error type. See [rust.md](./rust.md) / [python.md](./python.m
 - [Defaults & sequences](./defaults.md) — sequence, now, uuid, and static defaults.
 - [Errors](./errors.md) — `KitConflictError`, `isRetryableConflict`, and the `CONFLICT` code.
 - [Internal tables](./internal-tables.md) — `__kit_row_guards`, migration tables, and the Rust/Python named sequence table.
-- [Specification](./spec.md) — the concurrency model and snapshot-isolation safety in depth.

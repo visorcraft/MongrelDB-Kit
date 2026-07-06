@@ -267,7 +267,7 @@ impl Database {
     /// (use [`open`](Self::open) for credentialless databases) or if the
     /// credentials are invalid.
     ///
-    /// See `docs/auth-enforcement-spec.md`.
+    /// See `docs/15-credential-enforcement.md`.
     pub fn open_with_credentials(path: &Path, username: &str, password: &str) -> Result<Self> {
         let inner = Arc::new(CoreDatabase::open_with_credentials(
             path, username, password,
@@ -288,7 +288,7 @@ impl Database {
     /// user, and the given schema. The returned handle is already authenticated
     /// as the admin.
     ///
-    /// See `docs/auth-enforcement-spec.md`.
+    /// See `docs/15-credential-enforcement.md`.
     pub fn create_with_credentials(
         path: &Path,
         schema: KitSchema,

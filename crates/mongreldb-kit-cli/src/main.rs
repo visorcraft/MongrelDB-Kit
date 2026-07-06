@@ -2207,7 +2207,7 @@ fn cmd_auth_disable_offline(path: &Path, passphrase: Option<&str>, yes: bool) ->
     // directory. For a `require_auth` database, a credentialed open is needed
     // — but the whole point of recovery is that credentials may be lost. In
     // that case, the operator opens the catalog file directly and flips the
-    // flag (see docs/auth-enforcement-spec.md §4.7). The CLI provides this
+    // flag (see docs/15-credential-enforcement.md §4.7). The CLI provides this
     // command for the common case: the admin password is known but the operator
     // wants to revert to credentialless mode without a separate credentialed
     // session.
@@ -2225,7 +2225,7 @@ fn cmd_auth_disable_offline(path: &Path, passphrase: Option<&str>, yes: bool) ->
                         "cannot open database (it may require_auth or be encrypted). \
                          For encrypted databases, pass --passphrase. \
                          For require_auth databases where credentials are lost, \
-                         see docs/auth-enforcement-spec.md §4.7 for offline recovery."
+                         see docs/15-credential-enforcement.md §4.7 for offline recovery."
                     );
                 }
             }

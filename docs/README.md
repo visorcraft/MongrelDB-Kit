@@ -105,7 +105,6 @@ Start here, then dive into the topic that fits your task.
 | [CLI](./cli.md) | The `mongreldb-kit` command line: `check`, `diff`, `generate`, `migrate`, and more. |
 | [Testing](./testing.md) | Temp-directory fixtures and patterns for fast, isolated tests. |
 | [Production checklist](./production-checklist.md) | What to verify before shipping. |
-| [Specification](./spec.md) | Deep internals: type model, key encoding, and the concurrency model. |
 
 ### Language guides
 
