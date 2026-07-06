@@ -1041,11 +1041,10 @@ impl Database {
     }
 
     /// Set the trigger execution policy. `max_depth` must be > 0.
-    pub fn set_trigger_config(
-        &self,
-        config: mongreldb_core::TriggerConfig,
-    ) -> Result<()> {
-        self.inner.set_trigger_config(config).map_err(KitError::from)
+    pub fn set_trigger_config(&self, config: mongreldb_core::TriggerConfig) -> Result<()> {
+        self.inner
+            .set_trigger_config(config)
+            .map_err(KitError::from)
     }
 
     /// Set a table's compaction zstd level (-1 = default, 0 = none, 1..22).
@@ -1089,10 +1088,7 @@ impl Database {
     }
 
     /// Page-cache statistics for a table.
-    pub fn table_page_cache_stats(
-        &self,
-        table: &str,
-    ) -> Result<mongreldb_core::cache::CacheStats> {
+    pub fn table_page_cache_stats(&self, table: &str) -> Result<mongreldb_core::cache::CacheStats> {
         let handle = self.inner.table(table).map_err(KitError::from)?;
         let stats = handle.lock().page_cache_stats();
         Ok(stats)

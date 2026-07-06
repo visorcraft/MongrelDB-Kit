@@ -34,7 +34,9 @@ fn users_schema() -> Schema {
         indexes: vec![],
         foreign_keys: vec![],
         unique_constraints: vec![],
+        clustered: false,
         check_constraints: vec![],
+        clustered: false,
     }])
     .unwrap()
 }
@@ -228,6 +230,7 @@ fn core_direct(n: i64) -> Times {
         indexes: vec![],
         colocation: vec![],
         constraints: Default::default(),
+        clustered: false,
     };
     let mut db = Table::create(dir.path(), schema, 1).unwrap();
     for i in 1..=n {
@@ -329,6 +332,7 @@ fn bulk_core(n: i64) -> f64 {
         indexes: vec![],
         colocation: vec![],
         constraints: Default::default(),
+        clustered: false,
     };
     let mut db = Table::create(dir.path(), schema, 1).unwrap();
     let batch: Vec<Vec<(u16, Value)>> = (1..=n)

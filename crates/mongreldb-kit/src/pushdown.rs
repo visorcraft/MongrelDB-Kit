@@ -369,26 +369,22 @@ pub fn pk_conditions(table: &KitTable, pk_map: &Map<String, Value>) -> Option<Ve
 /// Check if the Kit table has a bitmap index on `col_name` (declared index or
 /// unique constraint). Mirrors the logic in `schema::to_core_schema`.
 fn has_bitmap_index(table: &KitTable, col_name: &str) -> bool {
-    table
-        .indexes
+    table.indexes.iter().any(|idx| {
+        // Only a real bitmap index (the default kind) backs `BitmapEq`/
+        // `BitmapIn`. A `LearnedRange`/`Ann`/`Fm`/`Sparse`/`MinHash` index
+        // on the same column does NOT — the engine returns an empty set
+        // for `BitmapEq` against a non-bitmap column, so treating those as
+        // bitmaps here would silently drop matching rows.
+        // Only a real bitmap index (the default kind) backs `BitmapEq`/
+        // `BitmapIn`. A `LearnedRange`/`Ann`/`Fm`/`Sparse`/`MinHash` index
+        // on the same column does NOT — the engine returns an empty set
+        // for `BitmapEq` against a non-bitmap column, so treating those as
+        // bitmaps here would silently drop matching rows.
+        idx.kind == KitIndexKind::Bitmap && idx.columns.iter().any(|c| c == col_name)
+    }) || table
+        .unique_constraints
         .iter()
-        .any(|idx| {
-            // Only a real bitmap index (the default kind) backs `BitmapEq`/
-            // `BitmapIn`. A `LearnedRange`/`Ann`/`Fm`/`Sparse`/`MinHash` index
-            // on the same column does NOT — the engine returns an empty set
-            // for `BitmapEq` against a non-bitmap column, so treating those as
-            // bitmaps here would silently drop matching rows.
-            // Only a real bitmap index (the default kind) backs `BitmapEq`/
-            // `BitmapIn`. A `LearnedRange`/`Ann`/`Fm`/`Sparse`/`MinHash` index
-            // on the same column does NOT — the engine returns an empty set
-            // for `BitmapEq` against a non-bitmap column, so treating those as
-            // bitmaps here would silently drop matching rows.
-            idx.kind == KitIndexKind::Bitmap && idx.columns.iter().any(|c| c == col_name)
-        })
-        || table
-            .unique_constraints
-            .iter()
-            .any(|uq| uq.columns.iter().any(|c| c == col_name))
+        .any(|uq| uq.columns.iter().any(|c| c == col_name))
         || table.primary_key.contains(&col_name.to_string())
 }
 

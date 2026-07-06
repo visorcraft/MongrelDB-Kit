@@ -23,10 +23,10 @@ pub use db::{
 // Re-export the engine tuning/config types so kit consumers (and the Python
 // binding, which depends only on this crate) can reach them without a direct
 // `mongreldb-core` dependency.
-pub use mongreldb_core::cache::CacheStats;
-pub use mongreldb_core::{IndexBuildPolicy, TriggerConfig};
 pub use error::{KitError, Result};
 pub use migrate::migrate;
+pub use mongreldb_core::cache::CacheStats;
+pub use mongreldb_core::{IndexBuildPolicy, TriggerConfig};
 pub use query::JoinRow;
 #[cfg(feature = "remote")]
 pub use remote::{RemoteBatch, RemoteDatabase, RemoteOpResult, RemoteQueryRow, RemoteTransaction};

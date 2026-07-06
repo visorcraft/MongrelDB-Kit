@@ -259,8 +259,12 @@ fn type_check(table: &Table, col: &Column, value: &Value) -> Result<(), Validati
             // values. We accept objects/arrays/scalars.
             true
         }
-        ColumnType::Date | ColumnType::DateTime | ColumnType::TimestampNanos
-        | ColumnType::Date64 | ColumnType::Time64 | ColumnType::Interval
+        ColumnType::Date
+        | ColumnType::DateTime
+        | ColumnType::TimestampNanos
+        | ColumnType::Date64
+        | ColumnType::Time64
+        | ColumnType::Interval
         | ColumnType::Decimal128 => value.is_string() || value.is_number(),
         ColumnType::Embedding => value
             .as_array()

@@ -554,8 +554,7 @@ struct LearnedRangeFixture {
 pub fn run_learned_range() -> Result<(), String> {
     let fixtures = fixtures_dir();
     let fixture: LearnedRangeFixture = load_json(&fixtures.join("learned_range.json"))?;
-    let expected: Map<String, Value> =
-        load_json(&fixtures.join("expected/learned_range.json"))?;
+    let expected: Map<String, Value> = load_json(&fixtures.join("expected/learned_range.json"))?;
 
     let table = fixture
         .schema

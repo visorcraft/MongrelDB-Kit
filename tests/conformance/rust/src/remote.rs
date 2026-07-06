@@ -83,6 +83,7 @@ fn users_schema() -> Schema {
         indexes: vec![],
         colocation: vec![],
         constraints: cons,
+        clustered: false,
     }
 }
 
@@ -115,6 +116,7 @@ fn orders_schema() -> Schema {
         indexes: vec![],
         colocation: vec![],
         constraints: cons,
+        clustered: false,
     }
 }
 

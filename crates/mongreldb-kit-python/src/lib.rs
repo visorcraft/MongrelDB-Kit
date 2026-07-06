@@ -551,7 +551,9 @@ impl PyDatabase {
 
     /// Memtable length (uncommitted staged rows) for a table.
     fn table_memtable_len(&self, table: &str) -> PyResult<usize> {
-        self.require_db()?.table_memtable_len(table).map_err(map_err)
+        self.require_db()?
+            .table_memtable_len(table)
+            .map_err(map_err)
     }
 
     /// Run a SQL read/DDL/DML statement and return the result rows as a list

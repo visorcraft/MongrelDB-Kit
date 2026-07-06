@@ -44,6 +44,7 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
                     name: format!("{}_{}", idx.name, col_name),
                     column_id: col.id as u16,
                     kind,
+                    predicate: None,
                 });
             }
         }
@@ -55,6 +56,7 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
                     name: format!("uq_{}_{}", uq.name, col_name),
                     column_id: col.id as u16,
                     kind: IndexKind::Bitmap,
+                    predicate: None,
                 });
             }
         }
@@ -66,6 +68,7 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
         indexes,
         colocation: Vec::new(),
         constraints: Default::default(),
+        clustered: false,
     }
 }
 
@@ -102,7 +105,10 @@ pub(crate) fn to_core_type(ty: ColumnType) -> TypeId {
         ColumnType::Date64 => TypeId::Date64,
         ColumnType::Time64 => TypeId::Time64,
         ColumnType::Interval => TypeId::Interval,
-        ColumnType::Decimal128 => TypeId::Decimal128 { precision: 38, scale: 2 },
+        ColumnType::Decimal128 => TypeId::Decimal128 {
+            precision: 38,
+            scale: 2,
+        },
         // Dimension is filled from the column's `embedding_dim` in
         // `to_core_schema`; a bare type has no dimension context.
         ColumnType::Embedding => TypeId::Embedding { dim: 0 },
@@ -204,7 +210,14 @@ pub fn core_to_json(value: &CoreValue, ty: ColumnType) -> Result<Value> {
         },
         (CoreValue::Embedding(v), _) => serde_json::to_value(v)?,
         (CoreValue::Decimal(d), _) => Value::String(d.to_string()),
-        (CoreValue::Interval { months, days, nanos }, _) => {
+        (
+            CoreValue::Interval {
+                months,
+                days,
+                nanos,
+            },
+            _,
+        ) => {
             serde_json::json!({ "months": months, "days": days, "nanos": nanos })
         }
     })

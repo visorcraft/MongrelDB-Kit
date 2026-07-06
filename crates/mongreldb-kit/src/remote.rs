@@ -266,12 +266,8 @@ impl RemoteDatabase {
     /// Compact every table on the daemon (`POST /compact`). Returns
     /// `(compacted, skipped)`.
     pub fn compact(&self) -> Result<(usize, usize)> {
-        let resp: CompactResp = decode(
-            self.client
-                .post(self.url("/compact"))
-                .send()
-                .map_err(ioe)?,
-        )?;
+        let resp: CompactResp =
+            decode(self.client.post(self.url("/compact")).send().map_err(ioe)?)?;
         Ok((resp.compacted, resp.skipped))
     }
 

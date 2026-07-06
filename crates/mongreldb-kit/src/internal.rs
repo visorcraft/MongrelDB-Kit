@@ -95,6 +95,7 @@ pub(crate) fn internal_tables_core() -> Vec<(&'static str, CoreSchema)> {
                 indexes: Vec::new(),
                 colocation: Vec::new(),
                 constraints: Default::default(),
+                clustered: false,
             },
         ),
         (
@@ -110,6 +111,7 @@ pub(crate) fn internal_tables_core() -> Vec<(&'static str, CoreSchema)> {
                 indexes: Vec::new(),
                 colocation: Vec::new(),
                 constraints: Default::default(),
+                clustered: false,
             },
         ),
         (
@@ -124,6 +126,7 @@ pub(crate) fn internal_tables_core() -> Vec<(&'static str, CoreSchema)> {
                 indexes: Vec::new(),
                 colocation: Vec::new(),
                 constraints: Default::default(),
+                clustered: false,
             },
         ),
         (
@@ -140,6 +143,7 @@ pub(crate) fn internal_tables_core() -> Vec<(&'static str, CoreSchema)> {
                 indexes: Vec::new(),
                 colocation: Vec::new(),
                 constraints: Default::default(),
+                clustered: false,
             },
         ),
         (
@@ -156,6 +160,7 @@ pub(crate) fn internal_tables_core() -> Vec<(&'static str, CoreSchema)> {
                 indexes: Vec::new(),
                 colocation: Vec::new(),
                 constraints: Default::default(),
+                clustered: false,
             },
         ),
         (
@@ -171,6 +176,7 @@ pub(crate) fn internal_tables_core() -> Vec<(&'static str, CoreSchema)> {
                 indexes: Vec::new(),
                 colocation: Vec::new(),
                 constraints: Default::default(),
+                clustered: false,
             },
         ),
     ]
