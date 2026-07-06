@@ -563,17 +563,24 @@ mongreldb-kit auth enable ./store.kitdb --admin-user alice --admin-password 's3c
 # require_auth enabled on ./store.kitdb (admin user 'alice')
 ```
 
-`auth disable-offline` is the recovery path for when credentials are lost — it
-clears `require_auth` directly on the catalog without authenticating. It will
-prompt for confirmation unless `--yes` is given; `--passphrase` decrypts an
-encrypted catalog when applicable.
+`auth disable-offline` is the recovery path for when you can still open the
+database but want to drop the `require_auth` flag. It opens the database —
+plain, or encrypted with `--passphrase` — and calls `disable_auth()` on the
+open handle. It will prompt for confirmation unless `--yes` is given.
+
+This requires either an openable database (one you can authenticate to with
+`--user`/`--password`) or a known passphrase for an encrypted database. For a
+`require_auth` database whose credentials are genuinely lost, there is no
+openable handle to call `disable_auth()` on — that case needs direct catalog
+editing, as documented in the spec (see the credential enforcement guide
+below).
 
 ```sh
 mongreldb-kit auth disable-offline ./store.kitdb            # prompts to confirm
 mongreldb-kit auth disable-offline ./store.kitdb --yes      # skip the prompt
 ```
 
-Both open the catalog directly (no daemon required). Once `require_auth` is
+Both open the database directly (no daemon required). Once `require_auth` is
 enabled, the standard open/create commands and the language bindings must pass
 `--user`/`--password` (or the language equivalents) or they will fail with an
 auth error. See the engine
@@ -596,6 +603,16 @@ echo 's3cret-pw' | mongreldb-kit query ./store.kitdb users --user alice --passwo
 ```
 
 Prefer `--password-stdin` in scripts and CI.
+
+The same credentials can be supplied via the `MONGREL_USER` and
+`MONGREL_PASSWORD` environment variables — handy for `check`, `doctor`, and
+other commands where flags would be noisy, and for mounting CI secrets without
+echoing them on the command line. Explicit `--user` / `--password` flags take
+precedence over the environment.
+
+```sh
+MONGREL_USER=admin MONGREL_PASSWORD=s3cret-pw mongreldb-kit check ./secure.kitdb
+```
 
 ## Notes
 

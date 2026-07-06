@@ -28,7 +28,7 @@ The repository also ships the `mongreldb-kit` CLI for schema validation, migrati
 - Non-blocking async I/O variants (`putAsync` / `queryAsync` / `countAsync` / …) and `WriteBuffer` micro-batching for high-throughput ingest (TypeScript).
 - Engine-side trigger management plus SQL-backed virtual/external table helpers.
 - Extended SQL Function helpers for JSON, date/time, aggregate, and math-style SQL calls.
-- User/role/credentials management: Argon2id-hashed catalog users, roles, `GRANT`/`REVOKE` table-level permissions, and daemon HTTP Basic + Bearer auth — exposed through every language API, the embedded SQL surface (`CREATE USER` / `GRANT` / `REVOKE`), and the CLI (`user` / `role` subcommands).
+- User/role/credentials management with optional storage-layer enforcement: Argon2id-hashed catalog users, roles, `GRANT`/`REVOKE` table-level permissions, daemon HTTP Basic + Bearer auth, and opt-in `require_auth` credential enforcement (credentialed open/create constructors, `enable_auth`/`disable_auth`, offline recovery) — exposed through every language API, the embedded SQL surface, and the CLI (`user` / `role` / `auth` subcommands).
 - Relational constraint enforcement on top of MongrelDB transactions: not-null, type/range/string validation, unique/composite unique, foreign keys, and cascade/set-null/restrict deletes.
 - Multi-process file locking, replication, and change-data-capture via the daemon.
 

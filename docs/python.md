@@ -588,6 +588,17 @@ db.enable_auth("alice", "s3cret-pw")
 db.disable_auth()
 ```
 
+```python
+# Encrypted + credentialed: both layers in one call.
+db = Database.create_encrypted_with_credentials(
+    "./store.kitdb", schema, "passphrase", "admin", "s3cret-pw"
+)
+
+# Long-lived handles call refresh_principal after a REVOKE to pick up
+# permission changes made by other handles.
+db.refresh_principal()
+```
+
 The full model and recovery flow are documented in the engine
 [credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md).
 

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Approved — design finalized, implementation pending (Phase 1 next) |
+| **Status** | Implemented — all 5 phases complete (engine 0.36.0, kit 0.24.0) |
 | **Spec ID** | `auth-enforcement` |
 | **Affects** | `mongreldb-core`, `mongreldb-query`, `mongreldb-server`, `mongreldb-node`, `mongreldb-kit`, `mongreldb-kit-python`, `mongreldb-kit-cli` |
 | **Default behavior** | Unchanged — databases remain credentialless and "create-and-go" by default |

@@ -413,6 +413,17 @@ db.enableAuth('alice', 's3cret-pw');
 db.disableAuth();
 ```
 
+```ts
+// Encrypted + credentialed: both layers in one call.
+const secure = KitDatabase.createEncryptedWithCredentialsSync(
+    './app-data', schema, 'passphrase', 'admin', 's3cret-pw'
+);
+
+// Long-lived handles call refreshPrincipal after a REVOKE to pick up
+// permission changes made by other handles.
+db.refreshPrincipal();
+```
+
 The full model and recovery flow are documented in the engine
 [credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md).
 
