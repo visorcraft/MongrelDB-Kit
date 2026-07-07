@@ -394,7 +394,11 @@ impl Database {
     /// role/permission changes made by other handles. No-op on credentialless
     /// databases.
     pub fn refresh_principal(&self) -> Result<()> {
-        self.inner.refresh_principal().map_err(KitError::from)
+        self.inner.refresh_principal().map_err(KitError::from)?;
+        // Clear the SQL session so cached query results (which bypass the
+        // permission check) don't serve stale data after a permission change.
+        *self.session.lock() = None;
+        Ok(())
     }
 
     /// Register a named default provider used by `DefaultKind::CustomName`
@@ -1382,11 +1386,6 @@ impl Database {
     /// that creates/drops tables, call [`Database::refresh_sql_session`] so the
     /// session sees the new table set.
     pub fn sql(&self, statement: &str) -> Result<Vec<arrow::record_batch::RecordBatch>> {
-        // Take the cached session out of the mutex (or build one on first use)
-        // so no `MutexGuard` is held across the async `run`. The kit's SQL
-        // surface is `&self` and blocking; concurrent `sql()` calls on one
-        // `Database` serialize here (applications needing concurrency should
-        // use multiple handles, each with its own session).
         let session = match self.session.lock().take() {
             Some(s) => s,
             None => {
