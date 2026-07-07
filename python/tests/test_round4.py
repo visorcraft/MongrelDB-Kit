@@ -108,7 +108,6 @@ class TestAuthEdge:
         finally:
             pass
 
-    @pytest.mark.xfail(reason="Known: session caching prevents refresh_principal from blocking SQL SELECT in Python/Kit path")
     def test_refresh_after_role_revoke(self):
         d = tempfile.mkdtemp()
         path = os.path.join(d, "sec")

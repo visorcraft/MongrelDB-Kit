@@ -78,7 +78,7 @@ class TestReopenPersistence:
             db.sql_rows("CREATE TABLE copy AS SELECT id FROM items")
 
             db2 = Database.open(path)
-            assert db2.table_names() if hasattr(db2, "table_names") else True
+            assert db2.table_names()
             rows = db2.sql_rows("SELECT count(*) AS c FROM copy")
             assert rows[0]["c"] == 5
         finally:

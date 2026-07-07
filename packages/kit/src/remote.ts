@@ -58,16 +58,16 @@ export class RemoteDatabase {
 	}
 
 	createProcedure(spec: ProcedureSpec): unknown {
-		return JSON.parse((this.inner as any).createProcedure({ json: procedureJson(spec) }));
+		return JSON.parse(this.inner.createProcedure({ json: procedureJson(spec) }));
 	}
 
 	dropProcedure(name: string): void {
-		(this.inner as any).dropProcedure(name);
+		this.inner.dropProcedure(name);
 	}
 
 	callProcedure(name: string, opts: ProcedureCallOptions = {}): unknown {
 		return JSON.parse(
-			(this.inner as any).callProcedure(name, {
+			this.inner.callProcedure(name, {
 				argsJson: JSON.stringify(opts.args ?? {}),
 				idempotencyKey: opts.idempotencyKey
 			})
@@ -75,23 +75,23 @@ export class RemoteDatabase {
 	}
 
 	createTrigger(spec: TriggerSpec): unknown {
-		return JSON.parse((this.inner as any).createTrigger({ json: triggerJson(spec) }));
+		return JSON.parse(this.inner.createTrigger({ json: triggerJson(spec) }));
 	}
 
 	replaceTrigger(name: string, spec: TriggerSpec): unknown {
-		return JSON.parse((this.inner as any).replaceTrigger(name, { json: triggerJson(spec) }));
+		return JSON.parse(this.inner.replaceTrigger(name, { json: triggerJson(spec) }));
 	}
 
 	dropTrigger(name: string): void {
-		(this.inner as any).dropTrigger(name);
+		this.inner.dropTrigger(name);
 	}
 
 	triggers(): unknown {
-		return JSON.parse((this.inner as any).triggers());
+		return JSON.parse(this.inner.triggers());
 	}
 
 	trigger(name: string): unknown {
-		return JSON.parse((this.inner as any).trigger(name));
+		return JSON.parse(this.inner.trigger(name));
 	}
 
 	createVirtualTable(spec: VirtualTableSpec): ArrowTable {

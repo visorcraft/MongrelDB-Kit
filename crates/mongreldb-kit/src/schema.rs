@@ -25,6 +25,7 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
                 other => to_core_type(other),
             },
             flags: to_core_flags(table, c),
+            default_value: None,
         })
         .collect();
 

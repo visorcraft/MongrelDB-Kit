@@ -19,7 +19,6 @@ def make_schema():
 def make_db():
     d = tempfile.mkdtemp()
     db = Database.create(os.path.join(d, "db"), make_schema())
-    t = db.schema if hasattr(db, 'schema') else None
     # Seed via transaction
     txn = db.begin()
     txn.insert("orders", {"id": 1, "amount": 10.0, "category": "food"})

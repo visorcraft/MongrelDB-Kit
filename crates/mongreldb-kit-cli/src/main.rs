@@ -2167,9 +2167,11 @@ fn read_migrations(path: &Path) -> Result<Vec<Migration>> {
 // ── Auth enforcement commands ──────────────────────────────────────────────
 //
 // `enable` flips require_auth on an existing credentialless database via the
-// kit `Database::enable_auth` helper. `disable-offline` is a recovery path that
-// must edit the catalog file directly (the engine has no in-process
-// `disable_auth`); it is a stub for now and will be filled in by a later phase.
+// kit `Database::enable_auth` helper. `disable-offline` is a recovery path
+// that calls the engine's in-process `disable_auth` on an already-opened
+// database; the operator must have filesystem access (and, for encrypted or
+// `require_auth` databases, the passphrase or admin credentials). For the
+// lost-credentials case, see docs/15-credential-enforcement.md §4.7.
 
 fn cmd_auth_enable(path: &Path, admin_user: &str, admin_password: Option<&str>) -> Result<()> {
     let admin_password =

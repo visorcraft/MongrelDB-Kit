@@ -3,7 +3,7 @@ import type { Database as NativeDatabase, Cell, RowJs } from '@visorcraft/mongre
 import { ColumnType, IndexKindSpec, ConditionKind } from '@visorcraft/mongreldb/native.js';
 import { tableFromIPC } from 'apache-arrow';
 import { KitDatabase } from './db.js';
-import { table, int, text, type Schema } from './schema.js';
+import type { Schema } from './schema.js';
 import { rowFromRowJs } from './rows.js';
 import type { TableSpec, ColumnSpec, IndexSpec, UniqueSpec, ForeignKeySpec, ColumnStorageType, PkValue } from './types.js';
 import { toCells, pkValueFromRow, parentExists, type ConstraintKit } from './constraints.js';
@@ -28,48 +28,6 @@ import {
 	kitUniqueKeys,
 	kitRowGuards
 } from './internalTables.js';
-
-/**
- * Schema of the legacy Kit sequence table that existed before engine-native
- * auto-increment. When present, its rows are used as a one-time fallback to
- * seed per-table engine counters so upgraded databases do not hand out ids
- * below a sequence that was already advanced.
- */
-const legacyKitSequences = table('__kit_sequences', {
-	columns: [
-		text('sequence_name', { primaryKey: true }),
-		int('next_value', { nullable: false })
-	],
-	primaryKey: ['sequence_name']
-});
-
-function seedFromLegacyKitSequences(kit: KitDatabase): void {
-	const db = kit.nativeDb;
-	if (!db.tableNames().includes('__kit_sequences')) {
-		return;
-	}
-	for (const { row } of fullScanRows(db, legacyKitSequences)) {
-		const sequenceName = row.sequence_name as string | null;
-		const nextValue = row.next_value as bigint | null;
-		if (!sequenceName || nextValue === null || nextValue <= 1n) {
-			continue;
-		}
-		const tableName = sequenceName.endsWith('_id_seq')
-			? sequenceName.slice(0, -'_id_seq'.length)
-			: sequenceName;
-		if (!db.tableNames().includes(tableName)) {
-			continue;
-		}
-		// Advance the engine counter until it is at least the legacy next value.
-		// reserveAutoIncSync seeds from max(existing id) on its first call, so this
-		// also covers the case where rows already exist with higher ids.
-		while (true) {
-			const reserved = kit.reserveAutoIncSync(tableName);
-			if (reserved === null) break;
-			if (reserved >= nextValue) break;
-		}
-	}
-}
 
 const I64_MIN = -9_223_372_036_854_775_808n;
 const I64_MAX = 9_223_372_036_854_775_807n;
@@ -157,10 +115,6 @@ type MongrelColumnSpec = {
 	nullable: boolean;
 	autoIncrement?: boolean;
 	embeddingDim?: number;
-};
-
-type NativeAlterColumnDatabase = NativeDatabase & {
-	alterColumn?: (table: string, columnName: string, column: MongrelColumnSpec) => bigint;
 };
 
 function columnId(table: TableSpec, name: string): number {
@@ -522,7 +476,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.27.0';
+	return '0.29.0';
 }
 
 function makeContext(kit: KitDatabase): MigrationContext {
@@ -736,7 +690,6 @@ export function migrateSync(kit: KitDatabase, schema: Schema, migrations: Migrat
 		}
 
 		writeSchemaCatalogSync(kit, schema);
-		seedFromLegacyKitSequences(kit);
 	} finally {
 		releaseLockSync(kit);
 	}
@@ -770,7 +723,6 @@ export async function migrate(kit: KitDatabase, schema: Schema, migrations: Migr
 		}
 
 		await writeSchemaCatalog(kit, schema);
-		seedFromLegacyKitSequences(kit);
 	} finally {
 		await releaseLock(kit);
 	}
@@ -1013,14 +965,8 @@ function alterColumnSync(
 		(resolved.default?.kind === 'sequence') !== (existing.default?.kind === 'sequence');
 
 	if (nativeChange) {
-		const db = kit.nativeDb as NativeAlterColumnDatabase;
-		if (typeof db.alterColumn !== 'function') {
-			throw new KitMigrationError(
-				`alterColumn for "${tableName}"."${columnName}" requires a MongrelDB native addon with alterColumn support`
-			);
-		}
 		try {
-			db.alterColumn(tableName, columnName, toMongrelColumnSpec(resolved));
+			kit.nativeDb.alterColumn(tableName, columnName, toMongrelColumnSpec(resolved));
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : String(cause);
 			throw new KitMigrationError(`alterColumn failed for "${tableName}"."${columnName}": ${message}`);

@@ -2219,8 +2219,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.39.0"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.39.0#772161743acf485f29cd951709709a84a7650333"
+version = "0.41.2"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.41.2#b77a09076f0685b567d45f5cdfcf315a336baf5c"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2237,6 +2237,7 @@ dependencies = [
  "memmap2",
  "parking_lot",
  "rayon",
+ "regex",
  "roaring",
  "serde",
  "serde_json",
@@ -2249,7 +2250,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.27.0"
+version = "0.29.0"
 dependencies = [
  "arrow",
  "bincode",
@@ -2267,7 +2268,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.27.0"
+version = "0.29.0"
 dependencies = [
  "hex",
  "regex",
@@ -2280,8 +2281,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-query"
-version = "0.39.0"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.39.0#772161743acf485f29cd951709709a84a7650333"
+version = "0.41.2"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.41.2#b77a09076f0685b567d45f5cdfcf315a336baf5c"
 dependencies = [
  "arrow",
  "async-trait",

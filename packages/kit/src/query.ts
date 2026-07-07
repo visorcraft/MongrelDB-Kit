@@ -1085,8 +1085,8 @@ function prepareInsertRowSync(
 	const withSequence: Record<string, unknown> = { ...row };
 	// Engine-native AUTO_INCREMENT: reserve the id up front so the cross-table
 	// transaction can stage the row with an explicit value (the engine counter
-	// is in-memory and becomes durable when the row commits — no __kit_sequences
-	// hot row, no extra commit). At most one sequence column per table.
+	// is in-memory and becomes durable when the row commits). At most one
+	// sequence column per table.
 	for (const col of table.columns) {
 		if (
 			(withSequence[col.name] === undefined || withSequence[col.name] === null) &&

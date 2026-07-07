@@ -71,9 +71,8 @@ fn kit(n: i64) -> Times {
 
     // Seed 1..=n via insert_many (one transaction, one commit) -- still pays
     // full per-row validation/guard cost, just not N separate commits.
-    let seed: Vec<Map<String, Value>> = (1..=n)
-        .map(|i| row(i, "City", 199.99 + i as f64))
-        .collect();
+    let seed: Vec<Map<String, Value>> =
+        (1..=n).map(|i| row(i, "City", 199.99 + i as f64)).collect();
     let mut txn = db.begin().unwrap();
     txn.insert_many("users", seed).unwrap();
     txn.commit().unwrap();
@@ -211,18 +210,21 @@ fn core_direct(n: i64) -> Times {
                 name: "id".into(),
                 ty: TypeId::Int64,
                 flags: ColumnFlags::empty().with(ColumnFlags::PRIMARY_KEY),
+                default_value: None,
             },
             ColumnDef {
                 id: 2,
                 name: "name".into(),
                 ty: TypeId::Bytes,
                 flags: ColumnFlags::empty(),
+                default_value: None,
             },
             ColumnDef {
                 id: 3,
                 name: "cost".into(),
                 ty: TypeId::Float64,
                 flags: ColumnFlags::empty(),
+                default_value: None,
             },
         ],
         indexes: vec![],
@@ -276,7 +278,8 @@ fn core_direct(n: i64) -> Times {
         (0..7)
             .map(|i| {
                 let now = Instant::now();
-                db.delete(mongreldb_core::RowId((n - 6 + i) as u64)).unwrap();
+                db.delete(mongreldb_core::RowId((n - 6 + i) as u64))
+                    .unwrap();
                 db.commit().unwrap();
                 now.elapsed()
             })
@@ -289,9 +292,8 @@ fn core_direct(n: i64) -> Times {
 fn bulk_kit(n: i64) -> f64 {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::create(&dir.path().join("db"), users_schema()).unwrap();
-    let seed: Vec<Map<String, Value>> = (1..=n)
-        .map(|i| row(i, "City", 199.99 + i as f64))
-        .collect();
+    let seed: Vec<Map<String, Value>> =
+        (1..=n).map(|i| row(i, "City", 199.99 + i as f64)).collect();
     let now = Instant::now();
     let mut txn = db.begin().unwrap();
     txn.insert_many("users", seed).unwrap();
@@ -313,18 +315,21 @@ fn bulk_core(n: i64) -> f64 {
                 name: "id".into(),
                 ty: TypeId::Int64,
                 flags: ColumnFlags::empty().with(ColumnFlags::PRIMARY_KEY),
+                default_value: None,
             },
             ColumnDef {
                 id: 2,
                 name: "name".into(),
                 ty: TypeId::Bytes,
                 flags: ColumnFlags::empty(),
+                default_value: None,
             },
             ColumnDef {
                 id: 3,
                 name: "cost".into(),
                 ty: TypeId::Float64,
                 flags: ColumnFlags::empty(),
+                default_value: None,
             },
         ],
         indexes: vec![],

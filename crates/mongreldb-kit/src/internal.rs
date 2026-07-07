@@ -65,6 +65,7 @@ fn pk(id: u16, name: &str, ty: TypeId) -> ColumnDef {
         name: name.into(),
         ty,
         flags: ColumnFlags::empty().with(ColumnFlags::PRIMARY_KEY),
+        default_value: None,
     }
 }
 
@@ -74,6 +75,7 @@ fn col(id: u16, name: &str, ty: TypeId) -> ColumnDef {
         name: name.into(),
         ty,
         flags: ColumnFlags::empty(),
+        default_value: None,
     }
 }
 

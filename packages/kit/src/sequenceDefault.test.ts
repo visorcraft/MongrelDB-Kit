@@ -49,9 +49,8 @@ describe('sequence default on insert (auto-increment)', () => {
 			const explicit = db.insertInto(widgets).values({ id: 100n, name: 'x' }).executeSync();
 			expect(explicit.id).toBe(100n);
 			// Engine-native AUTO_INCREMENT advances the counter past the explicit
-			// id so a later auto-assign can never collide with it. (This replaces
-			// the legacy Kit guarantee that explicit inserts left the sequence
-			// untouched — engine ownership makes the collision-free rule primary.)
+			// id so a later auto-assign can never collide with it; engine
+			// ownership makes the collision-free rule primary.
 			const auto = db.insertInto(widgets).values({ name: 'y' }).executeSync();
 			expect(auto.id).toBe(101n);
 		} finally {

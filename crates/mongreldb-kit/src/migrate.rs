@@ -120,6 +120,7 @@ fn apply_migration_ops(
                                 column,
                                 crate::schema::to_core_type(col.storage_type),
                                 crate::schema::to_core_flags(t, col),
+                                None,
                             )
                             .map_err(KitError::from)?;
                     }
@@ -336,6 +337,7 @@ fn alter_column(
             name: Some(target.name.clone()),
             ty: Some(crate::schema::to_core_type(target.storage_type)),
             flags: Some(crate::schema::to_core_flags(table, target)),
+            default_value: None,
         },
     )
     .map_err(KitError::from)?;

@@ -824,7 +824,7 @@ impl Database {
         let mut meta: Vec<(String, mongreldb_kit_core::schema::ColumnType)> = Vec::new();
         for c in &guard.schema().columns {
             if let Some(kc) = kit_t.columns.iter().find(|kc| kc.id as u16 == c.id) {
-                projection.push((c.id, c.ty));
+                projection.push((c.id, c.ty.clone()));
                 meta.push((kc.name.clone(), kc.storage_type));
             }
         }

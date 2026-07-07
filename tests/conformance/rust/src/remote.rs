@@ -1,6 +1,6 @@
 //! Remote conformance mode (PLAN.md #3).
 //!
-//! Boots a real `mongreldb-server` daemon (engine v0.19.0+) on an ephemeral port
+//! Boots a real `mongreldb-server` daemon (engine v0.40.0+) on an ephemeral port
 //! and drives the Kit's `RemoteDatabase` against it, asserting that the typed
 //! write path commits and that the engine's declarative constraints are enforced
 //! authoritatively server-side. This is the cross-repo proof that the typed
@@ -35,6 +35,7 @@ fn col(id: u16, name: &str, ty: TypeId, flags: ColumnFlags) -> ColumnDef {
         name: name.into(),
         ty,
         flags,
+        default_value: None,
     }
 }
 

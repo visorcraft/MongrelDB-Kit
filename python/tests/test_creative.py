@@ -164,10 +164,10 @@ class TestAuthEdge:
             # Alice can now SELECT (this exercises the refreshed permission).
             txn = db2.begin()
             try:
-                txn.select({"table": "items", "columns": [], "filter": None, "order_by": [], "limit": None, "offset": None})
-            except Exception:
-                pass  # The select API may differ — just verify refresh didn't crash
-            txn.rollback()
+                rows = txn.select("items")
+                assert isinstance(rows, list)
+            finally:
+                txn.rollback()
         finally:
             pass
 

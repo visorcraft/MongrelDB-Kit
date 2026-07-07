@@ -891,67 +891,6 @@ describe('migration ops', () => {
 		}
 	});
 
-	it('seeds engine counters from a legacy __kit_sequences table', () => {
-		const widgets = table('widgets', {
-			columns: [
-				int('id', { primaryKey: true, default: sequenceDefault('widgets_id_seq') }),
-				text('name', { nullable: false })
-			],
-			primaryKey: ['id']
-		});
-
-		const dir = makeTempDir();
-		const db = KitDatabase.openSync(dir, new Schema([widgets]));
-		try {
-			// Manually create the pre-switch sequence table and bump the widgets
-			// sequence past any existing rows.
-			const native = db.nativeDb;
-			native.createTable('__kit_sequences', {
-				columns: [
-					{
-						id: 1,
-						name: 'sequence_name',
-						ty: ColumnType.Bytes,
-						primaryKey: true,
-						nullable: false
-					},
-					{
-						id: 2,
-						name: 'next_value',
-						ty: ColumnType.Int64,
-						primaryKey: false,
-						nullable: false
-					}
-				],
-				indexes: []
-			});
-			const seq = native.table('__kit_sequences');
-			seq.put([
-				{ columnId: 1, text: 'widgets_id_seq' },
-				{ columnId: 2, int64: 100n }
-			]);
-			seq.commit();
-
-			const migrations: Migration[] = [
-				{
-					version: 1,
-					name: 'create_widgets',
-					up: (ctx) => {
-						ctx.ensureTable(widgets);
-					}
-				}
-			];
-
-			db.migrateSync(new Schema([widgets]), migrations);
-
-			const row = db.insertInto(widgets).values({ name: 'a' }).executeSync();
-			expect(row.id).toBeGreaterThanOrEqual(100n);
-		} finally {
-			db.close();
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
 	it('alterColumn changes the application type and preserves existing rows', async () => {
 		// Schema v1 declares payload as text; the table is created and a row is
 		// inserted as a JSON string. Schema v2 redecls payload as json and a

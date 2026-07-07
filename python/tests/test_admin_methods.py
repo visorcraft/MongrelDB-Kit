@@ -74,7 +74,7 @@ def test_compact_runs_without_error_and_reports_counts():
     result = db.compact_all()
     assert isinstance(result, tuple) and len(result) == 2
     # compact_table returns a bool.
-    assert isinstance(db.compact_table("things" if False else "widgets"), bool)
+    assert isinstance(db.compact_table("widgets"), bool)
     db.close()
 
 

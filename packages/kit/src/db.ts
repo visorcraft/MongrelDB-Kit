@@ -247,8 +247,7 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			primaryKey: col.primaryKey,
 			nullable: col.nullable,
 			// A Kit sequence-default column maps to the engine's native
-			// AUTO_INCREMENT allocator (a per-table WAL-durable counter) instead
-			// of the legacy __kit_sequences hot row.
+			// AUTO_INCREMENT allocator (a per-table WAL-durable counter).
 			autoIncrement: col.default?.kind === 'sequence',
 			embeddingDim: col.embeddingDim,
 			encrypted: col.encrypted,
@@ -1196,12 +1195,11 @@ export class KitDatabase {
 	 * `tableName`, advancing the engine's per-table counter. Returns `null` when
 	 * the table has no auto-increment column.
 	 *
-	 * This is the replacement for the legacy `allocateSequenceSync` hot-row
-	 * scheme: it is a pure in-memory counter bump (no `__kit_sequences` row, no
-	 * extra commit) that becomes durable when a row carrying the reserved id
-	 * commits. An aborted reservation simply leaves a gap, which the never-reuse
-	 * rule permits. Used by `prepareInsertRowSync` so a transaction can stage the
-	 * row with an explicit id and still return it from `executeSync()`.
+	 * Pure in-memory counter bump (no extra commit) that becomes durable when a
+	 * row carrying the reserved id commits. An aborted reservation simply leaves
+	 * a gap, which the never-reuse rule permits. Used by `prepareInsertRowSync`
+	 * so a transaction can stage the row with an explicit id and still return it
+	 * from `executeSync()`.
 	 */
 	reserveAutoIncSync(tableName: string): bigint | null {
 		const reserved = this.db.table(tableName).reserveAutoInc();
