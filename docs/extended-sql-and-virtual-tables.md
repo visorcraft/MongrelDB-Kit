@@ -86,9 +86,31 @@ Available helpers:
 | `dateOnly(value?, ...modifiers)` | `date(value, ...)` |
 | `unixEpoch(value?, ...modifiers)` | `unixepoch(value, ...)` |
 | `mathFn(name, ...args)` | `name(args...)` |
+| `mongreldbFtsRank(text, query)` | `mongreldb_fts_rank(text, query)` |
 
 `sqlLiteral(...)` quotes strings and scalar values. `mathFn(...)` accepts the
 function name as raw SQL, so only pass trusted names.
+
+### Full-text search ranking
+
+The `mongreldb_fts_rank(text, query)` UDF computes a BM25-inspired relevance
+score for a text column against a whitespace-tokenized query string. Use it in
+`ORDER BY` to rank results by relevance:
+
+```ts
+// Rank articles by relevance to 'database performance'.
+const rows = db.sqlRows(
+  "SELECT id, title, mongreldb_fts_rank(content, 'database performance') AS score " +
+  "FROM articles ORDER BY score DESC LIMIT 10"
+);
+```
+
+### Advanced SQL features
+
+The embedded SQL surface (via `db.sqlRows()`) supports the full SQL feature set
+including recursive CTEs (`WITH RECURSIVE`), window functions (`ROW_NUMBER()`,
+`SUM() OVER (...)`), `CREATE TABLE AS SELECT`, `CREATE MATERIALIZED VIEW`, and
+multi-statement execution (semicolon-separated statements in one call).
 
 ## Virtual tables
 

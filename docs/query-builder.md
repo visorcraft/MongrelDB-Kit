@@ -515,6 +515,8 @@ other aggregate throws (`Only a row-returning select can back a CTE`). CTEs are 
 recursive; each one is computed once and cached for the life of the scope. Rows read from a CTE are
 typed as `Record<string, unknown>[]`, not `Row<T>[]`, because the source is synthetic.
 
+Recursive CTEs (`WITH RECURSIVE`) are available via the raw SQL surface — see `db.sqlRows('WITH RECURSIVE ...')` in [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
+
 ## Raw escape hatch — `db.nativeDb`
 
 When the builder does not expose what you need, drop to the underlying MongrelDB `Database` via
@@ -547,7 +549,9 @@ JavaScript. Know where the line is:
 - **Subqueries are uncorrelated.** `inSubquery`/`exists`/`notExists` evaluate their subquery exactly
   once; they cannot reference the outer row, so there is no per-row re-binding.
 - **CTEs are eagerly materialized**, not lazy or recursive — each `with` is computed up front and
-  cached for the scope's lifetime.
+  cached for the scope's lifetime. Recursive CTEs (`WITH RECURSIVE`) are available via the raw SQL
+  surface — see `db.sqlRows('WITH RECURSIVE ...')` in
+  [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
 
 ## Gotchas
 

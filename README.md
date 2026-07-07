@@ -23,7 +23,7 @@ The repository also ships the `mongreldb-kit` CLI for schema validation, migrati
 - Synchronous TypeScript CRUD/query builder with predicates, ordering, projections, aggregates, joins, subqueries, CTEs, batch inserts, updates, and deletes.
 - Rust and Python APIs backed by the same Rust core and verified with cross-language conformance fixtures.
 - Migration runner with content-addressed checksums, stored schema catalog, table renames, and SQL views.
-- Embedded SQL surface (`sql` / `sqlArrow` / `sqlRows`) and maintenance helpers (`analyze` / `vacuum`) in every language.
+- Embedded SQL surface (sql / sqlArrow / sqlRows) with recursive CTEs, window functions, CREATE TABLE AS SELECT, materialized views, multi-statement execution, and a mongreldb_fts_rank relevance-scoring UDF.
 - Storage tuning (spill thresholds, compaction zstd, result-cache sizing, index build policy), trigger config, and per-table introspection (run count, page-cache stats, memtable/cache lengths).
 - Non-blocking async I/O variants (`putAsync` / `queryAsync` / `countAsync` / …) and `WriteBuffer` micro-batching for high-throughput ingest (TypeScript).
 - Engine-side trigger management plus SQL-backed virtual/external table helpers.
