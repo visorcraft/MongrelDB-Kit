@@ -5,7 +5,8 @@
 //! IPC bytes that `MongrelSession::run` produces.
 
 use arrow::array::{
-    Array, BooleanArray, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
+    Array, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    NullArray, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;
@@ -80,20 +81,48 @@ fn cell_value(arr: &dyn Array, r: usize) -> Value {
     if arr.is_null(r) {
         return Value::Null;
     }
+    // Signed integers → i64
     if let Some(a) = arr.as_any().downcast_ref::<Int64Array>() {
         return json!(a.value(r));
     }
     if let Some(a) = arr.as_any().downcast_ref::<Int32Array>() {
         return json!(a.value(r));
     }
+    if let Some(a) = arr.as_any().downcast_ref::<Int16Array>() {
+        return json!(a.value(r));
+    }
+    if let Some(a) = arr.as_any().downcast_ref::<Int8Array>() {
+        return json!(a.value(r));
+    }
+    // Unsigned integers → i64 (JSON has no unsigned; cast is lossless for normal values)
+    if let Some(a) = arr.as_any().downcast_ref::<UInt64Array>() {
+        return json!(a.value(r) as i64);
+    }
+    if let Some(a) = arr.as_any().downcast_ref::<UInt32Array>() {
+        return json!(a.value(r) as i64);
+    }
+    if let Some(a) = arr.as_any().downcast_ref::<UInt16Array>() {
+        return json!(a.value(r) as i64);
+    }
+    if let Some(a) = arr.as_any().downcast_ref::<UInt8Array>() {
+        return json!(a.value(r) as i64);
+    }
+    // Floats
     if let Some(a) = arr.as_any().downcast_ref::<Float64Array>() {
         return serde_json::Number::from_f64(a.value(r))
             .map(Value::Number)
             .unwrap_or(Value::Null);
     }
+    if let Some(a) = arr.as_any().downcast_ref::<Float32Array>() {
+        return serde_json::Number::from_f64(a.value(r) as f64)
+            .map(Value::Number)
+            .unwrap_or(Value::Null);
+    }
+    // Boolean
     if let Some(a) = arr.as_any().downcast_ref::<BooleanArray>() {
         return Value::Bool(a.value(r));
     }
+    // Strings
     if let Some(a) = arr.as_any().downcast_ref::<StringArray>() {
         return Value::String(a.value(r).to_string());
     }

@@ -366,7 +366,13 @@ export class KitDatabase {
 		let db: MongrelDatabase;
 		try {
 			db = addon.Database.open(path);
-		} catch {
+		} catch (e) {
+			// Propagate AuthRequired — do NOT fall back to create, which would
+			// silently bypass credential enforcement on an existing database.
+			const errMsg = e instanceof Error ? e.message : String(e);
+			if (errMsg.includes('AuthRequired') || errMsg.includes('authentication required')) {
+				throw e;
+			}
 			db = addon.Database.withPath(path);
 		}
 
@@ -409,7 +415,13 @@ export class KitDatabase {
 		let db: MongrelDatabase;
 		try {
 			db = addon.Database.open(path);
-		} catch {
+		} catch (e) {
+			// Propagate AuthRequired — do NOT fall back to create, which would
+			// silently bypass credential enforcement on an existing database.
+			const errMsg = e instanceof Error ? e.message : String(e);
+			if (errMsg.includes('AuthRequired') || errMsg.includes('authentication required')) {
+				throw e;
+			}
 			db = addon.Database.withPath(path);
 		}
 

@@ -739,7 +739,7 @@ fn main() -> Result<()> {
                 path,
                 passphrase,
                 yes,
-            } => cmd_auth_disable_offline(&path, passphrase.as_deref(), yes),
+            } => cmd_auth_disable_offline(&path, passphrase.as_deref(), yes, creds.as_ref()),
             AuthCmd::Enable {
                 path,
                 admin_user,
@@ -2181,7 +2181,12 @@ fn cmd_auth_enable(path: &Path, admin_user: &str, admin_password: Option<&str>) 
     Ok(())
 }
 
-fn cmd_auth_disable_offline(path: &Path, passphrase: Option<&str>, yes: bool) -> Result<()> {
+fn cmd_auth_disable_offline(
+    path: &Path,
+    passphrase: Option<&str>,
+    yes: bool,
+    creds: Option<&Credentials>,
+) -> Result<()> {
     eprintln!("WARNING: disabling require_auth on {}", path.display());
     eprintln!("This reverts the database to credentialless mode. Users and roles are preserved");
     eprintln!("but no longer enforced. Anyone with filesystem access can read the data.");
@@ -2212,20 +2217,31 @@ fn cmd_auth_disable_offline(path: &Path, passphrase: Option<&str>, yes: bool) ->
     // wants to revert to credentialless mode without a separate credentialed
     // session.
     let db = match passphrase {
-        Some(pw) => Database::open_encrypted(path, pw).context("failed to open encrypted database"),
+        Some(pw) => {
+            // Encrypted database — try with passphrase (may also need credentials).
+            if let Some(c) = creds {
+                Database::open_encrypted_with_credentials(path, pw, &c.user, &c.password)
+                    .context("failed to open encrypted database with credentials")
+            } else {
+                Database::open_encrypted(path, pw).context("failed to open encrypted database")
+            }
+        }
         None => {
-            // Try plain open first; if the database requires auth, try
-            // credentialed open with the global --user/--password if available.
-            // The actual offline recovery (no credentials at all) requires
-            // direct catalog file editing, which is documented in the spec.
+            // Plain database — try open, fall back to credentialed if global
+            // --user/--password were supplied.
             match Database::open(path) {
                 Ok(db) => Ok(db),
+                Err(_) if creds.is_some() => {
+                    let c = creds.unwrap();
+                    Database::open_with_credentials(path, &c.user, &c.password)
+                        .context("failed to open database with credentials")
+                }
                 Err(_) => {
                     bail!(
                         "cannot open database (it may require_auth or be encrypted). \
-                         For encrypted databases, pass --passphrase. \
-                         For require_auth databases where credentials are lost, \
-                         see docs/15-credential-enforcement.md §4.7 for offline recovery."
+                         Pass --user/--password for credentialed databases, or --passphrase \
+                         for encrypted databases. For require_auth databases where credentials \
+                         are lost, see docs/15-credential-enforcement.md §4.7 for offline recovery."
                     );
                 }
             }
