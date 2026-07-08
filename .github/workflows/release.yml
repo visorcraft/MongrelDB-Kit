@@ -8,10 +8,9 @@
 # stripped at publish time. Cut a kit release by pushing a tag, e.g.
 # `git tag v0.7.0 && git push --tags`.
 #
-# mongreldb-kit-cli and mongreldb-kit-python are not published here:
-# mongreldb-kit-cli has never been published (a first publish is a separate,
-# deliberate decision); mongreldb-kit-python is a PyO3 cdylib meant for PyPI
-# via maturin, not crates.io.
+# mongreldb-kit-cli release binaries are attached to the GitHub release.
+# mongreldb-kit-python is a PyO3 cdylib meant for PyPI via maturin, not
+# crates.io.
 #
 # Requires repo secrets:
 #   NPM_TOKEN            — granular npm access token, write access to @visorcraft
@@ -24,7 +23,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
   id-token: write # npm provenance
 
 jobs:
@@ -90,3 +89,77 @@ jobs:
       - run: cargo publish -p mongreldb-kit
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release-cli-linux-binaries:
+    runs-on: ubuntu-latest
+    needs: [publish, publish-crates]
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            asset: mongreldb-kit-linux-x64
+            apt: ''
+            linker: ''
+            ar: ''
+          - target: aarch64-unknown-linux-gnu
+            asset: mongreldb-kit-linux-arm64
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+            ar: aarch64-linux-gnu-ar
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+
+      - run: cargo build --release -p mongreldb-kit-cli --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+          CC_aarch64_unknown_linux_gnu: ${{ matrix.linker }}
+          AR_aarch64_unknown_linux_gnu: ${{ matrix.ar }}
+
+      - run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/mongreldb-kit dist/${{ matrix.asset }}
+          chmod +x dist/${{ matrix.asset }}
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.asset }}
+
+  release-cli-darwin-binaries:
+    runs-on: macos-14
+    needs: [publish, publish-crates]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo build --release -p mongreldb-kit-cli --target x86_64-apple-darwin
+
+      - run: cargo build --release -p mongreldb-kit-cli --target aarch64-apple-darwin
+
+      - run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/mongreldb-kit dist/mongreldb-kit-darwin-arm64
+          lipo -create \
+            target/x86_64-apple-darwin/release/mongreldb-kit \
+            target/aarch64-apple-darwin/release/mongreldb-kit \
+            -output dist/mongreldb-kit-darwin-universal
+          chmod +x dist/mongreldb-kit-darwin-arm64 dist/mongreldb-kit-darwin-universal
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/mongreldb-kit-darwin-arm64
+            dist/mongreldb-kit-darwin-universal
