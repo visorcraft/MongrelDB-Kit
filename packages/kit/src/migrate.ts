@@ -476,7 +476,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.30.1';
+	return '0.31.0';
 }
 
 function makeContext(kit: KitDatabase): MigrationContext {
