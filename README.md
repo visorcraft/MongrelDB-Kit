@@ -1,12 +1,18 @@
-# MongrelDB Kit
+<p align="center">
+  <img src="assets/mongrel.png" alt="MongrelDB logo" width="250" />
+</p>
 
-MongrelDB Kit is the application-facing persistence layer for [MongrelDB](https://www.MongrelDB.com). It gives TypeScript, Rust, and Python applications a schema-aware query builder, migrations, relational constraints, triggers, Extended SQL Function helpers, virtual/external table helpers, batch writes, auto-increment ids, and stable semantics across languages.
+<h1 align="center">MongrelDB Kit</h1>
 
-The repository also ships the `mongreldb-kit` CLI for schema validation, migration planning/status, drift checks, fixture import/export, and type generation.
+<p align="center">
+  <b>The application-facing persistence layer for MongrelDB - schema-aware query builder, migrations, relational constraints, and stable semantics across TypeScript, Rust, Python, and PHP.</b>
+</p>
 
-[![crates.io](https://img.shields.io/crates/v/mongreldb-kit)](https://crates.io/crates/mongreldb-kit)
-[![npm](https://img.shields.io/npm/v/@visorcraft/mongreldb-kit)](https://www.npmjs.com/package/@visorcraft/mongreldb-kit)
-[![PyPI](https://img.shields.io/pypi/v/mongreldb-kit)](https://pypi.org/project/mongreldb-kit/)
+<p align="center">
+  <a href="https://crates.io/crates/mongreldb-kit"><img src="https://img.shields.io/crates/v/mongreldb-kit" alt="crates.io" /></a>
+  <a href="https://www.npmjs.com/package/@visorcraft/mongreldb-kit"><img src="https://img.shields.io/npm/v/@visorcraft/mongreldb-kit" alt="npm" /></a>
+  <a href="https://pypi.org/project/mongreldb-kit/"><img src="https://img.shields.io/pypi/v/mongreldb-kit" alt="PyPI" /></a>
+</p>
 
 ## Packages And Tools
 
