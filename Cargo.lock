@@ -806,7 +806,7 @@ name = "conformance-runner"
 version = "0.1.0"
 dependencies = [
  "axum",
- "mongreldb-core",
+ "mongreldb-core 0.44.0",
  "mongreldb-kit",
  "mongreldb-server",
  "serde",
@@ -2640,6 +2640,36 @@ dependencies = [
 [[package]]
 name = "mongreldb-core"
 version = "0.44.0"
+dependencies = [
+ "aes-gcm",
+ "arc-swap",
+ "argon2",
+ "bincode",
+ "bytemuck",
+ "bytes",
+ "crc",
+ "fs2",
+ "getrandom 0.2.17",
+ "hkdf",
+ "hmac",
+ "lz4_flex 0.11.6",
+ "memmap2",
+ "parking_lot",
+ "rayon",
+ "regex",
+ "roaring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "tokio",
+ "zeroize",
+ "zstd",
+]
+
+[[package]]
+name = "mongreldb-core"
+version = "0.44.0"
 source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.44.0#6fb736fb77b56b08c87e67119b6af1cf3190925b"
 dependencies = [
  "aes-gcm",
@@ -2674,9 +2704,9 @@ version = "0.32.0"
 dependencies = [
  "arrow",
  "bincode",
- "mongreldb-core",
+ "mongreldb-core 0.44.0",
  "mongreldb-kit-core",
- "mongreldb-query",
+ "mongreldb-query 0.44.0",
  "parking_lot",
  "regex",
  "reqwest",
@@ -2730,6 +2760,26 @@ dependencies = [
 [[package]]
 name = "mongreldb-query"
 version = "0.44.0"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "chrono",
+ "datafusion",
+ "datafusion-datasource",
+ "futures",
+ "mongreldb-core 0.44.0",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "sqlparser",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "mongreldb-query"
+version = "0.44.0"
 source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.44.0#6fb736fb77b56b08c87e67119b6af1cf3190925b"
 dependencies = [
  "arrow",
@@ -2738,7 +2788,7 @@ dependencies = [
  "datafusion",
  "datafusion-datasource",
  "futures",
- "mongreldb-core",
+ "mongreldb-core 0.44.0 (git+https://github.com/visorcraft/MongrelDB.git?tag=v0.44.0)",
  "parking_lot",
  "regex",
  "serde",
@@ -2756,8 +2806,8 @@ dependencies = [
  "arrow",
  "axum",
  "libc",
- "mongreldb-core",
- "mongreldb-query",
+ "mongreldb-core 0.44.0 (git+https://github.com/visorcraft/MongrelDB.git?tag=v0.44.0)",
+ "mongreldb-query 0.44.0 (git+https://github.com/visorcraft/MongrelDB.git?tag=v0.44.0)",
  "serde",
  "serde_json",
  "tokio",
