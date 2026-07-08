@@ -21,6 +21,49 @@ use std::sync::Arc;
 
 const SCHEMA_FILE: &str = "kit_schema.json";
 
+/// Knobs for kit-level database opens.
+///
+/// Mirrors the core `OpenOptions` surface but lives at the kit boundary so
+/// callers that depend only on `mongreldb-kit` (e.g. the Python binding,
+/// the daemon, the CLI) don't need to reach into `mongreldb-core`. Right
+/// now the only knob is the cross-process lock timeout; future kit-level
+/// tunables (auth handshake timeout, remote-attempt deadline, etc.) plug
+/// in here without breaking existing callers.
+///
+/// Default is `lock_timeout_ms = 0` (fail-fast), matching the historical
+/// `Db::open` behavior and preserving backwards compatibility.
+#[derive(Clone, Copy, Debug)]
+pub struct OpenOptions {
+    /// How long to wait for the cross-process exclusive lock on
+    /// `<dir>/_meta/.lock` to become available, in milliseconds. `0`
+    /// preserves the fail-fast behavior. Non-zero enables
+    /// SQLite-style `busy_timeout` semantics: 1ms → 10ms → 50ms
+    /// backoff with a hard deadline at `lock_timeout_ms`.
+    pub lock_timeout_ms: u32,
+}
+
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self {
+            lock_timeout_ms: 0,
+        }
+    }
+}
+
+impl OpenOptions {
+    /// Create a new `OpenOptions` with all defaults.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set [`OpenOptions::lock_timeout_ms`]. `0` keeps the fail-fast default;
+    /// SQLite-style applications typically pick 1_000 – 5_000ms.
+    pub fn with_lock_timeout_ms(mut self, ms: u32) -> Self {
+        self.lock_timeout_ms = ms;
+        self
+    }
+}
+
 /// A named default-value provider registered by the application.
 pub type DefaultProvider = Box<dyn Fn() -> Value + Send + Sync>;
 
@@ -197,9 +240,58 @@ impl Database {
         })
     }
 
+    /// Open an existing kit database with kit-level [`OpenOptions`]. Use this
+    /// when another process may already be holding the cross-process lock
+    /// and you want SQLite-style `busy_timeout` semantics instead of an
+    /// immediate failure.
+    ///
+    /// Existing callers of [`open`](Self::open) keep the fail-fast behavior;
+    /// this method is opt-in.
+    pub fn open_with_options(path: &Path, opts: OpenOptions) -> Result<Self> {
+        let inner = Arc::new(CoreDatabase::open_with_options(
+            path,
+            mongreldb_core::OpenOptions::default().with_lock_timeout_ms(opts.lock_timeout_ms),
+        )?);
+        let schema = load_schema(path)?;
+        ensure_internal_tables(&inner)?;
+        reap_rotated_wal_segments(&inner);
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
+        })
+    }
+
     /// Open an existing page-encrypted kit database with its passphrase.
     pub fn open_encrypted(path: &Path, passphrase: &str) -> Result<Self> {
         let inner = Arc::new(CoreDatabase::open_encrypted(path, passphrase)?);
+        let schema = load_schema(path)?;
+        ensure_internal_tables(&inner)?;
+        reap_rotated_wal_segments(&inner);
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
+        })
+    }
+
+    /// Open an existing page-encrypted kit database with its passphrase and
+    /// kit-level [`OpenOptions`]. Opt-in lock-timeout semantics, mirroring
+    /// [`open_with_options`](Self::open_with_options).
+    pub fn open_encrypted_with_options(
+        path: &Path,
+        passphrase: &str,
+        opts: OpenOptions,
+    ) -> Result<Self> {
+        let inner = Arc::new(CoreDatabase::open_encrypted_with_options(
+            path,
+            passphrase,
+            mongreldb_core::OpenOptions::default().with_lock_timeout_ms(opts.lock_timeout_ms),
+        )?);
         let schema = load_schema(path)?;
         ensure_internal_tables(&inner)?;
         reap_rotated_wal_segments(&inner);
@@ -284,6 +376,33 @@ impl Database {
         })
     }
 
+    /// Open a credentialed kit database with kit-level [`OpenOptions`]. Use
+    /// this when another process may already hold the cross-process lock
+    /// and you want SQLite-style `busy_timeout` semantics.
+    pub fn open_with_credentials_and_options(
+        path: &Path,
+        username: &str,
+        password: &str,
+        opts: OpenOptions,
+    ) -> Result<Self> {
+        let inner = Arc::new(CoreDatabase::open_with_credentials_and_options(
+            path,
+            username,
+            password,
+            mongreldb_core::OpenOptions::default().with_lock_timeout_ms(opts.lock_timeout_ms),
+        )?);
+        let schema = load_schema(path)?;
+        ensure_internal_tables(&inner)?;
+        reap_rotated_wal_segments(&inner);
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
+        })
+    }
+
     /// Create a fresh kit database with `require_auth = true`, a single admin
     /// user, and the given schema. The returned handle is already authenticated
     /// as the admin.
@@ -325,6 +444,35 @@ impl Database {
     ) -> Result<Self> {
         let inner = Arc::new(CoreDatabase::open_encrypted_with_credentials(
             path, passphrase, username, password,
+        )?);
+        let schema = load_schema(path)?;
+        ensure_internal_tables(&inner)?;
+        reap_rotated_wal_segments(&inner);
+        Ok(Self {
+            inner,
+            schema,
+            root: path.to_path_buf(),
+            default_providers: HashMap::new(),
+            session: parking_lot::Mutex::new(None),
+        })
+    }
+
+    /// Open an encrypted + credentialed kit database with kit-level
+    /// [`OpenOptions`]. Opt-in lock-timeout semantics, mirroring
+    /// [`open_with_credentials_and_options`](Self::open_with_credentials_and_options).
+    pub fn open_encrypted_with_credentials_and_options(
+        path: &Path,
+        passphrase: &str,
+        username: &str,
+        password: &str,
+        opts: OpenOptions,
+    ) -> Result<Self> {
+        let inner = Arc::new(CoreDatabase::open_encrypted_with_credentials_and_options(
+            path,
+            passphrase,
+            username,
+            password,
+            mongreldb_core::OpenOptions::default().with_lock_timeout_ms(opts.lock_timeout_ms),
         )?);
         let schema = load_schema(path)?;
         ensure_internal_tables(&inner)?;
