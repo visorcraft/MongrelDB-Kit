@@ -46,6 +46,19 @@ jobs:
       # engine checkout used by local/CI integration jobs. Release only checks
       # out this repo, so install from package.json and let npm fetch the
       # already-published peer from the registry for typecheck/build.
+      - name: Wait for MongrelDB npm peer
+        run: |
+          ENGINE_VERSION="$(node -p "require('./package.json').peerDependencies['@visorcraft/mongreldb'].replace(/^[^0-9]*/, '')")"
+          for attempt in {1..80}; do
+            if npm view "@visorcraft/mongreldb@${ENGINE_VERSION}" version; then
+              exit 0
+            fi
+            echo "waiting for @visorcraft/mongreldb@${ENGINE_VERSION} on npm (${attempt}/80)"
+            sleep 15
+          done
+          echo "::error::@visorcraft/mongreldb@${ENGINE_VERSION} is not available on npm"
+          exit 1
+
       - run: npm install --package-lock=false
 
       - run: npm run build

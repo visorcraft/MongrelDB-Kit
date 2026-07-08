@@ -2219,8 +2219,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.43.2"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.43.2#442f21489eb0d17399635cfe3c7e7fd945c6751b"
+version = "0.43.3"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.43.3#73236249476bff4a252ac4c088e341f413b943be"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2250,7 +2250,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.31.1"
+version = "0.31.2"
 dependencies = [
  "arrow",
  "bincode",
@@ -2268,7 +2268,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.31.1"
+version = "0.31.2"
 dependencies = [
  "hex",
  "regex",
@@ -2281,8 +2281,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-query"
-version = "0.43.2"
-source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.43.2#442f21489eb0d17399635cfe3c7e7fd945c6751b"
+version = "0.43.3"
+source = "git+https://github.com/visorcraft/MongrelDB.git?tag=v0.43.3#73236249476bff4a252ac4c088e341f413b943be"
 dependencies = [
  "arrow",
  "async-trait",
