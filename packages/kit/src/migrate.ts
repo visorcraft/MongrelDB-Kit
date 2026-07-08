@@ -476,7 +476,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.31.0';
+	return '0.31.1';
 }
 
 function makeContext(kit: KitDatabase): MigrationContext {
@@ -890,16 +890,18 @@ function addColumnSync(kit: KitDatabase, tableName: string, column: ColumnSpec):
 	const db = kit.nativeDb;
 	const table = kit.schema.table(tableName);
 	if (db.tableNames().includes(tableName)) {
-		const dbColumns = db.tableColumns(tableName);
-		if (dbColumns.includes(column.name)) return;
+		const existing = db.tableColumnSpecs(tableName).find((c) => c.name === column.name);
+		if (existing) {
+			column.id = existing.id;
+			return;
+		}
 	}
 
+	column.id = Number(db.addColumn(tableName, toMongrelColumnSpec(column)));
 	const updatedTable: TableSpec = {
 		...table,
 		columns: [...table.columns, column]
 	};
-
-	db.addColumn(tableName, toMongrelColumnSpec(column));
 
 	if (!column.nullable) {
 		const defaultValue = computeDefaultValue(column, kit);

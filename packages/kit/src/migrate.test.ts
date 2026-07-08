@@ -11,6 +11,7 @@ import {
 	migrationContent,
 	migrationChecksum,
 	dropTable,
+	addColumn,
 	addIndex,
 	dropIndex,
 	dropColumn,
@@ -889,6 +890,24 @@ describe('migration ops', () => {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	it('addColumn honors an explicit column id and writes it back to the schema', async () => {
+		const widgets = table('widgets', {
+			columns: [int('id', { primaryKey: true }), text('name')],
+			primaryKey: ['id']
+		});
+		const note = text('note', { id: 7, nullable: true });
+
+		await withSchemaDb([widgets], async (db) => {
+			await addColumn(db, 'widgets', note);
+
+			expect(note.id).toBe(7);
+			expect(db.nativeDb.tableColumnSpecs('widgets').map((column) => [column.name, column.id])).toContainEqual([
+				'note',
+				7
+			]);
+		});
 	});
 
 	it('alterColumn changes the application type and preserves existing rows', async () => {

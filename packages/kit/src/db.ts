@@ -85,6 +85,7 @@ type MongrelDatabase = NativeDatabase & {
 		opts?: { maxRetries?: number; baseDelayMs?: number }
 	): Promise<bigint>;
 	alterColumn(table: string, columnName: string, column: MongrelColumnSpec): bigint;
+	tableColumnSpecs(table: string): MongrelColumnSpec[];
 	createProcedure(spec: { json: string }): bigint;
 	createOrReplaceProcedure(spec: { json: string }): bigint;
 	dropProcedure(name: string): void;
@@ -265,6 +266,38 @@ function columnId(table: TableSpec, name: string): number {
 	return col.id;
 }
 
+function alignTableColumnIds(table: TableSpec, physicalColumns: MongrelColumnSpec[]): void {
+	const physicalByName = new Map(physicalColumns.map((col) => [col.name, col.id]));
+	const used = new Set<number>();
+
+	for (const col of table.columns) {
+		const physicalId = physicalByName.get(col.name);
+		if (physicalId === undefined) continue;
+		if (used.has(physicalId)) {
+			throw new Error(`Duplicate physical column id ${physicalId} in table "${table.name}"`);
+		}
+		col.id = physicalId;
+		used.add(physicalId);
+	}
+
+	let nextId = 1;
+	for (const col of table.columns) {
+		if (physicalByName.has(col.name)) continue;
+		if (col.idExplicit) {
+			if (used.has(col.id)) {
+				throw new Error(
+					`Column "${col.name}" in table "${table.name}" uses existing physical id ${col.id}`
+				);
+			}
+			used.add(col.id);
+			continue;
+		}
+		while (used.has(nextId)) nextId++;
+		col.id = nextId++;
+		used.add(col.id);
+	}
+}
+
 function isoNow(): string {
 	return new Date().toISOString();
 }
@@ -377,6 +410,8 @@ export class KitDatabase {
 
 		const kitDb = new KitDatabase(db, schema);
 		kitDb.ensureInternalTables();
+		kitDb.alignExistingTableColumnIds(internalTables);
+		kitDb.alignExistingTableColumnIds(schema.tablesList());
 		for (const table of schema.tablesList()) {
 			kitDb.ensureAppTable(table);
 		}
@@ -477,6 +512,8 @@ export class KitDatabase {
 	private static initialize(db: MongrelDatabase, schema: Schema): KitDatabase {
 		const kitDb = new KitDatabase(db, schema);
 		kitDb.ensureInternalTables();
+		kitDb.alignExistingTableColumnIds(internalTables);
+		kitDb.alignExistingTableColumnIds(schema.tablesList());
 		for (const table of schema.tablesList()) {
 			kitDb.ensureAppTable(table);
 		}
@@ -489,6 +526,14 @@ export class KitDatabase {
 			if (!this.db.tableNames().includes(table.name)) {
 				this.db.createTable(table.name, toMongrelSchema(table));
 			}
+		}
+	}
+
+	private alignExistingTableColumnIds(tables: TableSpec[]): void {
+		const names = new Set(this.db.tableNames());
+		for (const table of tables) {
+			if (!names.has(table.name)) continue;
+			alignTableColumnIds(table, this.db.tableColumnSpecs(table.name));
 		}
 	}
 

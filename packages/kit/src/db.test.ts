@@ -42,6 +42,60 @@ describe('KitDatabase', () => {
 		}
 	});
 
+	it('reconciles existing table column ids by name on open', () => {
+		const v1 = table('widgets', {
+			columns: [int('id', { primaryKey: true }), text('name'), int('count')],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		let db = KitDatabase.openSync(dir, new Schema([v1]));
+		try {
+			db.insertInto(v1).values({ id: 1n, name: 'adapter', count: 3n }).executeSync();
+		} finally {
+			db.close();
+		}
+
+		const reordered = table('widgets', {
+			columns: [int('id', { primaryKey: true }), int('count'), text('name')],
+			primaryKey: 'id'
+		});
+		db = KitDatabase.openSync(dir, new Schema([reordered]));
+		try {
+			expect(reordered.columns.map((c) => [c.name, c.id])).toEqual([
+				['id', 1],
+				['count', 3],
+				['name', 2]
+			]);
+			expect(db.selectFrom(reordered).executeSync()).toEqual([
+				{ id: 1n, count: 3n, name: 'adapter' }
+			]);
+		} finally {
+			db.close();
+		}
+
+		const withInsertedCodeColumn = table('widgets', {
+			columns: [
+				int('id', { primaryKey: true }),
+				text('new_field', { nullable: true }),
+				text('name'),
+				int('count')
+			],
+			primaryKey: 'id'
+		});
+		db = KitDatabase.openSync(dir, new Schema([withInsertedCodeColumn]));
+		try {
+			expect(withInsertedCodeColumn.columns.map((c) => [c.name, c.id])).toEqual([
+				['id', 1],
+				['new_field', 4],
+				['name', 2],
+				['count', 3]
+			]);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('exportTsv/importTsv round-trips rows across a fresh database', () => {
 		const t = table('t', {
 			columns: [

@@ -44,6 +44,28 @@ describe('schema DSL', () => {
 		).toThrow('Duplicate column name');
 	});
 
+	it('honors explicit column ids and assigns auto ids without collisions', () => {
+		const users = table('users', {
+			columns: [int('id', { id: 10, primaryKey: true }), text('email', { id: 1 }), text('name')],
+			primaryKey: ['id']
+		});
+
+		expect(users.columns.map((c) => [c.name, c.id])).toEqual([
+			['id', 10],
+			['email', 1],
+			['name', 2]
+		]);
+	});
+
+	it('rejects invalid explicit column ids', () => {
+		expect(() =>
+			table('bad', {
+				columns: [int('id', { id: 0, primaryKey: true })],
+				primaryKey: ['id']
+			})
+		).toThrow('invalid id');
+	});
+
 	it('rejects missing primary key columns', () => {
 		expect(() =>
 			table('bad', {

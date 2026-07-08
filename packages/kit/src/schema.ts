@@ -11,6 +11,7 @@ import type {
 import type { DefaultValue } from './defaults.js';
 
 export type ColumnOptions = {
+	id?: number;
 	nullable?: boolean;
 	primaryKey?: boolean;
 	default?: DefaultValue;
@@ -46,7 +47,8 @@ export function column<
 	opts?: TOpts
 ): ColumnSpec<TName, TApp, OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
 	return {
-		id: 0,
+		id: opts?.id ?? 0,
+		idExplicit: opts?.id !== undefined,
 		name,
 		storageType,
 		applicationType: storageType,
@@ -294,9 +296,7 @@ export function table<const TColumns extends readonly ColumnSpec[]>(
 	options: TableOptions<TColumns>
 ): TableSpec<TColumns> & ColumnMap<TColumns> {
 	const columns = options.columns;
-	for (let i = 0; i < columns.length; i++) {
-		columns[i].id = columns[i].id || i + 1;
-	}
+	assignColumnIds(name, columns);
 
 	const primaryKey = Array.isArray(options.primaryKey)
 		? options.primaryKey
@@ -386,6 +386,33 @@ export function table<const TColumns extends readonly ColumnSpec[]>(
 		}
 	}
 	return spec as TableSpec<TColumns> & ColumnMap<TColumns>;
+}
+
+function assignColumnIds(name: string, columns: readonly ColumnSpec[]): void {
+	const used = new Set<number>();
+	for (const col of columns) {
+		if (col.idExplicit && (!Number.isInteger(col.id) || col.id <= 0 || col.id > 65535)) {
+			throw new Error(`Column "${col.name}" in table "${name}" has invalid id ${col.id}`);
+		}
+		if (col.id <= 0) continue;
+		if (columnIdTaken(used, col.id)) {
+			throw new Error(`Duplicate column id ${col.id} in table "${name}"`);
+		}
+	}
+
+	let nextId = 1;
+	for (const col of columns) {
+		if (col.id > 0) continue;
+		while (used.has(nextId)) nextId++;
+		col.id = nextId++;
+		used.add(col.id);
+	}
+}
+
+function columnIdTaken(used: Set<number>, id: number): boolean {
+	if (used.has(id)) return true;
+	used.add(id);
+	return false;
 }
 
 export class Schema {

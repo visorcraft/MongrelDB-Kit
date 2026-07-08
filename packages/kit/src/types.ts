@@ -31,6 +31,7 @@ export interface ColumnSpec<
 	TGenerated extends 'uuid' | 'now' | null = 'uuid' | 'now' | null
 > {
 	id: number;
+	idExplicit?: boolean;
 	name: TName;
 	storageType: ColumnStorageType;
 	applicationType: TApp;
