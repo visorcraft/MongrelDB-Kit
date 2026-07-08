@@ -23,16 +23,9 @@ const SCHEMA_FILE: &str = "kit_schema.json";
 
 /// Knobs for kit-level database opens.
 ///
-/// Mirrors the core `OpenOptions` surface but lives at the kit boundary so
-/// callers that depend only on `mongreldb-kit` (e.g. the Python binding,
-/// the daemon, the CLI) don't need to reach into `mongreldb-core`. Right
-/// now the only knob is the cross-process lock timeout; future kit-level
-/// tunables (auth handshake timeout, remote-attempt deadline, etc.) plug
-/// in here without breaking existing callers.
-///
 /// Default is `lock_timeout_ms = 0` (fail-fast), matching the historical
-/// `Db::open` behavior and preserving backwards compatibility.
-#[derive(Clone, Copy, Debug)]
+/// `Database::open` behavior and preserving backwards compatibility.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct OpenOptions {
     /// How long to wait for the cross-process exclusive lock on
     /// `<dir>/_meta/.lock` to become available, in milliseconds. `0`
@@ -40,14 +33,6 @@ pub struct OpenOptions {
     /// SQLite-style `busy_timeout` semantics: 1ms → 10ms → 50ms
     /// backoff with a hard deadline at `lock_timeout_ms`.
     pub lock_timeout_ms: u32,
-}
-
-impl Default for OpenOptions {
-    fn default() -> Self {
-        Self {
-            lock_timeout_ms: 0,
-        }
-    }
 }
 
 impl OpenOptions {
@@ -204,6 +189,44 @@ fn condition_label(c: &mongreldb_core::query::Condition) -> String {
     dbg.split(['(', '{', ' ']).next().unwrap_or("").to_string()
 }
 
+fn open_core_with_retry<T>(
+    timeout_ms: u32,
+    mut open: impl FnMut() -> mongreldb_core::Result<T>,
+) -> mongreldb_core::Result<T> {
+    if timeout_ms == 0 {
+        return open();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64);
+    let mut next_sleep = std::time::Duration::from_millis(1);
+    loop {
+        match open() {
+            Ok(db) => return Ok(db),
+            Err(err) if is_lock_contention(&err) => {
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    return Err(mongreldb_core::MongrelError::Io(std::io::Error::other(
+                        format!("database lock timeout after {timeout_ms}ms: {err}"),
+                    )));
+                }
+                let sleep = next_sleep.min(deadline - now);
+                std::thread::sleep(sleep);
+                next_sleep = next_sleep
+                    .saturating_mul(10)
+                    .min(std::time::Duration::from_millis(50));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn is_lock_contention(err: &mongreldb_core::MongrelError) -> bool {
+    matches!(
+        err,
+        mongreldb_core::MongrelError::Io(io)
+            if io.to_string().contains("locked by another process")
+    )
+}
+
 /// A kit database handle.
 ///
 /// Wraps a MongrelDB core database and a kit schema, providing table metadata
@@ -248,10 +271,9 @@ impl Database {
     /// Existing callers of [`open`](Self::open) keep the fail-fast behavior;
     /// this method is opt-in.
     pub fn open_with_options(path: &Path, opts: OpenOptions) -> Result<Self> {
-        let inner = Arc::new(CoreDatabase::open_with_options(
-            path,
-            mongreldb_core::OpenOptions::default().with_lock_timeout_ms(opts.lock_timeout_ms),
-        )?);
+        let inner = Arc::new(open_core_with_retry(opts.lock_timeout_ms, || {
+            CoreDatabase::open(path)
+        })?);
         let schema = load_schema(path)?;
         ensure_internal_tables(&inner)?;
         reap_rotated_wal_segments(&inner);
@@ -287,11 +309,9 @@ impl Database {
         passphrase: &str,
         opts: OpenOptions,
     ) -> Result<Self> {
-        let inner = Arc::new(CoreDatabase::open_encrypted_with_options(
-            path,
-            passphrase,
-            mongreldb_core::OpenOptions::default().with_lock_timeout_ms(opts.lock_timeout_ms),
-        )?);
+        let inner = Arc::new(open_core_with_retry(opts.lock_timeout_ms, || {
+            CoreDatabase::open_encrypted(path, passphrase)
+        })?);
         let schema = load_schema(path)?;
         ensure_internal_tables(&inner)?;
         reap_rotated_wal_segments(&inner);
@@ -385,12 +405,9 @@ impl Database {
         password: &str,
         opts: OpenOptions,
     ) -> Result<Self> {
-        let inner = Arc::new(CoreDatabase::open_with_credentials_and_options(
-            path,
-            username,
-            password,
-            mongreldb_core::OpenOptions::default().with_lock_timeout_ms(opts.lock_timeout_ms),
-        )?);
+        let inner = Arc::new(open_core_with_retry(opts.lock_timeout_ms, || {
+            CoreDatabase::open_with_credentials(path, username, password)
+        })?);
         let schema = load_schema(path)?;
         ensure_internal_tables(&inner)?;
         reap_rotated_wal_segments(&inner);
@@ -467,13 +484,9 @@ impl Database {
         password: &str,
         opts: OpenOptions,
     ) -> Result<Self> {
-        let inner = Arc::new(CoreDatabase::open_encrypted_with_credentials_and_options(
-            path,
-            passphrase,
-            username,
-            password,
-            mongreldb_core::OpenOptions::default().with_lock_timeout_ms(opts.lock_timeout_ms),
-        )?);
+        let inner = Arc::new(open_core_with_retry(opts.lock_timeout_ms, || {
+            CoreDatabase::open_encrypted_with_credentials(path, passphrase, username, password)
+        })?);
         let schema = load_schema(path)?;
         ensure_internal_tables(&inner)?;
         reap_rotated_wal_segments(&inner);
@@ -1839,4 +1852,40 @@ pub(crate) fn store_schema(path: &Path, schema: &KitSchema) -> Result<()> {
 /// Persist a kit schema into the database. Used after migrations.
 pub(crate) fn persist_schema(db: &Database, schema: &KitSchema) -> Result<()> {
     store_schema(&db.root, schema)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_core_with_retry;
+
+    fn lock_error() -> mongreldb_core::MongrelError {
+        mongreldb_core::MongrelError::Io(std::io::Error::other(
+            "database at /tmp/db is locked by another process: would block",
+        ))
+    }
+
+    #[test]
+    fn open_retry_waits_for_lock_contention_only() {
+        let mut calls = 0;
+        let value = open_core_with_retry(50, || {
+            calls += 1;
+            if calls < 3 {
+                Err(lock_error())
+            } else {
+                Ok(7)
+            }
+        })
+        .unwrap();
+        assert_eq!(value, 7);
+        assert_eq!(calls, 3);
+
+        let mut non_lock_calls = 0;
+        let err: mongreldb_core::Result<()> = open_core_with_retry(50, || {
+            non_lock_calls += 1;
+            Err(mongreldb_core::MongrelError::Other("nope".into()))
+        });
+        let err = err.unwrap_err();
+        assert_eq!(non_lock_calls, 1);
+        assert!(matches!(err, mongreldb_core::MongrelError::Other(_)));
+    }
 }

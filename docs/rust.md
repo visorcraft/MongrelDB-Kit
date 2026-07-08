@@ -426,6 +426,16 @@ let memtable = db.table_memtable_len("widgets")?;
 All methods are also reachable via the `Database::raw()` escape hatch
 (`db.raw().table(name)?.lock()`) for the full engine surface.
 
+If a second process may briefly hold the database lock, opt in to retrying opens:
+
+```rust
+use std::path::Path;
+use mongreldb_kit::{Database, OpenOptions};
+
+let opts = OpenOptions::new().with_lock_timeout_ms(5_000);
+let db = Database::open_with_options(Path::new("./store.kitdb"), opts)?;
+```
+
 ## Sequences and defaults
 
 A column whose `DefaultKind::Sequence(name)` default is set is auto-assigned from a named sequence
