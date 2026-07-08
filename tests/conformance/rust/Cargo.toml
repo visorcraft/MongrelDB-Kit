@@ -10,12 +10,10 @@ serde_json = { version = "1", features = ["preserve_order"] }
 tempfile = "3"
 
 # Remote conformance mode: boot a real mongreldb-server daemon and drive the
-# Kit's RemoteDatabase against it. Git-tag-sourced so the server shares the
-# same mongreldb-core as the kit (unified via the workspace
-# [patch.crates-io]). These are regular deps because `src/remote.rs` is library
-# code (dev-dependencies are not visible to a crate's own lib).
-mongreldb-server = { git = "https://github.com/visorcraft/MongrelDB.git", tag = "v0.44.0" }
-mongreldb-core = "0.44.0"
+# Kit's RemoteDatabase against it. This is a regular dep because `src/remote.rs`
+# is library code (dev-dependencies are not visible to a crate's own lib).
+mongreldb-server = "0.44.1"
+mongreldb-core = "0.44.1"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 axum = "0.8"
 
