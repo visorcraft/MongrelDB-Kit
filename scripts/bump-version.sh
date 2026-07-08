@@ -41,6 +41,7 @@ done
 sed -i "s/version = \"$OLD\"/version = \"$NEW\"/" python/mongreldb_kit/pyproject.toml
 sed -i "s/\"version\": \"$OLD\"/\"version\": \"$NEW\"/" packages/kit/package.json
 sed -i -E "s/return '[0-9]+\\.[0-9]+\\.[0-9]+';/return '$NEW';/" packages/kit/src/migrate.ts
+sed -i "s/VERSION=v$OLD/VERSION=v$NEW/" docs/cli.md
 sed -i "s/mongreldb-kit = { path = \"..\\/mongreldb-kit\", version = \"$OLD\" }/mongreldb-kit = { path = \"..\\/mongreldb-kit\", version = \"$NEW\" }/" \
   crates/kit-perf/Cargo.toml
 
@@ -52,7 +53,7 @@ cargo check --workspace >/dev/null
 # Safety net: catch any file the hardcoded list above missed (e.g. a new
 # crate). Warns rather than fails -- Cargo.lock/target/node_modules/.venv
 # always mention the old version transitively and are expected here.
-STRAY="$(grep -rl "\"$OLD\"" --include="*.toml" --include="*.json" . 2>/dev/null \
+STRAY="$(grep -rl "\"$OLD\"\|v$OLD" --include="*.toml" --include="*.json" --include="*.md" . 2>/dev/null \
   | grep -v -E "/target/|node_modules|\.venv|Cargo\.lock|package-lock\.json" || true)"
 if [[ -n "$STRAY" ]]; then
   echo "warning: these files still mention $OLD -- check whether they need the bump too:" >&2

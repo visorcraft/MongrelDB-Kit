@@ -2671,7 +2671,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "arrow",
  "bincode",
@@ -2691,7 +2691,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-cli"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2706,7 +2706,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "hex",
  "insta",
@@ -2720,7 +2720,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-python"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "mongreldb-kit",
  "mongreldb-kit-core",

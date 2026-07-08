@@ -33,9 +33,9 @@ jobs:
       run:
         working-directory: packages/kit
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -73,11 +73,11 @@ jobs:
   publish-crates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       # mongreldb-kit depends on mongreldb-kit-core by path+version; crates.io
       # publish strips the path, so mongreldb-kit-core must already be live on
@@ -107,13 +107,13 @@ jobs:
             linker: aarch64-linux-gnu-gcc
             ar: aarch64-linux-gnu-ar
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       - if: matrix.apt != ''
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
@@ -129,7 +129,7 @@ jobs:
           cp target/${{ matrix.target }}/release/mongreldb-kit dist/${{ matrix.asset }}
           chmod +x dist/${{ matrix.asset }}
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/${{ matrix.asset }}
 
@@ -137,13 +137,13 @@ jobs:
     runs-on: macos-14
     needs: [publish, publish-crates]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       - run: cargo build --release -p mongreldb-kit-cli --target x86_64-apple-darwin
 
@@ -158,7 +158,7 @@ jobs:
             -output dist/mongreldb-kit-darwin-universal
           chmod +x dist/mongreldb-kit-darwin-arm64 dist/mongreldb-kit-darwin-universal
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/mongreldb-kit-darwin-arm64
