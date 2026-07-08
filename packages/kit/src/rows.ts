@@ -8,6 +8,8 @@ export function cellValue(cell: Cell | undefined): unknown {
 	if (cell.boolean !== undefined) return cell.boolean;
 	if (cell.float64 !== undefined) return cell.float64;
 	if (cell.bytes !== undefined) return cell.bytes;
+	// Embedding/vector columns: the NAPI addon returns the vector as a number[].
+	if (cell.embedding !== undefined) return cell.embedding;
 	return null;
 }
 

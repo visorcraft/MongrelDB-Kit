@@ -17,6 +17,10 @@ class Column:
     default: Any = None
     generated: bool = False
     enum_values: Optional[list[str]] = None
+    # Dimension for storage_type == "embedding". Required for ANN indexes to
+    # function (a dim of 0 makes the index non-functional). Mirrors the Rust
+    # kit-core `Column.embedding_dim` and the TS kit `ColumnSpec.embeddingDim`.
+    embedding_dim: Optional[int] = None
     min: Optional[float] = None
     max: Optional[float] = None
     min_length: Optional[int] = None
@@ -38,6 +42,8 @@ class Column:
             d["default"] = self.default
         if self.enum_values is not None:
             d["enum_values"] = self.enum_values
+        if self.embedding_dim is not None:
+            d["embedding_dim"] = self.embedding_dim
         if self.min is not None:
             d["min"] = self.min
         if self.max is not None:
@@ -58,9 +64,16 @@ class Index:
     name: str
     columns: list[str]
     unique: bool = False
+    # Index kind: "bitmap", "fm", "ann", "sparse", "learned_range", "min_hash".
+    # When omitted the engine picks a default per column type. Mirrors the
+    # `index()` factory's `kind` kwarg and the kit-core `Index.kind`.
+    kind: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "columns": list(self.columns), "unique": self.unique}
+        d: dict[str, Any] = {"name": self.name, "columns": list(self.columns), "unique": self.unique}
+        if self.kind is not None:
+            d["kind"] = self.kind
+        return d
 
 
 @dataclass

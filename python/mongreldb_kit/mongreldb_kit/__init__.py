@@ -804,6 +804,7 @@ def column(
     default: Any = None,
     generated: bool = False,
     enum_values: Optional[list[str]] = None,
+    embedding_dim: Optional[int] = None,
     min: Optional[float] = None,
     max: Optional[float] = None,
     min_length: Optional[int] = None,
@@ -824,6 +825,8 @@ def column(
         col["default"] = default
     if enum_values is not None:
         col["enum_values"] = enum_values
+    if embedding_dim is not None:
+        col["embedding_dim"] = embedding_dim
     if min is not None:
         col["min"] = min
     if max is not None:
@@ -1080,3 +1083,13 @@ def json_native(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
 def array_col(name: str, id: int, **kwargs: Any) -> dict[str, Any]:
     """Declare a variable-length array column."""
     return column(name, id, "array", **kwargs)
+
+
+def embedding(name: str, id: int, dim: int, **kwargs: Any) -> dict[str, Any]:
+    """Declare a fixed-dimension float32 embedding column for ANN search.
+
+    The dimension is required for ANN indexes to function; a dim of 0 makes
+    the index non-functional. This mirrors the Rust kit-core ``embedding_dim``
+    field and the TS kit ``ColumnSpec.embeddingDim``.
+    """
+    return column(name, id, "embedding", embedding_dim=dim, **kwargs)
