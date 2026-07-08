@@ -12,6 +12,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -82,7 +83,6 @@ def daemon_url():
     if not binary:
         pytest.skip("mongreldb-server binary not found (set MONGRELDB_SERVER env var)")
 
-    import tempfile
     tmpdir = tempfile.mkdtemp(prefix="mdb_live_")
     port = _free_port()
     url = f"http://127.0.0.1:{port}"
