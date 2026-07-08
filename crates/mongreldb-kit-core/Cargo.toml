@@ -1,6 +1,6 @@
 [package]
 name = "mongreldb-kit-core"
-version = "0.31.2"
+version = "0.32.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Core, language-neutral model for MongrelDB Kit: schema, key encoding, validation, constraint planning, migration planning, and query AST."
