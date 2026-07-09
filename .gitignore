@@ -3,6 +3,7 @@
 Thumbs.db
 .idea/
 .vscode/
+.zcode/
 *.swp
 *.swo
 *~
