@@ -18,7 +18,7 @@ opens its own transaction, does its work, and commits:
 1. apply defaults and validate the full row,
 2. enforce foreign keys and stage unique / primary-key guards,
 3. write the application row(s),
-4. commit — and, on a write-write conflict, **retry automatically** (up to 5 attempts) with
+4. commit - and, on a write-write conflict, **retry automatically** (up to 5 attempts) with
    a small bounded backoff.
 
 ```ts
@@ -29,7 +29,7 @@ const order = db.insertInto(orders).values({ customer_id: ada.id }).executeSync(
 A cascading delete is a single transaction too: deleting a customer removes her orders and
 their items atomically (see [Constraints](./constraints.md#delete-actions)). The Kit does
 not expose a way to thread several `insertInto`/`updateTable`/`deleteFrom` calls into one
-shared transaction — each is atomic by itself. When you need *multiple* writes to commit
+shared transaction - each is atomic by itself. When you need *multiple* writes to commit
 together, drop down to the native transaction API below.
 
 ## Manual transactions: `begin` / `commit` / `rollback`
@@ -53,7 +53,7 @@ try {
 > **Native transactions stage raw rows and bypass Kit enforcement.** `txn.put` /
 > `txn.delete` write cells straight to storage: they do **not** run the validators, the
 > `unique` / foreign-key guards, or the cascade planner. You are responsible for supplying
-> complete, valid rows — build them with `toCells(table, row)` and, if you want the Kit's
+> complete, valid rows - build them with `toCells(table, row)` and, if you want the Kit's
 > checks, call `validateRow(table, row)` yourself before staging. `txn.put` is an upsert
 > keyed by the row's storage id, so updates are expressed as `delete(oldRowId)` +
 > `put(newCells)`, exactly as the Kit's own update path does.
@@ -74,7 +74,7 @@ const epoch = await db.nativeDb.transaction(
 ```
 
 - `fn(txn)` may be **sync or async**; it stages ops on `txn` and must **not** call
-  `commit`/`rollback` — the helper commits on success and rolls back on throw.
+  `commit`/`rollback` - the helper commits on success and rolls back on throw.
 - It retries **only write-write conflicts**, up to `maxRetries` (default `3`) with a linear
   backoff of `baseDelayMs` (default `2` ms) per attempt; any other error propagates
   immediately after a rollback.
@@ -85,7 +85,7 @@ const epoch = await db.nativeDb.transaction(
 
 ### Worked example: a money transfer
 
-Two balance updates that must both apply or neither — with a guard against overdraft and
+Two balance updates that must both apply or neither - with a guard against overdraft and
 automatic retry on contention:
 
 ```ts
@@ -154,7 +154,7 @@ retryable error rather than overwriting the winner.
 - The `transaction()` helper and the Kit's internal mutation path both catch exactly these
   and retry; everything else aborts.
 - Because the loser **retries** instead of clobbering, "last write wins" never silently
-  drops an update on a contended row — the retry re-reads the winner's value first (which is
+  drops an update on a contended row - the retry re-reads the winner's value first (which is
   why your callback must be re-runnable).
 - The Kit also *deliberately manufactures* conflicts to keep relational integrity safe under
   snapshot isolation: a child insert and a concurrent parent delete each touch the parent's
@@ -168,22 +168,22 @@ Auto-increment ids come from `sequenceDefault(...)`. In TypeScript, that default
 engine's native `AUTO_INCREMENT` counter for the table. In Rust/Python, named sequences are backed
 by `__kit_sequences` and are also available through `allocate_sequence(...)`. Two properties matter:
 
-- **Ids are 1-based** — the first id handed out is `1n`, never `0n`.
-- **Reserved ids are not reused.** If an insert reserves an id and then fails — a validation error,
-  a constraint violation, or a rolled-back surrounding transaction — the next insert may get the
+- **Ids are 1-based** - the first id handed out is `1n`, never `0n`.
+- **Reserved ids are not reused.** If an insert reserves an id and then fails - a validation error,
+  a constraint violation, or a rolled-back surrounding transaction - the next insert may get the
   following number, leaving a gap.
 
 ```ts
 const a = db.insertInto(customers).values({ email: 'a@example.com', name: 'Ada' }).executeSync();
 // a.id === 1n
 
-// Fails validation (missing name) — but only AFTER id 2 was reserved.
+// Fails validation (missing name) - but only AFTER id 2 was reserved.
 try {
   db.insertInto(customers).values({ email: 'b@example.com', name: null as never }).executeSync();
 } catch { /* KitValidationError */ }
 
 const c = db.insertInto(customers).values({ email: 'c@example.com', name: 'Cy' }).executeSync();
-// c.id === 3n — id 2 was consumed by the failed insert.
+// c.id === 3n - id 2 was consumed by the failed insert.
 ```
 
 This is the same behavior as SQL `AUTO_INCREMENT` / `SERIAL`: auto-increment values are a source
@@ -193,13 +193,13 @@ of unique ids, **not** a gap-free counter. Do not treat ids as contiguous.
 > attempts); the native `transaction()` helper defaults to 3. Both numbers are tunable via
 > `opts.maxRetries` where the helper is called.
 
-**In Rust/Python:** the same primitives exist — a `begin`/`commit`/`rollback` transaction
+**In Rust/Python:** the same primitives exist - a `begin`/`commit`/`rollback` transaction
 and a retrying transaction wrapper, with snapshot-isolation conflicts surfaced as the
 binding's conflict error type. See [rust.md](./rust.md) / [python.md](./python.md).
 
 ## See also
 
-- [Constraints](./constraints.md) — what each constrained mutation validates and enforces before it commits.
-- [Defaults & sequences](./defaults.md) — sequence, now, uuid, and static defaults.
-- [Errors](./errors.md) — `KitConflictError`, `isRetryableConflict`, and the `CONFLICT` code.
-- [Internal tables](./internal-tables.md) — `__kit_row_guards`, migration tables, and the Rust/Python named sequence table.
+- [Constraints](./constraints.md) - what each constrained mutation validates and enforces before it commits.
+- [Defaults & sequences](./defaults.md) - sequence, now, uuid, and static defaults.
+- [Errors](./errors.md) - `KitConflictError`, `isRetryableConflict`, and the `CONFLICT` code.
+- [Internal tables](./internal-tables.md) - `__kit_row_guards`, migration tables, and the Rust/Python named sequence table.

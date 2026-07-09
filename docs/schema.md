@@ -18,7 +18,7 @@ import {
 
 ## The running example
 
-The docs use a generic **store** domain — `customers`, `products`, `orders`, `order_items`. Here is
+The docs use a generic **store** domain - `customers`, `products`, `orders`, `order_items`. Here is
 the full schema; later sections dissect each piece.
 
 ```ts
@@ -85,13 +85,13 @@ export const schema = new Schema([customers, products, orders, orderItems]);
 
 ## `table(name, options)`
 
-`table()` returns a `TableSpec`. Each column is also exposed as a property on the returned object —
-`customers.email`, `orders.customer_id` — which is exactly what the query builder wants for
+`table()` returns a `TableSpec`. Each column is also exposed as a property on the returned object -
+`customers.email`, `orders.customer_id` - which is exactly what the query builder wants for
 predicates and ordering (`eq(customers.email, ...)`, `desc(orders.id)`).
 
 ```ts
 const t = table('customers', {
-  columns: [ /* ColumnSpec[] — at least one */ ],
+  columns: [ /* ColumnSpec[] - at least one */ ],
   primaryKey: 'id',          // string | string[]  (required)
   indexes:     [/* IndexSpec[]      */],  // optional
   unique:      [/* UniqueSpec[]     */],  // optional
@@ -116,7 +116,7 @@ table, etc. These are programming errors surfaced at construction time, not row-
 
 ## Columns
 
-A column has a name, a **storage type**, and optional `ColumnOptions`. Use the typed constructors —
+A column has a name, a **storage type**, and optional `ColumnOptions`. Use the typed constructors -
 they are thin wrappers over the generic `column()`:
 
 | Constructor | Storage type | `Row<T>` TS type |
@@ -132,16 +132,16 @@ they are thin wrappers over the generic `column()`:
 | `intervalCol(name, opts?)` | `interval` | `{ months, days, nanos }` |
 | `decimal128(name, opts?)` | `decimal128` | `string` (exact decimal) |
 | `uuid(name, opts?)` | `uuid` | `string` (RFC 4122 hex) |
-| `json(name, opts?)` | `json` | `unknown` — stored as text; see below |
-| `jsonNative(name, opts?)` | `json_native` | `unknown` — stored as native JSON |
-| `arrayCol(name, opts?)` | `array` | `unknown[]` — variable-length array |
+| `json(name, opts?)` | `json` | `unknown` - stored as text; see below |
+| `jsonNative(name, opts?)` | `json_native` | `unknown` - stored as native JSON |
+| `arrayCol(name, opts?)` | `array` | `unknown[]` - variable-length array |
 | `blob(name, opts?)` | `bytes` | inferred `unknown`; runtime value is `Uint8Array` |
 | `column(name, storageType, opts?)` | any of the above | per storage type |
 
 `column()` is the generic escape hatch the others delegate to; pass the storage type string
 explicitly (`column('raw', 'int64', { nullable: true })`). Prefer the named constructors.
 
-A nullable column widens its `Row<T>` type with `| null` — `text('note', { nullable: true })` infers
+A nullable column widens its `Row<T>` type with `| null` - `text('note', { nullable: true })` infers
 `string | null`.
 
 ### `int64` is `bigint`, not `number`
@@ -153,16 +153,16 @@ Integer columns map to JavaScript `bigint`. Write literals with the `n` suffix a
 const c = db.insertInto(customers).values({ email: 'a@b.c', name: 'Ada' }).executeSync();
 c.id;            // 1n   (bigint)
 c.id === 1n;     // true
-c.id === 1;      // false — never compare a bigint id against a number
+c.id === 1;      // false - never compare a bigint id against a number
 ```
 
 Use `real()` (a `float64` / `number`) only for genuinely fractional quantities. Money is best kept
-as integer minor units — note `price_cents` and `unit_price_cents` are `int` in the store schema.
+as integer minor units - note `price_cents` and `unit_price_cents` are `int` in the store schema.
 
 ### `json` columns are stored as text
 
 `json` validates that the value is JSON-serializable, but storage writes the value through a **text**
-cell. In practice you supply (and read back) a **string** — serialize yourself:
+cell. In practice you supply (and read back) a **string** - serialize yourself:
 
 ```ts
 text('meta', { nullable: true });        // or:
@@ -205,30 +205,30 @@ type ColumnOptions = {
 
 How each one behaves on a row (validation runs on every insert and update):
 
-- **`nullable`** — when `false` (the default), a missing/`null` value is rejected with
+- **`nullable`** - when `false` (the default), a missing/`null` value is rejected with
   `KitValidationError`. When `true`, the column may be `null` and becomes optional on insert (see
   [Types](./types.md)).
-- **`primaryKey`** — a per-column marker. The table's `primaryKey` option is what actually defines
+- **`primaryKey`** - a per-column marker. The table's `primaryKey` option is what actually defines
   the key; keep them consistent (`int('id', { primaryKey: true })` plus `primaryKey: 'id'`).
-- **`default` / `generated`** — supply a value when the column is omitted on insert. `generated:
+- **`default` / `generated`** - supply a value when the column is omitted on insert. `generated:
   'uuid'` and `generated: 'now'` are shorthands for `default: uuidDefault()` / `nowDefault()`. If
   both are set, `default` wins. Either one makes the column optional on insert. Full coverage in
   [Defaults & sequences](./defaults.md).
-- **`enumValues`** — for text columns, the value must be one of the listed strings, else
+- **`enumValues`** - for text columns, the value must be one of the listed strings, else
   `KitValidationError`. The inferred type stays `string`.
-- **`check`** — a **predicate function** `(value) => boolean | string`. Return `true` to pass;
+- **`check`** - a **predicate function** `(value) => boolean | string`. Return `true` to pass;
   return `false` (generic message) or a `string` (used as the error message) to fail. This is the
-  TypeScript surface — do **not** pass a SQL-like string expression here; that grammar is the
+  TypeScript surface - do **not** pass a SQL-like string expression here; that grammar is the
   cross-language serialized form. Table-level `check()` (below) works the same way over a whole row.
 
   ```ts
   text('slug', { check: (v) => (v as string).length > 0 || 'slug required' })
   ```
-- **`min` / `max`** — numeric bounds, checked for both `int64` (`bigint`) and `float64` (`number`)
+- **`min` / `max`** - numeric bounds, checked for both `int64` (`bigint`) and `float64` (`number`)
   columns. `int('age', { min: 0, max: 150 })`.
-- **`minLength` / `maxLength`** — length bounds for `text` (string length) and `bytes` (byte
+- **`minLength` / `maxLength`** - length bounds for `text` (string length) and `bytes` (byte
   length). `text('handle', { minLength: 3, maxLength: 20 })`.
-- **`regex`** — a `RegExp` the string value must match. `text('handle', { regex: /^[a-z]+$/ })`.
+- **`regex`** - a `RegExp` the string value must match. `text('handle', { regex: /^[a-z]+$/ })`.
 
 Bounds and patterns only apply to compatible types (e.g. `regex` is ignored for non-strings), and
 they are skipped entirely when the value is `null` on a nullable column.
@@ -239,7 +239,7 @@ These are passed in the `table()` options and are enforced by the Kit (the stora
 enforce them natively). See [Constraints](./constraints.md) for the full behavior; here is how each
 is constructed.
 
-### `primaryKey` — single and composite
+### `primaryKey` - single and composite
 
 `primaryKey` is required and accepts a column name or an array of names for a composite key:
 
@@ -276,7 +276,7 @@ A unique constraint over one or more columns (composite uniqueness). Generated n
 
 ```ts
 unique: [unique(['email'])]                  // single column
-unique: [unique(['order_id', 'product_id'])] // composite — one product per order
+unique: [unique(['order_id', 'product_id'])] // composite - one product per order
 ```
 
 ### `foreignKey(columns, { table, columns }, { onDelete?, name? })`
@@ -309,7 +309,7 @@ checks: [
 ```
 
 The string-expression form (e.g. `"price_cents >= 0"`) is the cross-language serialized
-representation used by the Rust/Python evaluator and the conformance suite — in TypeScript you always
+representation used by the Rust/Python evaluator and the conformance suite - in TypeScript you always
 pass a predicate function.
 
 ## Assembling a `Schema`
@@ -328,14 +328,14 @@ Useful instance methods:
 
 | Method | Returns |
 | --- | --- |
-| `schema.tablesList()` | `TableSpec[]` — all tables, in insertion order |
+| `schema.tablesList()` | `TableSpec[]` - all tables, in insertion order |
 | `schema.table(name)` | the `TableSpec` (throws if absent) |
 | `schema.hasTable(name)` | `boolean` |
 
 ## Notes
 
 - `table()` and `new Schema()` throw on inconsistent declarations (missing pk column, duplicate
-  names/ids, unknown index/unique/fk columns) — these are construction-time programming errors,
+  names/ids, unknown index/unique/fk columns) - these are construction-time programming errors,
   distinct from per-row `KitValidationError`.
 - Column ids are positional and load-bearing; append columns, do not reorder them. See
   [Migrations](./migrations.md) for evolving a schema safely.
@@ -344,8 +344,8 @@ Useful instance methods:
 
 ## See also
 
-- [Types](./types.md) — `Row<T>`, `Insert<T>`, `Update<T>` inferred from these declarations.
-- [Defaults & sequences](./defaults.md) — `default` / `generated` and auto-increment ids.
-- [Constraints](./constraints.md) — how unique, foreign-key, check, and not-null are enforced.
-- [Query builder](./query-builder.md) — using the column properties in selects and predicates.
-- [Migrations](./migrations.md) — evolving a schema over time.
+- [Types](./types.md) - `Row<T>`, `Insert<T>`, `Update<T>` inferred from these declarations.
+- [Defaults & sequences](./defaults.md) - `default` / `generated` and auto-increment ids.
+- [Constraints](./constraints.md) - how unique, foreign-key, check, and not-null are enforced.
+- [Query builder](./query-builder.md) - using the column properties in selects and predicates.
+- [Migrations](./migrations.md) - evolving a schema over time.

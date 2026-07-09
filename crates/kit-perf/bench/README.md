@@ -37,11 +37,11 @@ python ../../crates/kit-perf/bench/py/bench.py [N]
 
 ## What it measures
 
-- **Single-row insert + commit** — the hot path: `begin → insert → commit`
+- **Single-row insert + commit** - the hot path: `begin → insert → commit`
   with full per-row validation and PK/unique/FK guard checks (Kit) vs raw
   `Table::put → commit` (core-direct).
-- **Single-row update + commit** — Kit's update is delete+reinsert at the
+- **Single-row update + commit** - Kit's update is delete+reinsert at the
   storage layer; core-direct is a PK upsert.
 - **Single-row delete + commit**.
-- **Bulk-ingest throughput** — `insert_many` (Kit) vs `put_batch` (core),
+- **Bulk-ingest throughput** - `insert_many` (Kit) vs `put_batch` (core),
   measuring Melem/s over a single transaction.

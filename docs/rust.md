@@ -193,7 +193,7 @@ Use `txn.rollback()` to abort.
 ### Batch insert
 
 `txn.insert_many(table, rows)` stages a whole `Vec` of rows in the open transaction and returns
-the stored `Vec<Row>` in order — the same per-row defaults, validation, sequence ids, and guards
+the stored `Vec<Row>` in order - the same per-row defaults, validation, sequence ids, and guards
 as `insert`, but staged in one pass so a single `commit()` writes the batch. For a single-column
 primary key it preloads the existing keys once, so the per-row duplicate check stays O(1).
 
@@ -240,14 +240,14 @@ let query = Query::Select(Select {
 ```
 
 `Expr` also carries the full predicate set: `Like`, `Contains`, `BytesPrefix`
-(anchored prefix on a bitmap-indexed `Bytes` column — exact pushdown, no
+(anchored prefix on a bitmap-indexed `Bytes` column - exact pushdown, no
 residual), `IsNull`/`IsNotNull`, `In`/`NotIn`, `InSubquery`, `Exists`/
 `NotExists`, and the logical combinators. The engine pushes `BytesPrefix` down
 to a bitmap key-prefix scan when the column has a bitmap index:
 
 ```rust
 // Find events whose `key` (a Bytes column with a bitmap index) starts with the
-// bytes of "user:". Resolves to an exact bitmap-prefix lookup — no full scan.
+// bytes of "user:". Resolves to an exact bitmap-prefix lookup - no full scan.
 let query = Query::Select(Select {
     table: "events".into(),
     columns: vec![],
@@ -277,10 +277,10 @@ mongreldb_kit::migrate(&mut db, &migrations)?;
 
 The Rust runner executes every migration op directly: table/column/index/
 constraint changes run against the core engine, while procedure/trigger ops call
-the engine DDL, and SQL-backed ops — `CreateView`/`ReplaceView`/`DropView`,
-`CreateVirtualTable`/`DropVirtualTable`, and `RawSql` — run through the embedded
+the engine DDL, and SQL-backed ops - `CreateView`/`ReplaceView`/`DropView`,
+`CreateVirtualTable`/`DropVirtualTable`, and `RawSql` - run through the embedded
 `MongrelSession` (see [Embedded SQL surface](#embedded-sql-surface-and-maintenance)
-below). There is no longer any "requires a SQL-capable Kit surface" caveat — the
+below). There is no longer any "requires a SQL-capable Kit surface" caveat - the
 Rust Kit *is* that surface.
 
 ## Triggers and remote SQL
@@ -324,7 +324,7 @@ remote.drop_virtual_table("docs_fts")?;
 `Database::sql`, `sql_arrow`, and `sql_rows` run statements through the kit's
 embedded `MongrelSession` (the engine's DataFusion SQL frontend). The session is
 held for the database's lifetime, so session-scoped objects (views, prepared
-statements, the result cache) persist across calls — mirroring a long-lived
+statements, the result cache) persist across calls - mirroring a long-lived
 database connection. After a migration that creates or drops tables, call
 `refresh_sql_session` so the session sees the new table set.
 
@@ -348,7 +348,7 @@ let reclaimed = db.vacuum()?; // compact_all() + gc()
 // Rename a table (engine + kit schema catalog + persisted).
 db.rename_table("widgets", "things")?;
 
-// SQL views (session-scoped — live in the kit's long-lived MongrelSession).
+// SQL views (session-scoped - live in the kit's long-lived MongrelSession).
 use mongreldb_kit::ViewSpec;
 db.create_view(&ViewSpec::new("active", "SELECT id FROM users WHERE active = TRUE"))?;
 db.drop_view("active")?;
@@ -358,7 +358,7 @@ let next_id: Option<i64> = db.reserve_auto_inc("orders")?;
 ```
 
 > Writes through `sql()` bypass kit-level constraints (defaults, enums, min/max,
-> length, regex, triggers) — use the `Transaction` API for constrained writes.
+> length, regex, triggers) - use the `Transaction` API for constrained writes.
 > The engine's own declarative constraints (unique, FK, check) still apply.
 
 ### Advanced SQL (recursive CTEs, windows, regex, catalog, ATTACH, SAVEPOINTs)
@@ -471,7 +471,7 @@ match db.begin() {
 
 ## Users, roles & permissions
 
-The Kit forwards the engine's catalog-stored auth model — Argon2id-hashed
+The Kit forwards the engine's catalog-stored auth model - Argon2id-hashed
 users, roles that bundle permissions, and `GRANT`/`REVOKE` table-level
 access control. The `Permission` enum is re-exported from the kit crate so
 you do not need a direct `mongreldb-core` dependency.
@@ -562,7 +562,7 @@ cargo run
 
 ## See also
 
-- [Query builder](./query-builder.md) — the query model the `Query`/`Select`/`Expr` AST serializes.
-- [Constraints](./constraints.md) · [Errors](./errors.md) — enforcement and the `KitError` categories.
-- [Migrations](./migrations.md) — migration ops and the runner.
-- [TypeScript](./typescript.md) · [Python](./python.md) — the sibling language surfaces.
+- [Query builder](./query-builder.md) - the query model the `Query`/`Select`/`Expr` AST serializes.
+- [Constraints](./constraints.md) · [Errors](./errors.md) - enforcement and the `KitError` categories.
+- [Migrations](./migrations.md) - migration ops and the runner.
+- [TypeScript](./typescript.md) · [Python](./python.md) - the sibling language surfaces.

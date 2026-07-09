@@ -72,10 +72,10 @@ rtk .venv/bin/pytest ../../python/tests ../../tests/conformance/python
 
 Each crate and package has focused unit tests for its layer:
 
-- `crates/mongreldb-kit-core` — key encoding, validation, migration planning, delete planning, query AST
-- `crates/mongreldb-kit` — database open/create, transactions, CRUD, constraints, migrations
-- `packages/kit` — TypeScript DSL, query builder, migration runner
-- `python/tests` — Python schema builders and CRUD
+- `crates/mongreldb-kit-core` - key encoding, validation, migration planning, delete planning, query AST
+- `crates/mongreldb-kit` - database open/create, transactions, CRUD, constraints, migrations
+- `packages/kit` - TypeScript DSL, query builder, migration runner
+- `python/tests` - Python schema builders and CRUD
 
 Run them individually:
 
@@ -100,7 +100,7 @@ rtk .venv/bin/pytest ../../python/tests
 ### TypeScript
 
 Kit tests are fast because they run against a **real** on-disk MongrelDB in a throwaway temp
-directory — no mocks. The pattern is always the same: `mkdtempSync` a unique directory,
+directory - no mocks. The pattern is always the same: `mkdtempSync` a unique directory,
 `KitDatabase.openSync` it, run migrations, use it, then `db.close()` and `rmSync` the directory.
 
 > `KitDatabase.openSync(dir, schema)` takes a **data directory**, not a single file. Give each test
@@ -165,7 +165,7 @@ export function freshDb() {
 export { customers, orders };
 ```
 
-#### Using it — one database per test
+#### Using it - one database per test
 
 Give **every** test its own `freshDb()`. Sharing a database across tests lets ids, unique guards,
 and prior rows leak between cases; a fresh directory per test keeps them hermetic and order-
@@ -268,7 +268,7 @@ CI should run:
 
 ## See also
 
-- [TypeScript](./typescript.md) — the CRUD surface exercised in these fixtures.
-- [Defaults & sequences](./defaults.md) — why fresh-DB ids start at `1`.
-- [Errors](./errors.md) — asserting on typed errors and stable `.code`s in tests.
-- [Migrations](./migrations.md) — the `migrateSync` step every fixture runs.
+- [TypeScript](./typescript.md) - the CRUD surface exercised in these fixtures.
+- [Defaults & sequences](./defaults.md) - why fresh-DB ids start at `1`.
+- [Errors](./errors.md) - asserting on typed errors and stable `.code`s in tests.
+- [Migrations](./migrations.md) - the `migrateSync` step every fixture runs.

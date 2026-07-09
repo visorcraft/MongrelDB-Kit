@@ -1,9 +1,9 @@
 # Constraints
 
 MongrelDB enforces snapshots, transactions, and per-table indexes; it does **not**
-enforce relational constraints. MongrelDB Kit adds them on top — not-null and column
+enforce relational constraints. MongrelDB Kit adds them on top - not-null and column
 validators, table-level checks, unique and composite-unique keys, foreign keys, and
-cascade / set-null / restrict delete actions — with the same semantics in TypeScript,
+cascade / set-null / restrict delete actions - with the same semantics in TypeScript,
 Rust, and Python.
 
 All examples use the generic "store" schema from [Schema DSL](./schema.md): `customers`,
@@ -15,11 +15,11 @@ All examples use the generic "store" schema from [Schema DSL](./schema.md): `cus
 Every constrained mutation runs inside a single MongrelDB transaction (see
 [Transactions](./transactions.md)):
 
-- **Insert** — apply defaults, validate the whole row, enforce foreign keys, stage unique
+- **Insert** - apply defaults, validate the whole row, enforce foreign keys, stage unique
   / primary-key guards, then write and commit.
-- **Update** — load the row, merge the patch, re-validate, re-check changed foreign keys,
+- **Update** - load the row, merge the patch, re-validate, re-check changed foreign keys,
   rewrite the row, and restage guards.
-- **Delete** — plan cascade / set-null / restrict actions across all children, apply them,
+- **Delete** - plan cascade / set-null / restrict actions across all children, apply them,
   delete the row, and commit atomically.
 
 Uniqueness, primary-key, and foreign-key integrity are backed by reserved guard tables
@@ -114,15 +114,15 @@ undefined. As with column checks, return a `string` for a custom message; return
 db.insertInto(orderItems)
   .values({ order_id: 1n, product_id: 1n, quantity: 0n, unit_price_cents: 500n })
   .executeSync();
-// throws KitValidationError — table check "qty_positive"
+// throws KitValidationError - table check "qty_positive"
 ```
 
 > The string-expression grammar you may see elsewhere (e.g. `"quantity > 0"`) is the
-> **cross-language serialized form** of a check — the representation stored in the schema
+> **cross-language serialized form** of a check - the representation stored in the schema
 > catalog and evaluated by the Rust/Python engine and the conformance suite. In TypeScript
 > you always pass a function, never a raw string.
 
-**In Rust/Python:** the predicate is the same idea — a closure / callable returning a
+**In Rust/Python:** the predicate is the same idea - a closure / callable returning a
 bool-or-message. The serialized `"quantity > 0"` expression is what crosses the language
 boundary. See [rust.md](./rust.md) / [python.md](./python.md).
 
@@ -170,10 +170,10 @@ db.insertInto(orderItems).values({ order_id: 7n, product_id: 3n, quantity: 9n, u
 ### Nullable unique semantics
 
 A row whose unique key has a `null` component does **not** consume a guard key, so multiple
-rows may share `null` in a nullable unique column without conflicting — matching SQL's
+rows may share `null` in a nullable unique column without conflicting - matching SQL's
 treatment of `NULL` in unique indexes.
 
-> **Gotcha — a unique *index* does not enforce uniqueness.** Only `unique(...)` specs are
+> **Gotcha - a unique *index* does not enforce uniqueness.** Only `unique(...)` specs are
 > guard-checked. `index(['email'], { unique: true })` builds a lookup index for query
 > performance but the Kit does **not** reject duplicates for it. To enforce a unique value,
 > add it to `unique`.
@@ -201,7 +201,7 @@ db.insertInto(memberships).values({ user_id: 1n, group_id: 2n, role: 'member' })
 
 > **How single-column primary keys are checked.** In normal use the id comes from a
 > sequence default (`sequenceDefault(...)`), and an auto-assigned id is unique by
-> construction, so the Kit skips the duplicate check entirely — keeping single inserts and
+> construction, so the Kit skips the duplicate check entirely - keeping single inserts and
 > bulk loads cheap. If you instead supply an **explicit** id that already exists, the insert
 > throws **`KitDuplicateError`** (constraint `__pk_<table>`); the Kit checks the id against
 > the existing rows directly rather than reserving a guard row. A non-primary-key scalar
@@ -230,7 +230,7 @@ const orders = table('orders', {
 });
 
 db.insertInto(orders).values({ customer_id: 999n }).executeSync();
-// throws KitForeignKeyError — no customer with id 999 (constraint "fk_customer_id_customers")
+// throws KitForeignKeyError - no customer with id 999 (constraint "fk_customer_id_customers")
 ```
 
 ### Nullable and composite foreign keys
@@ -256,8 +256,8 @@ When a parent row is deleted, each child foreign key's `onDelete` decides what h
 | Action | Behavior | On block |
 | --- | --- | --- |
 | `restrict` (default) | Reject the delete while any child references the row. | `KitRestrictError` |
-| `cascade` | Recursively delete the referencing child rows. | — |
-| `set null` | Clear the child foreign-key columns (must be nullable) and keep the rows. | — |
+| `cascade` | Recursively delete the referencing child rows. | - |
+| `set null` | Clear the child foreign-key columns (must be nullable) and keep the rows. | - |
 
 ### Restrict
 
@@ -276,7 +276,7 @@ db.deleteFrom(products).where(eq(products.id, widget.id)).executeSync();
 // orders reference customers with onDelete: 'cascade';
 // order_items reference orders with onDelete: 'cascade'.
 db.deleteFrom(customers).where(eq(customers.id, ada.id)).executeSync();
-// deletes Ada, her orders, and those orders' items — one atomic transaction.
+// deletes Ada, her orders, and those orders' items - one atomic transaction.
 ```
 
 ### Set null
@@ -307,15 +307,15 @@ const item = db.selectFrom(catalog).where(eq(catalog.id, hammer.id)).executeSync
 
 ## Gotchas
 
-- **Null round-trips as `null`.** A column written with `null` — omitted on insert, set to
-  `null`, or cleared by a `set null` cascade — reads back as a JavaScript `null`, and
+- **Null round-trips as `null`.** A column written with `null` - omitted on insert, set to
+  `null`, or cleared by a `set null` cascade - reads back as a JavaScript `null`, and
   `isNull(column)` matches it (`isNotNull(column)` excludes it). Nullable foreign keys and
   `set null` results behave as expected: a cleared `category_id` reads back as `null`.
-- **Unique indexes are not enforced** — use `unique(...)`, not `index(..., { unique: true })`.
-- **Single-column primary keys reject explicit duplicates** — supplying an id that already
+- **Unique indexes are not enforced** - use `unique(...)`, not `index(..., { unique: true })`.
+- **Single-column primary keys reject explicit duplicates** - supplying an id that already
   exists throws `KitDuplicateError`; an omitted id is filled from the sequence and is unique
   by construction. Use `unique(...)` for non-PK scalar uniqueness.
-- **Validators run in-process**, in declaration order, on the full row — they are not pushed
+- **Validators run in-process**, in declaration order, on the full row - they are not pushed
   into the storage engine. A column `check`/table `check` is your own predicate function.
 
 ## Cross-language consistency
@@ -327,8 +327,8 @@ identically in every binding.
 
 ## See also
 
-- [Schema DSL](./schema.md) — declaring columns, `unique`, `foreignKey`, `check`, and assembling a `Schema`.
-- [Transactions](./transactions.md) — how each constrained mutation commits, and conflict handling.
-- [Errors](./errors.md) — `KitValidationError`, `KitDuplicateError`, `KitForeignKeyError`, `KitRestrictError`, and codes.
-- [Internal tables](./internal-tables.md) — the `__kit_unique_keys` / `__kit_row_guards` guard tables.
-- [Query builder](./query-builder.md) — the CRUD calls that run these checks.
+- [Schema DSL](./schema.md) - declaring columns, `unique`, `foreignKey`, `check`, and assembling a `Schema`.
+- [Transactions](./transactions.md) - how each constrained mutation commits, and conflict handling.
+- [Errors](./errors.md) - `KitValidationError`, `KitDuplicateError`, `KitForeignKeyError`, `KitRestrictError`, and codes.
+- [Internal tables](./internal-tables.md) - the `__kit_unique_keys` / `__kit_row_guards` guard tables.
+- [Query builder](./query-builder.md) - the CRUD calls that run these checks.

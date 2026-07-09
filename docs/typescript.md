@@ -135,12 +135,12 @@ db.close();
 
 - `int(name, opts?)`
 - `text(name, opts?)`
-- `real(name, opts?)` — `float64`
+- `real(name, opts?)` - `float64`
 - `bool(name, opts?)`
 - `timestamp(name, opts?)`
 - `date(name, opts?)`
 - `json(name, opts?)`
-- `blob(name, opts?)` — bytes
+- `blob(name, opts?)` - bytes
 
 ## Column options
 
@@ -193,11 +193,11 @@ db.deleteFrom(table).where(predicate).executeSync();
 - `isNull(column)`, `isNotNull(column)`
 - `inList(column, values)`, `notInList(column, values)`
 - `like(column, pattern)`, `contains(column, substring)`
-- `bytesPrefix(column, prefix)` — anchored `LIKE 'prefix%'` on a bitmap-indexed Bytes column (exact pushdown; see [Query builder](./query-builder.md#bytesprefix--anchored-prefix-on-bytes-columns))
+- `bytesPrefix(column, prefix)` - anchored `LIKE 'prefix%'` on a bitmap-indexed Bytes column (exact pushdown; see [Query builder](./query-builder.md#bytesprefix--anchored-prefix-on-bytes-columns))
 - `and(...predicates)`, `or(...predicates)`, `not(predicate)`
 
 Joins, aggregates, `groupBy`/`having`, `distinct`, subqueries, `exists`, and CTEs are part of the
-same builder — see the [Query builder](./query-builder.md) guide for the full surface.
+same builder - see the [Query builder](./query-builder.md) guide for the full surface.
 
 ## Database helpers
 
@@ -211,7 +211,7 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
 - `await db.createVirtualTable(spec)` and `await db.dropVirtualTable(name)` run the SQL DDL for
   module-backed virtual/external tables.
 - `await db.createView(spec)` / `await db.dropView(name)` create/drop a SQL view (`CREATE VIEW` /
-  `DROP VIEW IF EXISTS`). Views are session-scoped — see [SQL views](./migrations.md#sql-views).
+  `DROP VIEW IF EXISTS`). Views are session-scoped - see [SQL views](./migrations.md#sql-views).
 - `db.updateWhere(table, patch, predicate)` and `db.deleteWhere(table, predicate)` are one-shot
   convenience twins of Rust/Python `update_where`/`delete_where`, wrapping the
   `updateTable`/`deleteFrom` builders. `updateWhere` returns the updated rows; `deleteWhere`
@@ -226,10 +226,10 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
   `compactAllAsync`, `compactTableAsync`, `snapshotEpochAsync`, `approxAggregateAsync`).
   **Caveat:** the maintenance twins where the addon has no native async variant
   (`compactAllAsync`/`compactTableAsync`/`approxAggregateAsync`/`snapshotEpochAsync`) wrap the sync
-  call in a `Promise` — they match the async signature but still block; the `TableHandle` async
+  call in a `Promise` - they match the async signature but still block; the `TableHandle` async
   methods (`putAsync`/`queryAsync`/…) are genuinely non-blocking. See
   [runTxn](./typescript.md#transactions) for an async transaction helper.
-- **Bulk ingest:** `db.bulkLoadTyped(table, columns)` is the fastest ingest path —
+- **Bulk ingest:** `db.bulkLoadTyped(table, columns)` is the fastest ingest path -
   column-major `Int64`/`Float64`/`Bool` buffers laid out little-endian. Commits internally (returns
   the epoch); not transactional; bypasses Kit constraints. For typed columnar loads of numeric
   tables it beats `insertMany`. Re-exported types: `TypedColumn`, `PutResult`, `RowJs`,
@@ -243,7 +243,7 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
   `setTableIndexBuildPolicy`), and per-table introspection (`tableRunCount`, `tableMemtableLen`,
   `tablePageCacheStats`, `tablePageCacheLen`, `tableDecodedCacheLen`). Re-exported types:
   `CacheStatsJs`, `TriggerConfigJs`, `IndexBuildPolicyJs`.
-- **WriteBuffer:** `db.writeBuffer(table, threshold?)` creates a micro-batching write buffer —
+- **WriteBuffer:** `db.writeBuffer(table, threshold?)` creates a micro-batching write buffer -
   writes are **not durable until `flush()`** (the opposite of `put()`). Auto-flushes at `threshold`
   rows (default 1000). Bypasses Kit constraints; for high-throughput ingest.
 
@@ -254,7 +254,7 @@ same builder — see the [Query builder](./query-builder.md) guide for the full 
 ### Advanced SQL via `db.sqlRows()`
 
 The embedded SQL session runs DataFusion 54, which supports the full SQL
-stdlib — recursive CTEs, window functions, regex matching, catalog
+stdlib - recursive CTEs, window functions, regex matching, catalog
 introspection, cross-database queries, and sub-transactions:
 
 ```ts
@@ -355,7 +355,7 @@ try {
 
 ## Users, roles & permissions
 
-The Kit forwards the engine's catalog-stored auth model — Argon2id-hashed
+The Kit forwards the engine's catalog-stored auth model - Argon2id-hashed
 users, roles that bundle permissions, and `GRANT`/`REVOKE` table-level
 access control. Permission strings use the compact form: `"all"`, `"admin"`,
 `"ddl"`, or `"select:table"`, `"insert:table"`, `"update:table"`,
@@ -439,9 +439,9 @@ The first run creates `./app-data`. Subsequent runs open the existing database d
 
 ## See also
 
-- [Schema DSL](./schema.md) and [Types](./types.md) — column/table specs and `Row`/`Insert`/`Update` inference.
-- [Defaults & sequences](./defaults.md) — defaults and 1-based auto-increment ids.
-- [Query builder](./query-builder.md) — the complete query surface.
+- [Schema DSL](./schema.md) and [Types](./types.md) - column/table specs and `Row`/`Insert`/`Update` inference.
+- [Defaults & sequences](./defaults.md) - defaults and 1-based auto-increment ids.
+- [Query builder](./query-builder.md) - the complete query surface.
 - [Triggers](./triggers.md) and [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
-- [Constraints](./constraints.md) · [Errors](./errors.md) — enforcement and the typed failures.
+- [Constraints](./constraints.md) · [Errors](./errors.md) - enforcement and the typed failures.
 - [Transactions](./transactions.md) · [Migrations](./migrations.md) · [Testing](./testing.md).

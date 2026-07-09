@@ -17,7 +17,7 @@ name starting with `__kit_`, so internal tables never appear alongside your own.
 In the Rust core they are assigned reserved schema IDs just below `u64::MAX`.
 
 Do **not** name an application table with the `__kit_` prefix, and do not write to
-these tables yourself — the kit owns their contents and their invariants.
+these tables yourself - the kit owns their contents and their invariants.
 
 ## `__kit_schema_migrations`
 
@@ -44,7 +44,7 @@ A single-row snapshot of the active schema.
 
 | Column | Type | Notes |
 | --- | --- | --- |
-| `schema_version` | int64 | Primary key. Always `1` — the catalog holds one current snapshot. |
+| `schema_version` | int64 | Primary key. Always `1` - the catalog holds one current snapshot. |
 | `schema_json` | text | The serialized active schema (tables, columns, constraints, indexes). |
 | `checksum` | text | SHA-256 of `schema_json`. |
 | `written_at` | text | ISO-8601 UTC timestamp of the last write. |
@@ -133,7 +133,7 @@ than the TTL.
 
 ## See also
 
-- [Migrations](./migrations.md) — how the runner reads and writes these tables.
-- [Constraints](./constraints.md) — the unique and foreign-key rules the guard tables enforce.
-- [Defaults & sequences](./defaults.md) — auto-increment semantics and the TypeScript/Rust/Python implementation split.
-- [CLI](./cli.md) — `check` and `doctor` verify these tables exist.
+- [Migrations](./migrations.md) - how the runner reads and writes these tables.
+- [Constraints](./constraints.md) - the unique and foreign-key rules the guard tables enforce.
+- [Defaults & sequences](./defaults.md) - auto-increment semantics and the TypeScript/Rust/Python implementation split.
+- [CLI](./cli.md) - `check` and `doctor` verify these tables exist.

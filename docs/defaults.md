@@ -18,7 +18,7 @@ Each helper returns a `DefaultValue` you pass as the column's `default` option.
 | Helper | Fills the column with |
 | --- | --- |
 | `staticDefault(value)` | a constant `value` (any type matching the column) |
-| `nowDefault()` | the current time — ISO 8601 for `timestamp`, `YYYY-MM-DD` for `date` |
+| `nowDefault()` | the current time - ISO 8601 for `timestamp`, `YYYY-MM-DD` for `date` |
 | `uuidDefault()` | a fresh random UUID string |
 | `sequenceDefault(name)` | the next value of the named 1-based sequence (auto-increment) |
 | `customDefault(fn)` | `fn()` evaluated at insert time |
@@ -50,11 +50,11 @@ Defaults are an **insert-time** mechanism:
 
 1. On insert, for each column you left **`undefined` or `null`**, the Kit fills in its default (or
    `generated` value).
-2. **Then validation runs** on the completed row — not-null, enum, bounds, checks. So a default that
+2. **Then validation runs** on the completed row - not-null, enum, bounds, checks. So a default that
    produces an invalid value still fails validation, and a non-nullable column with no default that
    you omitted is rejected.
 
-Passing `null` explicitly for a defaulted column triggers the default just like omitting it — there
+Passing `null` explicitly for a defaulted column triggers the default just like omitting it - there
 is no way to force a defaulted column to `NULL` by passing `null`; make the column `nullable` with no
 default if you want stored nulls.
 
@@ -78,7 +78,7 @@ db.updateTable(customers).set({ tier: 'pro' }).where(eq(customers.id, cust.id)).
 
 The one exception is **`now`**: any column whose default is `nowDefault()` (or `generated: 'now'`)
 is **refreshed to the current time on every update**, unless the patch sets it explicitly. This is
-the `updated_at` pattern — but be aware it also applies to a `nowDefault()` column you named
+the `updated_at` pattern - but be aware it also applies to a `nowDefault()` column you named
 `created_at`, so use a non-`now` strategy (e.g. set it once on insert and never default it) if you
 need a value that must not move.
 
@@ -97,7 +97,7 @@ int('id', { primaryKey: true, default: sequenceDefault('customers_id_seq') }),
 
 Behavior, all verified against the engine:
 
-- **1-based.** The first allocated id is `1`, never `0` — matching SQL `AUTO_INCREMENT` /
+- **1-based.** The first allocated id is `1`, never `0` - matching SQL `AUTO_INCREMENT` /
   `SERIAL`, so an assigned id is always truthy.
 - **Engine-backed in TypeScript.** `sequenceDefault(...)` maps to MongrelDB's native
   `AUTO_INCREMENT` counter for the table. Current TypeScript databases do not allocate through a
@@ -118,13 +118,13 @@ b.id; // 2n
 
 ### You may still supply an explicit id
 
-A sequence column stays optional, not omitted — you can pass an `id` yourself (e.g. when importing
+A sequence column stays optional, not omitted - you can pass an `id` yourself (e.g. when importing
 existing data).
 
 ```ts
 db.insertInto(customers).values({ id: 1000n, email: 'imported@x.com', name: 'Imported' }).executeSync();
 const next = db.insertInto(customers).values({ email: 'c@x.com', name: 'C' }).executeSync();
-next.id; // 1001n in TypeScript — the native counter advances past explicit ids
+next.id; // 1001n in TypeScript - the native counter advances past explicit ids
 ```
 
 In TypeScript, the engine owns the counter and advances it past explicit integer primary keys, so a
@@ -138,7 +138,7 @@ sequence.
 Sequence reservation happens before the row is known to be durable. In TypeScript the engine-native
 counter may advance for an attempted insert that later fails validation or constraints; in
 Rust/Python the named-sequence allocation commits separately from the row write. Either way, a
-failed insert can consume an id — exactly like SQL `AUTO_INCREMENT`. Ids are unique and monotonic
+failed insert can consume an id - exactly like SQL `AUTO_INCREMENT`. Ids are unique and monotonic
 but **not** guaranteed gap-free; never assume "id - 1" exists or that the count equals the max id.
 
 ## Notes
@@ -152,7 +152,7 @@ but **not** guaranteed gap-free; never assume "id - 1" exists or that the count 
 
 ## See also
 
-- [Schema DSL](./schema.md) — declaring `default` / `generated` on columns.
-- [Types](./types.md) — why defaulted columns are optional on insert.
-- [Internal tables](./internal-tables.md) — reserved tables, including legacy/named sequence storage.
-- [Transactions](./transactions.md) — the concurrency model behind sequence allocation.
+- [Schema DSL](./schema.md) - declaring `default` / `generated` on columns.
+- [Types](./types.md) - why defaulted columns are optional on insert.
+- [Internal tables](./internal-tables.md) - reserved tables, including legacy/named sequence storage.
+- [Transactions](./transactions.md) - the concurrency model behind sequence allocation.

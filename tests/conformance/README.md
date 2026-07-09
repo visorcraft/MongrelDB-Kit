@@ -8,17 +8,17 @@ and Python implementations of MongrelDB Kit.
 
 All fixtures live under `fixtures/` and are consumed by every runner:
 
-- `schema.json` — `users`, `posts`, and `comments` tables covering `int64`,
+- `schema.json` - `users`, `posts`, and `comments` tables covering `int64`,
   `text`, `bool`, and `json` types, nullable columns, unique constraints,
   check constraints, and foreign-key actions (`cascade`, `set_null`, `restrict`).
-- `migrations.json` — initial migration that creates the three tables.
-- `inserts.json` — rows to insert, including valid rows and rows that should
+- `migrations.json` - initial migration that creates the three tables.
+- `inserts.json` - rows to insert, including valid rows and rows that should
   fail validation or foreign-key checks.
-- `updates.json` — patches and expected outcomes, including error cases.
-- `deletes.json` — delete scenarios for cascade, set-null, and restrict.
-- `queries.json` — filter, order, limit, offset, column projection, and count
+- `updates.json` - patches and expected outcomes, including error cases.
+- `deletes.json` - delete scenarios for cascade, set-null, and restrict.
+- `queries.json` - filter, order, limit, offset, column projection, and count
   cases.
-- `expected/` — expected result for every named scenario.
+- `expected/` - expected result for every named scenario.
 
 ## Runners
 

@@ -168,7 +168,7 @@ Default shapes mirror the cross-language `DefaultKind` JSON: `{"static": <value>
 `{"sequence": "<name>"}`, `{"custom_name": "<name>"}`, and the bare strings `"now"` and `"uuid"`.
 A column whose default is `{"sequence": ...}` is auto-assigned a **1-based** id when the inserted row
 omits it (the first row is `1`, never `0`). `check_expr` and the table-level `check(name, expr)` use
-the serialized string-expression grammar — the cross-language form, not a Python callable.
+the serialized string-expression grammar - the cross-language form, not a Python callable.
 
 ## Transactions
 
@@ -195,7 +195,7 @@ except Exception:
 
 `txn.insert_many(table, rows)` stages an iterable of rows in the open transaction and returns the
 stored rows as a `list[dict]` in order. It runs the same per-row defaults, validation, sequence
-ids, and guards as `insert`, but stages the whole batch so one commit writes it — far faster than
+ids, and guards as `insert`, but stages the whole batch so one commit writes it - far faster than
 a row-at-a-time loop, and all-or-nothing on failure. A single-column primary key preloads existing
 keys once so the per-row duplicate check stays O(1).
 
@@ -205,7 +205,7 @@ with db.begin() as txn:
         {"sku": "A-1", "name": "Anvil"},
         {"sku": "B-1", "name": "Bucket"},
     ])
-    # rows[0]["id"] == 1, rows[1]["id"] == 2  — sequence ids assigned in order
+    # rows[0]["id"] == 1, rows[1]["id"] == 2  - sequence ids assigned in order
 ```
 
 ## Queries
@@ -232,9 +232,9 @@ filters), `not` (a filter), and `exists` / `not_exists` (a subselect). Multiple 
 are AND-ed.
 
 Order syntax:
-- `"+id"` or `"id"` — ascending
-- `"-id"` — descending
-- `"-placed_at,+id"` — multiple columns
+- `"+id"` or `"id"` - ascending
+- `"-id"` - descending
+- `"-placed_at,+id"` - multiple columns
 
 ```python
 # Anchored prefix on a bitmap-indexed bytes column (exact engine pushdown).
@@ -306,7 +306,7 @@ The keys in the returned dict appear in the same order as `returning`.
 with db.begin() as txn:
     alice = txn.insert("users", {"id": 1, "email": "alice@example.com", "name": "Alice"})
 
-    # DO NOTHING — existing row is returned unchanged.
+    # DO NOTHING - existing row is returned unchanged.
     result = txn.upsert(
         "users",
         {"id": 1, "email": "alice@example.com", "name": "Alicia"},
@@ -315,7 +315,7 @@ with db.begin() as txn:
     )
     # result["name"] == "Alice"
 
-    # DO UPDATE — merge a patch into the existing row.
+    # DO UPDATE - merge a patch into the existing row.
     result = txn.upsert(
         "users",
         {"id": 1, "email": "alice@example.com", "name": "Alicia"},
@@ -430,7 +430,7 @@ db.compact_all(); db.compact_table("things")
 ```
 
 > Writes through `sql_rows` / `sql_arrow` bypass kit-level constraints (defaults,
-> enums, min/max, length, regex, triggers) — use the `Transaction` API for
+> enums, min/max, length, regex, triggers) - use the `Transaction` API for
 > constrained writes. The engine's own declarative constraints (unique, FK,
 > check) still apply.
 
@@ -444,9 +444,9 @@ cfg = db.trigger_config()  # {recursive_triggers, max_depth, max_loop_iterations
 db.set_trigger_config({"recursive_triggers": True, "max_depth": 16, "max_loop_iterations": 5000})
 
 # Per-table introspection (read-only).
-runs = db.table_run_count("widgets")          # int — compaction target: 1
+runs = db.table_run_count("widgets")          # int - compaction target: 1
 stats = db.table_page_cache_stats("widgets")  # {hits, misses, try_lock_misses, hit_rate}
-memtable = db.table_memtable_len("widgets")   # int — uncommitted staged rows
+memtable = db.table_memtable_len("widgets")   # int - uncommitted staged rows
 ```
 
 The per-table tuning setters (compaction zstd level, result cache size, mutable-run spill bytes,
@@ -498,7 +498,7 @@ db.sql_rows("COMMIT")
 ## Key encoding
 
 The byte-identical key encoders used internally are exposed for tooling and tests. Components are
-typed values — `{"int": n}`, `{"text": s}`, or `{"null": True}` — so the integer `1` and the text
+typed values - `{"int": n}`, `{"text": s}`, or `{"null": True}` - so the integer `1` and the text
 `"1"` never collide:
 
 ```python
@@ -526,7 +526,7 @@ Available exceptions: `ValidationError`, `DuplicateError`, `ForeignKeyError`, `R
 
 ## Users, roles & permissions
 
-The Kit forwards the engine's catalog-stored auth model — Argon2id-hashed
+The Kit forwards the engine's catalog-stored auth model - Argon2id-hashed
 users, roles that bundle permissions, and `GRANT`/`REVOKE` table-level
 access control. Permission strings use the compact form: `"all"`, `"admin"`,
 `"ddl"`, or `"select:table"`, `"insert:table"`, `"update:table"`,
@@ -640,8 +640,8 @@ python kit_demo.py
 
 ## See also
 
-- [Query builder](./query-builder.md) — the full query model these helpers serialize.
+- [Query builder](./query-builder.md) - the full query model these helpers serialize.
 - [Triggers](./triggers.md) and [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
-- [Constraints](./constraints.md) and [Errors](./errors.md) — the rules and the typed failures.
-- [Migrations](./migrations.md) — migration ops and the runner.
-- [TypeScript](./typescript.md) · [Rust](./rust.md) — the sibling language surfaces.
+- [Constraints](./constraints.md) and [Errors](./errors.md) - the rules and the typed failures.
+- [Migrations](./migrations.md) - migration ops and the runner.
+- [TypeScript](./typescript.md) · [Rust](./rust.md) - the sibling language surfaces.

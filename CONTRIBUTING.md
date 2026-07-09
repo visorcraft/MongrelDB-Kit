@@ -59,7 +59,7 @@ rtk cargo test --workspace
 ```
 
 All three must pass with zero warnings. If a check fails, fix the root
-cause — don't `--no-verify`, don't silence clippy lints with `#[allow(...)]`
+cause - don't `--no-verify`, don't silence clippy lints with `#[allow(...)]`
 unless you justify it in the PR description.
 
 ### TypeScript (`packages/kit`)
@@ -152,7 +152,7 @@ to solve before proposing the solution.
 
 ## Releases
 
-Two scripts — don't hand-edit versions:
+Two scripts - don't hand-edit versions:
 
 - Kit's own version: `scripts/bump-version.sh NEW_VERSION`.
 - Engine ref: `scripts/bump-mongreldb-version.sh NEW_VERSION`.
@@ -163,7 +163,7 @@ CI publishes `@visorcraft/mongreldb-kit` to npm and `mongreldb-kit-core` +
 ## Security
 
 If you find a vulnerability, **do not** open a public GitHub issue.
-Report it privately through GitHub's private vulnerability reporting —
+Report it privately through GitHub's private vulnerability reporting -
 the repository's **Security** tab → **Report a vulnerability**. The full
 policy is in [`SECURITY.md`](SECURITY.md).
 
@@ -176,4 +176,4 @@ you agree that your changes are made available under the same license.
   have done a license review first.
 - New third-party dependencies must be MIT or Apache-2.0 licensed.
 
-Thanks again — looking forward to your PR.
+Thanks again - looking forward to your PR.

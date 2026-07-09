@@ -2,8 +2,8 @@
 
 MongrelDB Kit ships a small, typed query builder for reads and writes. It is **synchronous**
 (`.executeSync()`) with an async wrapper (`.execute()`), returns typed rows, and pushes the
-predicates it can down to the storage engine while computing everything else — joins, grouping,
-aggregates, subqueries, CTEs — in memory. The whole surface is exposed as methods on a
+predicates it can down to the storage engine while computing everything else - joins, grouping,
+aggregates, subqueries, CTEs - in memory. The whole surface is exposed as methods on a
 `KitDatabase` plus a handful of helper functions imported from `@visorcraft/mongreldb-kit`.
 
 This guide uses the shared "store" schema (`customers`, `products`, `orders`, `order_items`); the
@@ -22,7 +22,7 @@ import { customers, products, orders, orderItems, schema } from './store-schema.
 const db = KitDatabase.openSync('./data', schema);
 db.migrateSync(schema, [{ version: 1, name: 'init', up: () => {} }]);
 
-// int64 columns are bigint in TS — values are written as bigint literals (500n).
+// int64 columns are bigint in TS - values are written as bigint literals (500n).
 const ada  = db.insertInto(customers).values({ email: 'ada@example.com',  name: 'Ada'  }).executeSync();
 const bob  = db.insertInto(customers).values({ email: 'bob@example.com',  name: 'Bob'  }).executeSync();
 const cleo = db.insertInto(customers).values({ email: 'cleo@example.com', name: 'Cleo' }).executeSync();
@@ -35,7 +35,7 @@ const o3 = db.insertInto(orders).values({ customer_id: bob.id, status: 'paid'   
 
 > **Column accessors.** A `table(...)` value carries its columns as properties, so you reference a
 > column as `orders.status`, `customers.email`, `products.price_cents`, and so on. A few names are
-> reserved by the table object itself — see [Gotchas](#gotchas).
+> reserved by the table object itself - see [Gotchas](#gotchas).
 
 ## Reads
 
@@ -72,7 +72,7 @@ const adasPaid = db
 
 `limit` and `offset` are plain JS `number`s.
 
-### Column projection — `.select([...])`
+### Column projection - `.select([...])`
 
 `.select([col, ...])` narrows each result row to only the named columns. The result type narrows
 too, to `Pick<Row<T>, names>[]`:
@@ -95,7 +95,7 @@ const found = db.selectFrom(customers).where(eq(customers.id, ada.id)).executeSy
 
 Every terminal builder exposes both. `.executeSync()` runs the query and returns the result
 directly; `.execute()` returns a `Promise` that resolves to the same value. The implementation is
-synchronous either way — `execute()` is purely an `async` convenience for callers that prefer
+synchronous either way - `execute()` is purely an `async` convenience for callers that prefer
 awaiting.
 
 ```ts
@@ -156,15 +156,15 @@ db.selectFrom(customers).where(like(customers.email, 'a_a@%')).executeSync();   
 db.selectFrom(customers).where(contains(customers.email, 'cleo')).executeSync();       // substring
 ```
 
-Both run as a full table scan with the match evaluated in JavaScript — see
+Both run as a full table scan with the match evaluated in JavaScript - see
 [Performance & limits](#performance--limits).
 
-### `bytesPrefix` — anchored prefix on Bytes columns
+### `bytesPrefix` - anchored prefix on Bytes columns
 
 `bytesPrefix(column, prefix)` is the exact equivalent of `LIKE 'prefix%'` (no
 wildcards in `prefix`) on a `bytes`-storage column that has a bitmap index. It
-**pushes down exactly** to the engine's `BytesPrefix` condition — no residual
-re-check, no full scan — so it is dramatically faster than `like` for anchored
+**pushes down exactly** to the engine's `BytesPrefix` condition - no residual
+re-check, no full scan - so it is dramatically faster than `like` for anchored
 matches on indexed Bytes columns. Falls back to a residual `startsWith` scan
 when the column has no bitmap index.
 
@@ -176,7 +176,7 @@ db.selectFrom(events).where(bytesPrefix(events.key, 'user:')).executeSync();
 
 ## Writes
 
-### Insert — returns the inserted `Row`
+### Insert - returns the inserted `Row`
 
 `insertInto(table).values(row).executeSync()` validates the row, applies defaults (including the
 sequence-assigned primary key), enforces foreign keys and unique/PK guards in a transaction, and
@@ -184,20 +184,20 @@ returns the **single** stored `Row<T>` with every column populated.
 
 ```ts
 const row = db.insertInto(customers).values({ email: 'dan@example.com', name: 'Dan' }).executeSync();
-row.id;   // 4n   — bigint, assigned by the customers_id_seq sequence (1-based)
-row.tier; // 'free' — staticDefault applied
+row.id;   // 4n   - bigint, assigned by the customers_id_seq sequence (1-based)
+row.tier; // 'free' - staticDefault applied
 ```
 
 `.values(...)` is required; omitting it throws. Columns that are nullable or have a default may be
 omitted (see [Types](./types.md) for the `Insert<T>` shape). Remember that `int64` values are
 `bigint`: `price_cents: 500n`, not `500`.
 
-### Insert many — one transaction for a batch
+### Insert many - one transaction for a batch
 
 `insertInto(table).valuesMany(rows).executeSync()` inserts an array of rows in a **single
 transaction** and returns the stored `Row<T>[]` in input order. It is the same as calling
-`.values(row).executeSync()` in a loop — defaults, validation, sequence-assigned ids, and
-foreign-key / unique / PK guards all still run per row — but it commits once instead of once per
+`.values(row).executeSync()` in a loop - defaults, validation, sequence-assigned ids, and
+foreign-key / unique / PK guards all still run per row - but it commits once instead of once per
 row, which is dramatically faster for bulk loads.
 
 ```ts
@@ -206,7 +206,7 @@ const rows = db.insertInto(products).valuesMany([
   { sku: 'B-1', name: 'Bucket', price_cents: 400n  },
   { sku: 'C-1', name: 'Cog',    price_cents: 150n  },
 ]).executeSync();
-rows.map((r) => r.id); // [1n, 2n, 3n] — sequence ids assigned in order
+rows.map((r) => r.id); // [1n, 2n, 3n] - sequence ids assigned in order
 ```
 
 Because the whole batch is one transaction, it is **all-or-nothing**: if any row fails a guard or
@@ -214,7 +214,7 @@ validator the transaction rolls back and nothing is inserted. For tables with a 
 primary key the batch pre-loads existing keys once, so duplicate detection stays O(1) per row
 rather than a scan per row. An empty array inserts nothing and returns `[]`.
 
-### Update — returns the updated `Row[]`
+### Update - returns the updated `Row[]`
 
 `updateTable(table).set(patch).where(predicate).executeSync()` merges `patch` into every matched
 row and returns the updated rows as `Row<T>[]` (full rows, not just the changed columns).
@@ -225,14 +225,14 @@ const updated = db
   .set({ status: 'shipped' })
   .where(eq(orders.customer_id, ada.id))
   .executeSync();
-// updated: Row<typeof orders>[]  — every matched order, now status: 'shipped'
+// updated: Row<typeof orders>[]  - every matched order, now status: 'shipped'
 ```
 
-`.set(...)` is required. `.where(...)` is **optional** — omitting it updates every row in the
+`.set(...)` is required. `.where(...)` is **optional** - omitting it updates every row in the
 table. Columns produced by `nowDefault()` are refreshed on update unless you set them
 explicitly. Unique, primary-key, and foreign-key guards are re-checked for the new values.
 
-### Delete — returns a `bigint` count
+### Delete - returns a `bigint` count
 
 `deleteFrom(table).where(predicate).executeSync()` returns the number of matched rows as a
 `bigint`. Configured `onDelete` actions (cascade / set null / restrict) run inside the same
@@ -243,7 +243,7 @@ const removed = db.deleteFrom(orders).where(eq(orders.id, o2.id)).executeSync();
 // removed: 1n  (bigint). Its order_items are cascade-deleted by the FK.
 ```
 
-`.where(...)` is optional — omitting it deletes every row in the table.
+`.where(...)` is optional - omitting it deletes every row in the table.
 
 ### RETURNING clause
 
@@ -277,9 +277,9 @@ const archived = db
 ```
 
 Without `.returning(...)`, inserts and updates still return full rows, and deletes still return
-a count. `.returning(...)` is variadic — pass each column as an argument.
+a count. `.returning(...)` is variadic - pass each column as an argument.
 
-### Upsert — ON CONFLICT
+### Upsert - ON CONFLICT
 
 `insertInto(...).values(...).onConflictDoNothing()` and `.onConflictDoUpdate(patch)` provide
 `INSERT ... ON CONFLICT` semantics. The conflict is detected on the primary key.
@@ -385,7 +385,7 @@ columns; without one, over the full row. Any `limit`/`offset` is applied **after
 
 ```ts
 const statuses = db.selectFrom(orders).select([orders.status]).distinct().executeSync();
-// statuses: Array<{ status: string }> — one row per distinct status
+// statuses: Array<{ status: string }> - one row per distinct status
 ```
 
 ## Joins
@@ -426,9 +426,9 @@ const pairs = db.selectFrom(products).crossJoin(customers).executeSync();
 
 The base table honors the `.where(...)` you set on `selectFrom(...)`; `JoinBuilder` adds its own
 `.where(joinPredicate)` (a post-join filter over the `JoinRow`), plus `.limit(n)` / `.offset(n)`.
-Joined tables are fully scanned — see [Performance & limits](#performance--limits).
+Joined tables are fully scanned - see [Performance & limits](#performance--limits).
 
-## Grouping — `groupBy` / `aggregate` / `having`
+## Grouping - `groupBy` / `aggregate` / `having`
 
 `selectFrom(table).where(...).groupBy(...columns).aggregate({...}).having(...).executeSync()`
 produces one `GroupRow` per distinct combination of the group columns. Each row carries the
@@ -453,7 +453,7 @@ const byStatus = db
 
 `count()` aliases resolve to `bigint`; the others follow the same return/empty rules as the scalar
 aggregates above (within a group there is always at least one row). `having(...)` filters the
-already-assembled group rows. `groupBy` keeps the base `.where(...)` but not ordering — sort the
+already-assembled group rows. `groupBy` keeps the base `.where(...)` but not ordering - sort the
 returned array in JS if you need a specific group order.
 
 ## Subqueries
@@ -461,10 +461,10 @@ returned array in JS if you need a specific group order.
 `inSubquery`, `exists`, and `notExists` take a row-returning `SelectBuilder`. They are
 **uncorrelated**: the subquery is evaluated once, up front, and cannot reference the outer row.
 
-- `inSubquery(column, sub)` — the subquery must project exactly one column (via `.select([col])`).
+- `inSubquery(column, sub)` - the subquery must project exactly one column (via `.select([col])`).
   If you don't project, it falls back to a single-column primary key, then to the first column. An
   aggregate/count subquery is rejected.
-- `exists(sub)` / `notExists(sub)` — true/false for whether the subquery matches any row; it gates
+- `exists(sub)` / `notExists(sub)` - true/false for whether the subquery matches any row; it gates
   the entire outer scan.
 
 ```ts
@@ -476,7 +476,7 @@ const paidCustomerIds = db
 
 const buyers = db.selectFrom(customers).where(inSubquery(customers.id, paidCustomerIds)).executeSync();
 
-// EXISTS / NOT EXISTS — note these gate the whole outer query (uncorrelated)
+// EXISTS / NOT EXISTS - note these gate the whole outer query (uncorrelated)
 const anyPending = db.selectFrom(orders).where(eq(orders.status, 'pending'));
 db.selectFrom(customers).where(exists(anyPending)).executeSync();    // all customers, iff a pending order exists
 db.selectFrom(customers).where(notExists(anyPending)).executeSync(); // all customers, iff none exists
@@ -491,9 +491,9 @@ to declare additional CTEs in the same scope.
 ```ts
 const scope = db.with('paid_orders', db.selectFrom(orders).where(eq(orders.status, 'paid')));
 
-// Read the CTE like a table — full SelectBuilder surface applies.
+// Read the CTE like a table - full SelectBuilder surface applies.
 const rows = scope.selectFrom('paid_orders').orderBy(asc(orders.id)).executeSync();
-// rows: Record<string, unknown>[]  — CTE rows are untyped records
+// rows: Record<string, unknown>[]  - CTE rows are untyped records
 
 // Aggregate over a CTE
 const paidCount = db
@@ -510,14 +510,14 @@ const products2 = db
   .executeSync();
 ```
 
-The `builder` passed to `with` must be a select that returns rows — handing it a `selectCount()` or
+The `builder` passed to `with` must be a select that returns rows - handing it a `selectCount()` or
 other aggregate throws (`Only a row-returning select can back a CTE`). CTEs are not lazy and not
 recursive; each one is computed once and cached for the life of the scope. Rows read from a CTE are
 typed as `Record<string, unknown>[]`, not `Row<T>[]`, because the source is synthetic.
 
-Recursive CTEs (`WITH RECURSIVE`) are available via the raw SQL surface — see `db.sqlRows('WITH RECURSIVE ...')` in [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
+Recursive CTEs (`WITH RECURSIVE`) are available via the raw SQL surface - see `db.sqlRows('WITH RECURSIVE ...')` in [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
 
-## Raw escape hatch — `db.nativeDb`
+## Raw escape hatch - `db.nativeDb`
 
 When the builder does not expose what you need, drop to the underlying MongrelDB `Database` via
 `db.nativeDb`. This bypasses kit constraints (validation, unique/FK guards, defaults), so use it
@@ -536,8 +536,8 @@ JavaScript. Know where the line is:
   down for `int64` and `float64` columns. `eq` and `inList` push down for indexed bitmap columns
   (`text`, `timestamp`, `date`, and `json`). Pushable `and(...)` children are collapsed into one
   native query, and `or(eq(...), eq(...))` / mixed `or` + `inList` on the same indexed bitmap column
-  can become one native `IN` query. Everything else — `ne`, `isNull`/`isNotNull`, `like`,
-  `contains`, `notInList`, cross-column `or`, and `eq` on a non-indexed text column — runs as a
+  can become one native `IN` query. Everything else - `ne`, `isNull`/`isNotNull`, `like`,
+  `contains`, `notInList`, cross-column `or`, and `eq` on a non-indexed text column - runs as a
   full table scan with the match evaluated in JS.
 - **Counts use native cardinality when fully pushed down.** `selectCount()` with no residual
   predicate uses the engine's row count / `countWhere` path, including bitmap `IN` counts. If any
@@ -548,9 +548,9 @@ JavaScript. Know where the line is:
 - **Aggregates, grouping, and CTEs compute in memory** over the matched rows.
 - **Subqueries are uncorrelated.** `inSubquery`/`exists`/`notExists` evaluate their subquery exactly
   once; they cannot reference the outer row, so there is no per-row re-binding.
-- **CTEs are eagerly materialized**, not lazy or recursive — each `with` is computed up front and
+- **CTEs are eagerly materialized**, not lazy or recursive - each `with` is computed up front and
   cached for the scope's lifetime. Recursive CTEs (`WITH RECURSIVE`) are available via the raw SQL
-  surface — see `db.sqlRows('WITH RECURSIVE ...')` in
+  surface - see `db.sqlRows('WITH RECURSIVE ...')` in
   [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md).
 
 ## Gotchas
@@ -652,10 +652,10 @@ surfaces (`db.sqlRows`, remote `sql_rows` / `sql_arrow`) described in
 
 ## See also
 
-- [Schema DSL](./schema.md) — the `customers` / `products` / `orders` / `order_items` schema used above.
-- [Types](./types.md) — `Row<T>`, `Insert<T>`, and `Update<T>` inference.
-- [Defaults & sequences](./defaults.md) — sequence-assigned ids and column defaults.
-- [Constraints](./constraints.md) — the unique / foreign-key / check guards writes enforce.
-- [Transactions](./transactions.md) — how writes commit and retry on conflict.
-- [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md) — SQL function helpers and module-backed virtual tables.
-- [TypeScript](./typescript.md) · [Rust](./rust.md) · [Python](./python.md) — the language guides.
+- [Schema DSL](./schema.md) - the `customers` / `products` / `orders` / `order_items` schema used above.
+- [Types](./types.md) - `Row<T>`, `Insert<T>`, and `Update<T>` inference.
+- [Defaults & sequences](./defaults.md) - sequence-assigned ids and column defaults.
+- [Constraints](./constraints.md) - the unique / foreign-key / check guards writes enforce.
+- [Transactions](./transactions.md) - how writes commit and retry on conflict.
+- [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md) - SQL function helpers and module-backed virtual tables.
+- [TypeScript](./typescript.md) · [Rust](./rust.md) · [Python](./python.md) - the language guides.

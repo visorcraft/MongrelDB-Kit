@@ -1,7 +1,7 @@
 # Types
 
 Your [schema declarations](./schema.md) are also the source of truth for TypeScript types. Three
-generic helpers derive everything from a `table(...)` value — no codegen, no duplicate type
+generic helpers derive everything from a `table(...)` value - no codegen, no duplicate type
 definitions:
 
 | Helper | Shape | Used for |
@@ -19,7 +19,7 @@ type NewCustomer    = Insert<typeof customers>;
 type CustomerPatch  = Update<typeof customers>;
 ```
 
-Note the `typeof` — you pass the **value** returned by `table()`, not a named type. The query
+Note the `typeof` - you pass the **value** returned by `table()`, not a named type. The query
 builder is generic over the same `T`, so results and inputs are typed without annotations.
 
 ## `Row<T>`
@@ -46,7 +46,7 @@ The storage-type → TS mapping (see [Schema DSL](./schema.md#columns) for the f
 | `float64` | `number` |
 | `bool` | `boolean` |
 | `text` / `timestamp` / `date` | `string` |
-| `json` | `unknown` (stored as text — supply/parse a string yourself) |
+| `json` | `unknown` (stored as text - supply/parse a string yourself) |
 | `bytes` | inferred `unknown`; runtime value is `Uint8Array` |
 
 A nullable column widens to a union:
@@ -62,8 +62,8 @@ The biggest gotcha is **`int64` is `bigint`**: ids and counts are `1n`, not `1`.
 
 `Insert<T>` describes what `values(...)` accepts. The rule:
 
-- **Required** — non-nullable columns **without** a default.
-- **Optional** — nullable columns (omit to store `null`) **and** any column with a `default` or
+- **Required** - non-nullable columns **without** a default.
+- **Optional** - nullable columns (omit to store `null`) **and** any column with a `default` or
   `generated` value, *including an auto-increment / sequence primary key*. Optional means it may be
   omitted **or** supplied explicitly, matching SQL semantics.
 
@@ -72,12 +72,12 @@ type NewCustomer = Insert<typeof customers>;
 // {
 //   email: string;                      // required (non-null, no default)
 //   name: string;                       // required
-//   id?: bigint | undefined;            // optional — sequence default supplies it
-//   tier?: string | undefined;          // optional — staticDefault('free')
-//   created_at?: string | undefined;    // optional — nowDefault()
+//   id?: bigint | undefined;            // optional - sequence default supplies it
+//   tier?: string | undefined;          // optional - staticDefault('free')
+//   created_at?: string | undefined;    // optional - nowDefault()
 // }
 
-// minimal insert — id/tier/created_at all filled by defaults:
+// minimal insert - id/tier/created_at all filled by defaults:
 const cust = db.insertInto(customers).values({ email: 'ada@example.com', name: 'Ada' }).executeSync();
 cust.id;   // 1n   (assigned by the sequence)
 cust.tier; // 'free'
@@ -97,7 +97,7 @@ caught before they reach the database.
 
 ## `Update<T>`
 
-`Update<T>` is simply `Partial<Row<T>>` — every column optional, each keeping its `Row<T>` type
+`Update<T>` is simply `Partial<Row<T>>` - every column optional, each keeping its `Row<T>` type
 (nullable columns may be set to `null`). You set only the columns you want to change.
 
 ```ts
@@ -110,12 +110,12 @@ const rows = db.updateTable(customers)
   .executeSync();                       // Row<typeof customers>[]
 ```
 
-`Update<T>` does not encode insert defaults — those apply on insert only. See
+`Update<T>` does not encode insert defaults - those apply on insert only. See
 [Defaults & sequences](./defaults.md) for exactly which defaults (if any) are touched on update.
 
 ## How the builder returns these types
 
-The CRUD entry points are generic over the table, so results carry the inferred types end to end —
+The CRUD entry points are generic over the table, so results carry the inferred types end to end -
 no casts needed:
 
 ```ts
@@ -126,13 +126,13 @@ db.deleteFrom(customers).where(/* … */).executeSync();                        
 ```
 
 Because `Row<T>` is derived from the same declaration you query against, renaming or retyping a
-column updates inputs, results, and predicates together — a mismatch is a compile error.
+column updates inputs, results, and predicates together - a mismatch is a compile error.
 
 ## Notes
 
 - **`bigint` everywhere for `int64`.** Insert with `quantity: 2n`, filter with `gt(orders.id, 0n)`,
   read back `bigint`. Mixing `number` and `bigint` is a TypeScript error and a runtime footgun.
-- **`json` infers `unknown`** and is stored as text — pass a `JSON.stringify(...)` string and
+- **`json` infers `unknown`** and is stored as text - pass a `JSON.stringify(...)` string and
   `JSON.parse` on read.
 - **`bytes` infers `unknown`** but is a `Uint8Array` at runtime; cast on read (`row.data as
   Uint8Array`).
@@ -141,7 +141,7 @@ column updates inputs, results, and predicates together — a mismatch is a comp
 
 ## See also
 
-- [Schema DSL](./schema.md) — the declarations these types are inferred from.
-- [Defaults & sequences](./defaults.md) — why defaulted columns are optional on insert.
-- [Query builder](./query-builder.md) — the typed CRUD surface.
-- [Constraints](./constraints.md) — runtime validation that complements the static types.
+- [Schema DSL](./schema.md) - the declarations these types are inferred from.
+- [Defaults & sequences](./defaults.md) - why defaulted columns are optional on insert.
+- [Query builder](./query-builder.md) - the typed CRUD surface.
+- [Constraints](./constraints.md) - runtime validation that complements the static types.

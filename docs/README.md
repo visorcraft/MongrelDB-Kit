@@ -10,7 +10,7 @@ Kit adds the relational application layer on top:
 - a **migration runner** with content-addressed checksums,
 - engine-side **triggers** and SQL-backed virtual/external table helpers,
 - **Extended SQL Function** helpers for date/time, JSON, aggregate, and math-style SQL calls,
-- **relational constraints the engine does not enforce natively** — not-null, checks, unique and
+- **relational constraints the engine does not enforce natively** - not-null, checks, unique and
   composite-unique, foreign keys, and cascade / set-null / restrict deletes,
 - **auto-increment ids**, defaults, table rename support, and a stable error taxonomy.
 
@@ -58,13 +58,13 @@ const customers = table('customers', {
 const schema = new Schema([customers]);
 const migrations = [{ version: 1, name: 'init', up: () => {} }];
 
-// A MongrelDB data *directory* (created if missing) — not a single file.
+// A MongrelDB data *directory* (created if missing) - not a single file.
 const db = KitDatabase.openSync('./data', schema);
 db.migrateSync(schema, migrations);
 
 // Insert: omit `id` and the sequence assigns a 1-based id; `tier`/`created_at` use defaults.
 const ada = db.insertInto(customers).values({ email: 'ada@example.com', name: 'Ada' }).executeSync();
-console.log(ada.id);   // 1n  (bigint — int64 columns are bigint in TS)
+console.log(ada.id);   // 1n  (bigint - int64 columns are bigint in TS)
 console.log(ada.tier); // 'free'
 
 // Read back, newest first.
@@ -80,7 +80,7 @@ try {
 db.close();
 ```
 
-Everything above — schema, defaults, the 1-based id, the unique constraint, typed rows — is
+Everything above - schema, defaults, the 1-based id, the unique constraint, typed rows - is
 explained in depth in the topic guides below.
 
 ## Documentation map
@@ -99,7 +99,7 @@ Start here, then dive into the topic that fits your task.
 | [Stored procedures](./stored-procedures.md) | Declarative routines callable from embedded, remote, and CLI Kit clients. |
 | [Triggers](./triggers.md) | Engine-side declarative triggers, migration helpers, remote APIs, and trigger validation errors. |
 | [Extended SQL & virtual tables](./extended-sql-and-virtual-tables.md) | SQL function helpers, `db.sqlRows`, and virtual/external table module specs. |
-| Users, roles & permissions | Catalog-stored users (Argon2id), roles, `GRANT`/`REVOKE`, and HTTP Basic + Bearer daemon auth, plus **credential enforcement** — `require_auth`, credentialed open/create, and `disable_auth` recovery. Documented in each [language guide](#language-guides) and the [CLI `user`/`role` commands](./cli.md#user--manage-catalog-users); the full model lives in the engine [auth guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/14-auth.md) and the [credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md). |
+| Users, roles & permissions | Catalog-stored users (Argon2id), roles, `GRANT`/`REVOKE`, and HTTP Basic + Bearer daemon auth, plus **credential enforcement** - `require_auth`, credentialed open/create, and `disable_auth` recovery. Documented in each [language guide](#language-guides) and the [CLI `user`/`role` commands](./cli.md#user--manage-catalog-users); the full model lives in the engine [auth guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/14-auth.md) and the [credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md). |
 | [Errors](./errors.md) | The error taxonomy, codes, and how to handle each category. |
 | [Internal tables](./internal-tables.md) | The reserved `__kit_*` tables and what each one stores. |
 | [CLI](./cli.md) | The `mongreldb-kit` command line: `check`, `diff`, `generate`, `migrate`, and more. |
@@ -116,7 +116,7 @@ Start here, then dive into the topic that fits your task.
 
 ## A note on examples
 
-All examples use a generic "store" domain — `customers`, `products`, `orders`, and `order_items` —
+All examples use a generic "store" domain - `customers`, `products`, `orders`, and `order_items` -
 so the relationships (a customer has orders, an order has items, items reference products) exercise
 foreign keys, cascade deletes, joins, and aggregates. The full schema appears in
 [Schema DSL](./schema.md) and is reused throughout.

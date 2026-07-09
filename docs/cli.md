@@ -24,7 +24,7 @@ chmod +x /usr/local/bin/mongreldb-kit
 ```
 
 Most commands operate on either a **database directory** (a MongrelDB data
-directory, e.g. `./store.kitdb`) or a **schema JSON file** — the catalog shape
+directory, e.g. `./store.kitdb`) or a **schema JSON file** - the catalog shape
 the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 `text`, `bool`, `float64`, `json`, `bytes`, `date`, `date_time`, and
 `timestamp_nanos`. The examples below use the "store" schema (`customers`,
@@ -209,7 +209,7 @@ mongreldb-kit rename-table ./store.kitdb widgets things
 ```
 
 `view create` / `view drop` and `index create` / `index drop` run the
-corresponding DDL. **Views are session-scoped** — a view created via the CLI
+corresponding DDL. **Views are session-scoped** - a view created via the CLI
 exists only within that single CLI invocation (each invocation opens a fresh
 `Database`/session). For a persistent view, define it in a migration
 (`create_view` op), which re-creates it whenever the migration runs. Indexes
@@ -229,13 +229,13 @@ mongreldb-kit index drop ./store.kitdb idx_users_email
 ```
 
 Supported `--kind` values: `bitmap` (default), `fm`, `ann`, `sparse`, `brin`
-(also `learned`/`learned_range`/`range` — aliases for the PGM zonemap).
+(also `learned`/`learned_range`/`range` - aliases for the PGM zonemap).
 
 ## compact
 
 Merge every table's sorted runs into a single clean run so query latency
 stays flat. Tables with fewer than two runs are skipped. Safe to run at
-any time — readers pin their own snapshot and are unaffected.
+any time - readers pin their own snapshot and are unaffected.
 
 ```sh
 mongreldb-kit compact ./store.kitdb
@@ -295,7 +295,7 @@ The JSON op vocabulary also includes `create_trigger`/`replace_trigger`/
 `create_virtual_table`/`drop_virtual_table`, and `raw_sql`. The CLI runner
 executes all of them: schema/column ops run against the core engine, while the
 SQL-backed ops (views, virtual tables, raw SQL) run through the kit's embedded
-SQL session — no separate daemon or TypeScript process required. See the
+SQL session - no separate daemon or TypeScript process required. See the
 [migration ops table](./migrations.md#supported-operations) for the full list.
 
 **Plan** (and its `dry-run` alias) prints what would be applied without touching
@@ -391,14 +391,14 @@ mongreldb-kit generate types ./store-schema.json --lang python > app/db_types.py
 
 For every table the generator emits three shapes:
 
-- **`<Table>Row`** — every column, with nullable columns widened (`| null`,
+- **`<Table>Row`** - every column, with nullable columns widened (`| null`,
   `Option<…>`, `Optional[…]`).
-- **`<Table>Insert`** — only the columns you must supply: columns that have a
+- **`<Table>Insert`** - only the columns you must supply: columns that have a
   default or are generated are omitted, and nullable columns are optional.
-- **`<Table>Update`** — every column made optional, for partial patches.
+- **`<Table>Update`** - every column made optional, for partial patches.
 
 Table names become `PascalCase` (e.g. `order_items` → `OrderItemsRow`). Storage
-types map to each language's idioms — `int64`/`timestamp_nanos` become `bigint`
+types map to each language's idioms - `int64`/`timestamp_nanos` become `bigint`
 in TypeScript, `i64` in Rust, and `int` in Python; `json` becomes `unknown` /
 `serde_json::Value` / `Any`; `bytes` becomes `Uint8Array` / `Vec<u8>` / `bytes`.
 
@@ -496,10 +496,10 @@ mongreldb-kit fixture create ./store.kitdb customers
 
 > **RESTRICT semantics.** `truncate` fails when another table has a foreign key referencing the
 target table. Remove dependent rows first, or define the referencing foreign key with
-`on_delete: cascade` and delete the parent rows instead — `truncate` itself always refuses when
+`on_delete: cascade` and delete the parent rows instead - `truncate` itself always refuses when
 references exist.
 
-## user — manage catalog users
+## user - manage catalog users
 
 Catalog users have Argon2id-hashed passwords and live alongside the schema
 catalog (invisible to `table_names()`). Each user can be flagged admin to
@@ -524,7 +524,7 @@ mongreldb-kit user admin  ./store.kitdb alice false
 mongreldb-kit user drop   ./store.kitdb alice
 ```
 
-## role — manage roles and permissions
+## role - manage roles and permissions
 
 Roles are named bundles of permissions; a user's effective permissions are
 the union across all their roles. The permission string vocabulary is the
@@ -561,7 +561,7 @@ mongreldb-kit role drop   ./store.kitdb analyst
 > through `mongreldb-kit sql`, which is convenient for batching auth changes
 > with schema changes in a migration.
 
-## auth enable / disable-offline — credential enforcement
+## auth enable / disable-offline - credential enforcement
 
 `auth enable` turns on `require_auth` for an existing credentialless database:
 it bootstraps the first admin user (Argon2id-hashed, admin flag set) and flips
@@ -574,14 +574,14 @@ mongreldb-kit auth enable ./store.kitdb --admin-user alice --admin-password 's3c
 ```
 
 `auth disable-offline` is the recovery path for when you can still open the
-database but want to drop the `require_auth` flag. It opens the database —
-plain, or encrypted with `--passphrase` — and calls `disable_auth()` on the
+database but want to drop the `require_auth` flag. It opens the database -
+plain, or encrypted with `--passphrase` - and calls `disable_auth()` on the
 open handle. It will prompt for confirmation unless `--yes` is given.
 
 This requires either an openable database (one you can authenticate to with
 `--user`/`--password`) or a known passphrase for an encrypted database. For a
 `require_auth` database whose credentials are genuinely lost, there is no
-openable handle to call `disable_auth()` on — that case needs direct catalog
+openable handle to call `disable_auth()` on - that case needs direct catalog
 editing, as documented in the spec (see the credential enforcement guide
 below).
 
@@ -615,7 +615,7 @@ echo 's3cret-pw' | mongreldb-kit query ./store.kitdb users --user alice --passwo
 Prefer `--password-stdin` in scripts and CI.
 
 The same credentials can be supplied via the `MONGREL_USER` and
-`MONGREL_PASSWORD` environment variables — handy for `check`, `doctor`, and
+`MONGREL_PASSWORD` environment variables - handy for `check`, `doctor`, and
 other commands where flags would be noisy, and for mounting CI secrets without
 echoing them on the command line. Explicit `--user` / `--password` flags take
 precedence over the environment.
@@ -638,8 +638,8 @@ MONGREL_USER=admin MONGREL_PASSWORD=s3cret-pw mongreldb-kit check ./secure.kitdb
 
 ## See also
 
-- [Migrations](./migrations.md) — the migration model behind `migrate` and `generate migration`.
-- [Schema DSL](./schema.md) — the schema the JSON files describe.
-- [Internal tables](./internal-tables.md) — what `check` and `doctor` verify.
-- [Types](./types.md) — the `Row`/`Insert`/`Update` shapes `generate types` mirrors.
-- [Testing](./testing.md) — using fixtures in test setups.
+- [Migrations](./migrations.md) - the migration model behind `migrate` and `generate migration`.
+- [Schema DSL](./schema.md) - the schema the JSON files describe.
+- [Internal tables](./internal-tables.md) - what `check` and `doctor` verify.
+- [Types](./types.md) - the `Row`/`Insert`/`Update` shapes `generate types` mirrors.
+- [Testing](./testing.md) - using fixtures in test setups.

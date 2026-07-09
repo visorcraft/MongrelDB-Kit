@@ -25,7 +25,7 @@ interface Migration {
 - **`version`** orders the history. The runner applies migrations whose version
   is greater than the highest already applied, in ascending order.
 - **`name`** is stored with the record and shown by the CLI.
-- **`up()`** performs the change. In TypeScript this is **imperative** — you call
+- **`up()`** performs the change. In TypeScript this is **imperative** - you call
   context methods and helper functions to do the work (see
   [Two execution models](#two-execution-models)).
 - **`ops`** is an optional, declarative list describing what the migration
@@ -68,7 +68,7 @@ Both:
 6. Rewrite the schema catalog (`__kit_schema_catalog`) and release the lock.
 
 Because step 4 only ever selects versions above the high-water mark, **running
-the runner twice applies nothing the second time** — migrations are idempotent.
+the runner twice applies nothing the second time** - migrations are idempotent.
 
 ## Two execution models
 
@@ -78,7 +78,7 @@ different ways. Knowing which you are in avoids confusion.
 ### TypeScript: imperative `up()`
 
 The TypeScript runner calls your `up(ctx)` and you make the change with context
-methods and the exported migration helpers. The `ops` array is metadata only —
+methods and the exported migration helpers. The `ops` array is metadata only -
 it never drives the work.
 
 `MigrationContext` provides:
@@ -144,7 +144,7 @@ re-persisting the catalog, so those need no row-level backfill step.
 ### Declarative (JSON / Rust / CLI)
 
 When migrations come from a JSON file (the CLI) or the Rust kit, there is no
-`up()` — the **`ops` list is the migration body**, and the runner executes each
+`up()` - the **`ops` list is the migration body**, and the runner executes each
 op. JSON migrations use serde's snake_case shape:
 
 ```json
@@ -184,10 +184,10 @@ Verify against this matrix rather than assuming symmetry.
 | `addColumn` | `addColumn` / `ctx.addColumn` (backfills non-nullable defaults) | implemented (adds the column) |
 | `alterColumn` | `alterColumn` / `ctx.alterColumn` (native ALTER COLUMN validation) | implemented (native ALTER COLUMN validation) |
 | `addUnique` | `addUnique` (backfill + reject violations) | implemented (backfill + reject violations) |
-| `dropUnique` | — | implemented (deletes the constraint's guards) |
+| `dropUnique` | - | implemented (deletes the constraint's guards) |
 | `addForeignKey` | `addForeignKey` (backfill + reject missing parent) | implemented (backfill + reject missing parent) |
-| `dropForeignKey` | — | metadata-only no-op (enforcement follows the re-persisted schema) |
-| `addCheck` / `dropCheck` | — | metadata-only no-op (enforcement follows the re-persisted schema) |
+| `dropForeignKey` | - | metadata-only no-op (enforcement follows the re-persisted schema) |
+| `addCheck` / `dropCheck` | - | metadata-only no-op (enforcement follows the re-persisted schema) |
 | `addIndex` | `addIndex` / `ctx.addIndex` (table rebuild) | implemented (table rebuild) |
 | `dropColumn` | `dropColumn` / `ctx.dropColumn` (table rebuild) | implemented (table rebuild) |
 | `dropIndex` | `dropIndex` / `ctx.dropIndex` (table rebuild) | implemented (table rebuild) |
@@ -231,12 +231,12 @@ examples (asserted by the cross-language conformance tests):
 ```
 
 When `ops` is omitted (TypeScript), the checksum covers the version and name
-with an empty op list — the second form above.
+with an empty op list - the second form above.
 
 **Drift detection.** When the TypeScript runner reads the applied records, it
 recomputes the checksum of the supplied migration with the same version and
-compares it (and the name) against what was stored. A mismatch — or an applied
-version that is missing from the supplied list — raises `KitSchemaDriftError`.
+compares it (and the name) against what was stored. A mismatch - or an applied
+version that is missing from the supplied list - raises `KitSchemaDriftError`.
 That is how an edited or reordered historical migration is caught before it can
 silently change the meaning of the schema. Records left in `failed` status are
 skipped by drift detection; repair them before re-running.
@@ -250,7 +250,7 @@ skipped by drift detection; repair them before re-running.
 
 Several operations scan existing rows and reconcile the kit's
 [internal guard tables](./internal-tables.md) so constraints added *after* data
-exists stay consistent. All backfills are idempotent — re-running leaves existing
+exists stay consistent. All backfills are idempotent - re-running leaves existing
 guards untouched.
 
 - **Add column (nullable or already present).** A nullable column needs no row backfill. In
@@ -312,11 +312,11 @@ db.migrateSync(newSchema, [
 
 ## SQL views
 
-Views (`CREATE VIEW <name> AS <select>`) are **session-scoped** in the engine — they are not
+Views (`CREATE VIEW <name> AS <select>`) are **session-scoped** in the engine - they are not
 persisted to the catalog. The kit holds one long-lived SQL session per `Database` handle for the
 database's lifetime (mirroring how the daemon and any long-lived app use MongrelDB), so a view
 created via a migration or direct `sql()` call persists across subsequent `sql()` / `sqlRows()` /
-`sqlArrow()` calls on that same handle. Closing and reopening the database loses the view —
+`sqlArrow()` calls on that same handle. Closing and reopening the database loses the view -
 re-apply the migration to restore it.
 
 Three migration ops manage views; all run SQL through the embedded session:
@@ -327,7 +327,7 @@ Three migration ops manage views; all run SQL through the embedded session:
 | `dropView` | `DROP VIEW IF EXISTS <name>` (idempotent). |
 
 ```ts
-// TypeScript — view ops are async-only (they run SQL).
+// TypeScript - view ops are async-only (they run SQL).
 await db.migrate(schema, [
   {
     version: 4,
@@ -341,7 +341,7 @@ await db.migrate(schema, [
 ```
 
 ```python
-# Python / Rust — views are created by the migration runner directly.
+# Python / Rust - views are created by the migration runner directly.
 db.migrate([{
     "version": 4,
     "name": "add_active_users_view",
@@ -352,7 +352,7 @@ db.sql_rows("SELECT * FROM active_users ORDER BY id")
 ```
 
 > **Note:** `CREATE OR REPLACE VIEW` is not supported by the engine (the `OR REPLACE` keyword is
-> gated off). Re-issue `CREATE VIEW` for replace semantics — it overwrites.
+> gated off). Re-issue `CREATE VIEW` for replace semantics - it overwrites.
 
 ## Walkthrough: evolving the store schema
 
@@ -429,7 +429,7 @@ await migrate(db, schema, [
 ```
 
 After v3, `db.migrateSync`/`migrate` re-runs apply nothing, and editing any of
-the listed `ops` on v1–v3 would be rejected as drift on the next run.
+the listed `ops` on v1-v3 would be rejected as drift on the next run.
 
 ## Failed migrations
 
@@ -481,8 +481,8 @@ db.migrate([
 
 ## See also
 
-- [Schema DSL](./schema.md) — the table/column/constraint specs migrations apply.
-- [Constraints](./constraints.md) — what unique, check, and foreign-key backfills enforce.
-- [Internal tables](./internal-tables.md) — the `__kit_*` tables migrations read and write.
-- [CLI](./cli.md) — `migrate apply`/`status`/`plan` and `generate migration`.
-- [Errors](./errors.md) — `KitMigrationError`, `KitSchemaDriftError`, `KitForeignKeyError`.
+- [Schema DSL](./schema.md) - the table/column/constraint specs migrations apply.
+- [Constraints](./constraints.md) - what unique, check, and foreign-key backfills enforce.
+- [Internal tables](./internal-tables.md) - the `__kit_*` tables migrations read and write.
+- [CLI](./cli.md) - `migrate apply`/`status`/`plan` and `generate migration`.
+- [Errors](./errors.md) - `KitMigrationError`, `KitSchemaDriftError`, `KitForeignKeyError`.

@@ -38,7 +38,7 @@ Monitor these signals:
 - For TypeScript deployments, build the `mongreldb` native addon in release mode; a debug `.node`
   will dominate bulk insert/delete and pushed-down query timings.
 - Keep transactions short to reduce conflict retries.
-- Use batch inserts (`valuesMany` / `insert_many`) for bulk loads — one transaction is far
+- Use batch inserts (`valuesMany` / `insert_many`) for bulk loads - one transaction is far
   cheaper than a row-at-a-time loop.
 
 ## Migrations
@@ -56,18 +56,18 @@ Monitor these signals:
 - Validate any use of raw escape hatches (`nativeDb`, `db.inner`, `db._handle`).
 - Rotate secrets only when the kit explicitly supports re-encryption.
 - Enable credential enforcement (`require_auth`) on production databases so
-  every open must authenticate — create or enable it with a bootstrap admin
+  every open must authenticate - create or enable it with a bootstrap admin
   (`auth enable`, or `--require-auth --admin-user --admin-password` on `init`).
   Once enabled, store the admin credentials offline for recovery; the only
   way back to a credentialless database is the offline
   `auth disable-offline` path. The `_meta/` table namespace (catalog users,
-  roles, schema) is the enforcement boundary — application tables cannot bypass
+  roles, schema) is the enforcement boundary - application tables cannot bypass
   it even via raw escape hatches. See the engine
   [credential enforcement guide](https://github.com/visorcraft/MongrelDB/blob/master/docs/15-credential-enforcement.md)
   for the full model.
 - For the HTTP daemon, start with `--auth-token <token>` (Bearer) and/or
   `--auth-users` (HTTP Basic against catalog users). Create the first admin
-  user before enabling `--auth-users` — see the engine
+  user before enabling `--auth-users` - see the engine
   [Users, Roles & Permissions](https://github.com/visorcraft/MongrelDB/blob/master/docs/14-auth.md)
   guide. Grant the least privilege per role (`select:table` rather than
   `all`) and reserve `admin` for break-glass accounts.
