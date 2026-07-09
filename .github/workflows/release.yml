@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
 
       - uses: Swatinem/rust-cache@v2.9.1
 
@@ -109,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
         with:
           targets: ${{ matrix.target }}
 
@@ -139,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
