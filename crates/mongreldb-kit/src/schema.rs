@@ -1,33 +1,63 @@
 //! Schema/value conversion between the kit model and MongrelDB core.
 
 use crate::error::{KitError, Result};
+use mongreldb_core::constraint::{CheckConstraint as CoreCheckConstraint, CheckExpr, TableConstraints};
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::{
-    ColumnDef, ColumnFlags, IndexDef, IndexKind, Schema as CoreSchema, TypeId,
+    ColumnDef, ColumnFlags, DefaultExpr, IndexDef, IndexKind, Schema as CoreSchema, TypeId,
 };
 use mongreldb_kit_core::schema::{
-    Column, ColumnType, IndexKind as KitIndexKind, Table as KitTable,
+    Column, ColumnType, DefaultKind, IndexKind as KitIndexKind, Table as KitTable,
 };
 use serde_json::{Map, Value};
 
 /// Convert a kit table to a core schema.
+///
+/// Engine 0.46.x accepts column-level `enum_values`, regex CHECK constraints,
+/// and `Static` / `Now` / `Uuid` defaults natively on `create_table`. This
+/// pass lowers the kit model into those engine-native shapes so the kit doesn't
+/// have to re-validate on every write.
+///
+/// Out of scope (kept kit-side per PLAN.md phase 4):
+/// - Table-level `check_constraints` — until the SQL CHECK compiler ships the
+///   kit cannot lower arbitrary boolean expressions to the engine's `CheckExpr`
+///   IR, so kit's per-write `validate_row` continues to enforce them.
+/// - `Column.check_expr` (named custom checks) — same reason; runtime
+///   registration only.
+/// - `DefaultKind::Sequence` / `DefaultKind::CustomName` — cannot cross the
+///   in-process boundary; resolved kit-side at write stage time.
 pub fn to_core_schema(table: &KitTable) -> CoreSchema {
+    let mut next_check_id: u16 = 1;
+    let mut core_checks: Vec<CoreCheckConstraint> = Vec::new();
     let columns: Vec<ColumnDef> = table
         .columns
         .iter()
         .map(|c| ColumnDef {
             id: c.id as u16,
             name: c.name.clone(),
-            ty: match c.storage_type {
-                ColumnType::Embedding => TypeId::Embedding {
-                    dim: c.embedding_dim.unwrap_or(0),
-                },
-                other => to_core_type(other),
-            },
+            ty: resolve_type(c),
             flags: to_core_flags(table, c),
-            default_value: None,
+            default_value: kit_default_to_core(&c.default, c.storage_type),
         })
         .collect();
+
+    for c in &table.columns {
+        if let Some(pattern) = &c.regex {
+            let id = next_check_id;
+            next_check_id = next_check_id.saturating_add(1);
+            core_checks.push(CoreCheckConstraint {
+                id,
+                name: format!("{}_regex", c.name),
+                expr: CheckExpr::Regex {
+                    col: c.id as u16,
+                    pattern: pattern.clone(),
+                    negated: false,
+                    case_insensitive: false,
+                    cached: std::sync::OnceLock::new(),
+                },
+            });
+        }
+    }
 
     let mut indexes: Vec<IndexDef> = Vec::new();
     for idx in &table.indexes {
@@ -68,8 +98,38 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
         columns,
         indexes,
         colocation: Vec::new(),
-        constraints: Default::default(),
+        constraints: TableConstraints {
+            uniques: Vec::new(),
+            foreign_keys: Vec::new(),
+            checks: core_checks,
+        },
         clustered: false,
+    }
+}
+
+fn resolve_type(col: &Column) -> TypeId {
+    if let Some(variants) = &col.enum_values {
+        return TypeId::Enum {
+            variants: variants.iter().cloned().collect::<Vec<_>>().into(),
+        };
+    }
+    match col.storage_type {
+        ColumnType::Embedding => TypeId::Embedding {
+            dim: col.embedding_dim.unwrap_or(0),
+        },
+        other => to_core_type(other),
+    }
+}
+
+fn kit_default_to_core(default: &Option<DefaultKind>, ty: ColumnType) -> Option<DefaultExpr> {
+    let k = default.as_ref()?;
+    match k {
+        DefaultKind::Static(v) => json_to_core(v, ty).ok().map(DefaultExpr::Static),
+        DefaultKind::Now => Some(DefaultExpr::Now),
+        DefaultKind::Uuid => Some(DefaultExpr::Uuid),
+        // Sequence / CustomName are kit-only resolution paths; leave None so
+        // the kit continues to apply them at write stage time.
+        DefaultKind::Sequence(_) | DefaultKind::CustomName(_) => None,
     }
 }
 
@@ -330,4 +390,137 @@ pub fn row_to_core_cells(
         cells.push((col.id as u16, json_to_core(&v, col.storage_type)?));
     }
     Ok(cells)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mongreldb_core::constraint::CheckExpr;
+    use mongreldb_kit_core::schema::{Column, DefaultKind, Table as KitTable};
+    use serde_json::json;
+
+    fn kit_text_column(
+        id: u32,
+        name: &str,
+        enum_values: Option<Vec<String>>,
+        regex: Option<String>,
+        default: Option<DefaultKind>,
+    ) -> Column {
+        let mut c = Column::new(id, name, ColumnType::Text);
+        c.enum_values = enum_values;
+        c.regex = regex;
+        c.default = default;
+        c
+    }
+
+    fn envelope_table(columns: Vec<Column>) -> KitTable {
+        KitTable {
+            id: 1,
+            name: "envelope".into(),
+            columns,
+            primary_key: vec!["id".into()],
+            indexes: vec![],
+            foreign_keys: vec![],
+            unique_constraints: vec![],
+            check_constraints: vec![],
+        }
+    }
+
+    #[test]
+    fn enum_values_lower_to_engine_enum_type() {
+        let table = envelope_table(vec![
+            kit_text_column(1, "id", None, None, None),
+            kit_text_column(
+                2,
+                "role",
+                Some(vec!["user".into(), "admin".into()]),
+                None,
+                None,
+            ),
+        ]);
+        let core = to_core_schema(&table);
+        let role = core.columns.iter().find(|c| c.name == "role").unwrap();
+        match &role.ty {
+            TypeId::Enum { variants } => {
+                assert_eq!(variants.as_ref(), &["user".to_string(), "admin".to_string()])
+            }
+            other => panic!("expected TypeId::Enum, got {other:?}"),
+        }
+        assert_eq!(role.default_value, None);
+        assert!(core.constraints.checks.is_empty());
+    }
+
+    #[test]
+    fn regex_lower_to_engine_check_constraint() {
+        let table = envelope_table(vec![
+            kit_text_column(1, "id", None, None, None),
+            kit_text_column(2, "slug", None, Some("^[a-z0-9-]+$".into()), None),
+        ]);
+        let core = to_core_schema(&table);
+        assert_eq!(core.constraints.checks.len(), 1, "{:?}", core.constraints);
+        let check = &core.constraints.checks[0];
+        assert_eq!(check.name, "slug_regex");
+        match &check.expr {
+            CheckExpr::Regex {
+                col,
+                pattern,
+                negated,
+                case_insensitive,
+                ..
+            } => {
+                assert_eq!(*col, 2);
+                assert_eq!(pattern, "^[a-z0-9-]+$");
+                assert!(!*negated);
+                assert!(!*case_insensitive);
+            }
+            other => panic!("expected CheckExpr::Regex, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn static_now_uuid_defaults_lower_to_engine_default_expr() {
+        let mut static_col = kit_text_column(3, "label", None, None, None);
+        static_col.default = Some(DefaultKind::Static(json!("draft")));
+        let mut now_col = kit_text_column(4, "created", None, None, None);
+        now_col.default = Some(DefaultKind::Now);
+        let mut uuid_col = kit_text_column(5, "uuid", None, None, None);
+        uuid_col.default = Some(DefaultKind::Uuid);
+        let mut seq_col = kit_text_column(6, "seq", None, None, None);
+        seq_col.default = Some(DefaultKind::Sequence("seq_users".into()));
+        let mut custom_col = kit_text_column(7, "custom", None, None, None);
+        custom_col.default = Some(DefaultKind::CustomName("named_fn".into()));
+
+        let table = envelope_table(vec![
+            kit_text_column(1, "id", None, None, None),
+            static_col,
+            now_col,
+            uuid_col,
+            seq_col,
+            custom_col,
+        ]);
+        let core = to_core_schema(&table);
+        let by = |n: &str| core.columns.iter().find(|c| c.name == n).unwrap();
+
+        assert!(matches!(
+            by("label").default_value,
+            Some(DefaultExpr::Static(CoreValue::Bytes(_)))
+        ));
+        assert!(matches!(by("created").default_value, Some(DefaultExpr::Now)));
+        assert!(matches!(by("uuid").default_value, Some(DefaultExpr::Uuid)));
+        // Kit-only shapes stay kit-side (None = no engine default).
+        assert_eq!(by("seq").default_value, None);
+        assert_eq!(by("custom").default_value, None);
+    }
+
+    #[test]
+    fn table_level_check_constraints_stay_kit_side() {
+        let mut table = envelope_table(vec![kit_text_column(1, "id", None, None, None)]);
+        table.check_constraints = vec![mongreldb_kit_core::schema::CheckConstraint {
+            name: "balance_positive".into(),
+            expr: "balance > 0".into(),
+        }];
+        let core = to_core_schema(&table);
+        // No engine CHECK emitted — kit's validate_row keeps evaluating it.
+        assert!(core.constraints.checks.is_empty());
+    }
 }

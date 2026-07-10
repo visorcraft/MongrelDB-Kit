@@ -37,3 +37,8 @@ fn views() {
 fn learned_range() {
     conformance_runner::run_learned_range().expect("learned_range conformance failed");
 }
+
+#[test]
+fn phase4_engine_native() {
+    conformance_runner::run_phase4_engine_native().expect("phase 4 engine-native conformance failed");
+}
