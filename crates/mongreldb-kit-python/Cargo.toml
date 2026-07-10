@@ -1,6 +1,6 @@
 [package]
 name = "mongreldb-kit-python"
-version = "0.34.2"
+version = "0.35.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "PyO3 bindings for MongrelDB Kit: a schema-aware persistence layer with migrations, constraints, and a query builder."
@@ -13,7 +13,7 @@ name = "mongreldb_kit_py"
 crate-type = ["cdylib"]
 
 [dependencies]
-mongreldb-kit = { path = "../mongreldb-kit", version = "0.34.2" }
-mongreldb-kit-core = { path = "../mongreldb-kit-core", version = "0.34.2" }
+mongreldb-kit = { path = "../mongreldb-kit", version = "0.35.0" }
+mongreldb-kit-core = { path = "../mongreldb-kit-core", version = "0.35.0" }
 pyo3 = { version = "0.29", features = ["extension-module"] }
 serde_json = { version = "1", features = ["preserve_order"] }
