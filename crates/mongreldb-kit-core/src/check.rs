@@ -28,21 +28,55 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckParseError(pub String);
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum CheckExpression {
+    Compare {
+        left: CheckOperand,
+        op: CheckOperator,
+        right: CheckOperand,
+    },
+    And(Box<CheckExpression>, Box<CheckExpression>),
+    Or(Box<CheckExpression>, Box<CheckExpression>),
+    Not(Box<CheckExpression>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CheckOperand {
+    Column(String),
+    Number(f64),
+    String(String),
+    Bool(bool),
+    Null,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckOperator {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
 /// Evaluate a check expression against a row.
 ///
 /// Returns `Ok(true)` when the check holds (including unknown/NULL results) and
 /// `Ok(false)` only when the predicate is definitely violated.
 pub fn eval_check(expr: &str, row: &Map<String, Value>) -> Result<bool, CheckParseError> {
+    Ok(parse_check(expr)?.eval(row) != Some(false))
+}
+
+pub fn parse_check(expr: &str) -> Result<CheckExpression, CheckParseError> {
     let tokens = tokenize(expr)?;
     let mut parser = Parser { tokens, pos: 0 };
-    let result = parser.parse_or(row)?;
+    let result = parser.parse_or()?;
     if parser.pos != parser.tokens.len() {
         return Err(CheckParseError(format!(
             "unexpected trailing tokens in check expression: {expr}"
         )));
     }
-    // SQL semantics: only a definite `false` is a violation.
-    Ok(result != Some(false))
+    Ok(result)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -178,39 +212,38 @@ impl Parser {
         self.tokens.get(self.pos)
     }
 
-    fn parse_or(&mut self, row: &Map<String, Value>) -> Result<Option<bool>, CheckParseError> {
-        let mut acc = self.parse_and(row)?;
+    fn parse_or(&mut self) -> Result<CheckExpression, CheckParseError> {
+        let mut acc = self.parse_and()?;
         while matches!(self.peek(), Some(Token::Or)) {
             self.pos += 1;
-            let rhs = self.parse_and(row)?;
-            acc = or3(acc, rhs);
+            let rhs = self.parse_and()?;
+            acc = CheckExpression::Or(Box::new(acc), Box::new(rhs));
         }
         Ok(acc)
     }
 
-    fn parse_and(&mut self, row: &Map<String, Value>) -> Result<Option<bool>, CheckParseError> {
-        let mut acc = self.parse_not(row)?;
+    fn parse_and(&mut self) -> Result<CheckExpression, CheckParseError> {
+        let mut acc = self.parse_not()?;
         while matches!(self.peek(), Some(Token::And)) {
             self.pos += 1;
-            let rhs = self.parse_not(row)?;
-            acc = and3(acc, rhs);
+            let rhs = self.parse_not()?;
+            acc = CheckExpression::And(Box::new(acc), Box::new(rhs));
         }
         Ok(acc)
     }
 
-    fn parse_not(&mut self, row: &Map<String, Value>) -> Result<Option<bool>, CheckParseError> {
+    fn parse_not(&mut self) -> Result<CheckExpression, CheckParseError> {
         if matches!(self.peek(), Some(Token::Not)) {
             self.pos += 1;
-            let inner = self.parse_not(row)?;
-            return Ok(not3(inner));
+            return Ok(CheckExpression::Not(Box::new(self.parse_not()?)));
         }
-        self.parse_atom(row)
+        self.parse_atom()
     }
 
-    fn parse_atom(&mut self, row: &Map<String, Value>) -> Result<Option<bool>, CheckParseError> {
+    fn parse_atom(&mut self) -> Result<CheckExpression, CheckParseError> {
         if matches!(self.peek(), Some(Token::LParen)) {
             self.pos += 1;
-            let inner = self.parse_or(row)?;
+            let inner = self.parse_or()?;
             match self.peek() {
                 Some(Token::RParen) => {
                     self.pos += 1;
@@ -219,15 +252,12 @@ impl Parser {
                 _ => Err(CheckParseError("expected closing parenthesis".into())),
             }
         } else {
-            self.parse_comparison(row)
+            self.parse_comparison()
         }
     }
 
-    fn parse_comparison(
-        &mut self,
-        row: &Map<String, Value>,
-    ) -> Result<Option<bool>, CheckParseError> {
-        let lhs = self.parse_operand(row)?;
+    fn parse_comparison(&mut self) -> Result<CheckExpression, CheckParseError> {
+        let left = self.parse_operand()?;
         let op = match self.peek() {
             Some(Token::Op(op)) => op.clone(),
             other => {
@@ -237,28 +267,66 @@ impl Parser {
             }
         };
         self.pos += 1;
-        let rhs = self.parse_operand(row)?;
-        Ok(compare(&lhs, &op, &rhs))
+        let right = self.parse_operand()?;
+        let op = match op.as_str() {
+            "=" | "==" => CheckOperator::Eq,
+            "!=" | "<>" => CheckOperator::Ne,
+            "<" => CheckOperator::Lt,
+            "<=" => CheckOperator::Le,
+            ">" => CheckOperator::Gt,
+            ">=" => CheckOperator::Ge,
+            _ => {
+                return Err(CheckParseError(format!(
+                    "unsupported comparison operator: {op}"
+                )))
+            }
+        };
+        Ok(CheckExpression::Compare { left, op, right })
     }
 
-    fn parse_operand(&mut self, row: &Map<String, Value>) -> Result<Operand, CheckParseError> {
+    fn parse_operand(&mut self) -> Result<CheckOperand, CheckParseError> {
         let tok = self
             .peek()
             .cloned()
             .ok_or_else(|| CheckParseError("unexpected end of expression".into()))?;
         self.pos += 1;
         Ok(match tok {
-            Token::Number(n) => Operand::Num(n),
-            Token::Str(s) => Operand::Str(s),
-            Token::Bool(b) => Operand::Bool(b),
-            Token::Null => Operand::Null,
-            Token::Ident(name) => value_to_operand(row.get(&name)),
+            Token::Number(n) => CheckOperand::Number(n),
+            Token::Str(s) => CheckOperand::String(s),
+            Token::Bool(b) => CheckOperand::Bool(b),
+            Token::Null => CheckOperand::Null,
+            Token::Ident(name) => CheckOperand::Column(name),
             other => {
                 return Err(CheckParseError(format!(
                     "expected an operand, found {other:?}"
                 )))
             }
         })
+    }
+}
+
+impl CheckExpression {
+    fn eval(&self, row: &Map<String, Value>) -> Option<bool> {
+        match self {
+            CheckExpression::Compare { left, op, right } => {
+                compare(&left.resolve(row), *op, &right.resolve(row))
+            }
+            CheckExpression::And(left, right) => and3(left.eval(row), right.eval(row)),
+            CheckExpression::Or(left, right) => or3(left.eval(row), right.eval(row)),
+            CheckExpression::Not(expression) => not3(expression.eval(row)),
+        }
+    }
+}
+
+impl CheckOperand {
+    fn resolve(&self, row: &Map<String, Value>) -> Operand {
+        match self {
+            CheckOperand::Column(name) => value_to_operand(row.get(name)),
+            CheckOperand::Number(value) => Operand::Num(*value),
+            CheckOperand::String(value) => Operand::Str(value.clone()),
+            CheckOperand::Bool(value) => Operand::Bool(*value),
+            CheckOperand::Null => Operand::Null,
+        }
     }
 }
 
@@ -273,7 +341,7 @@ fn value_to_operand(value: Option<&Value>) -> Operand {
 }
 
 /// Compare two operands, returning `None` for unknown (NULL-involving) results.
-fn compare(lhs: &Operand, op: &str, rhs: &Operand) -> Option<bool> {
+fn compare(lhs: &Operand, op: CheckOperator, rhs: &Operand) -> Option<bool> {
     if matches!(lhs, Operand::Null) || matches!(rhs, Operand::Null) {
         return None;
     }
@@ -285,13 +353,12 @@ fn compare(lhs: &Operand, op: &str, rhs: &Operand) -> Option<bool> {
         _ => None,
     };
     match op {
-        "=" | "==" => Some(lhs == rhs),
-        "!=" | "<>" => Some(lhs != rhs),
-        "<" => ord.map(|o| o.is_lt()),
-        "<=" => ord.map(|o| o.is_le()),
-        ">" => ord.map(|o| o.is_gt()),
-        ">=" => ord.map(|o| o.is_ge()),
-        _ => None,
+        CheckOperator::Eq => Some(lhs == rhs),
+        CheckOperator::Ne => Some(lhs != rhs),
+        CheckOperator::Lt => ord.map(|o| o.is_lt()),
+        CheckOperator::Le => ord.map(|o| o.is_le()),
+        CheckOperator::Gt => ord.map(|o| o.is_gt()),
+        CheckOperator::Ge => ord.map(|o| o.is_ge()),
     }
 }
 

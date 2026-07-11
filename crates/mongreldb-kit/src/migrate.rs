@@ -99,7 +99,7 @@ fn apply_migration_ops(
             MigrationOp::CreateTable { name } => {
                 if let Some(table) = schema.table(name) {
                     if core.table_id(name).is_err() {
-                        core.create_table(name, to_core_schema(table))
+                        core.create_table(name, to_core_schema(table)?)
                             .map_err(KitError::from)?;
                     }
                 }
@@ -395,7 +395,7 @@ fn temp_rebuild_name(core: &CoreDatabase, table_name: &str) -> String {
 
 fn rebuild_table(core: &CoreDatabase, target: &KitTable) -> Result<()> {
     let rows = visible_internal_rows(core, &target.name)?;
-    let target_schema = to_core_schema(target);
+    let target_schema = to_core_schema(target)?;
     let temp_name = temp_rebuild_name(core, &target.name);
 
     core.create_table(&temp_name, target_schema.clone())

@@ -40,5 +40,6 @@ fn learned_range() {
 
 #[test]
 fn phase4_engine_native() {
-    conformance_runner::run_phase4_engine_native().expect("phase 4 engine-native conformance failed");
+    conformance_runner::run_phase4_engine_native()
+        .expect("phase 4 engine-native conformance failed");
 }

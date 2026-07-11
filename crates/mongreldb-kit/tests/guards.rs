@@ -193,19 +193,21 @@ fn table_check_constraint_is_enforced() {
         ]),
     )
     .unwrap();
+    txn.commit().unwrap();
+
     // Violating row (quantity = 0).
-    let err = txn
-        .insert(
-            "orders",
-            row(&[
-                ("id", json!(2)),
-                ("quantity", json!(0)),
-                ("price", json!(5)),
-            ]),
-        )
-        .unwrap_err();
+    let mut txn = db.begin().unwrap();
+    txn.insert(
+        "orders",
+        row(&[
+            ("id", json!(2)),
+            ("quantity", json!(0)),
+            ("price", json!(5)),
+        ]),
+    )
+    .unwrap();
+    let err = txn.commit().unwrap_err();
     assert!(matches!(err, KitError::Validation(_)));
-    txn.rollback();
 }
 
 // ── parent-delete vs child-insert row-guard conflict ────────────────────────

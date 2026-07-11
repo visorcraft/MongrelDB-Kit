@@ -221,7 +221,12 @@ fn run_insert(
     let mut txn = db.begin().map_err(|e| e.to_string())?;
     match txn.insert(&scenario.table, row) {
         Ok(result) => {
-            txn.commit().map_err(|e| e.to_string())?;
+            if let Err(e) = txn.commit() {
+                if let Some(err) = exp.get("error") {
+                    return assert_eq_json(&scenario.name, &Value::String(error_code(&e)), err);
+                }
+                return Err(format!("{} unexpected error: {}", scenario.name, e));
+            }
             if let Some(err) = exp.get("error") {
                 return Err(format!(
                     "{} expected error {} but succeeded",
@@ -254,7 +259,12 @@ fn run_update(
     let mut txn = db.begin().map_err(|e| e.to_string())?;
     match txn.update(&scenario.table, &pk, patch) {
         Ok(result) => {
-            txn.commit().map_err(|e| e.to_string())?;
+            if let Err(e) = txn.commit() {
+                if let Some(err) = exp.get("error") {
+                    return assert_eq_json(&scenario.name, &Value::String(error_code(&e)), err);
+                }
+                return Err(format!("{} unexpected error: {}", scenario.name, e));
+            }
             if let Some(err) = exp.get("error") {
                 return Err(format!(
                     "{} expected error {} but succeeded",
@@ -1837,10 +1847,8 @@ pub fn run_phase1_dml() -> Result<(), String> {
 /// must lower to engine `TypeId::Enum`, `Schema.constraints.checks` +
 /// `CheckExpr::Regex`, and `ColumnDef.default_value: DefaultExpr::Static`.
 ///
-/// Engine commit enforces CHECK + UNIQUE; it does NOT enforce enum membership
-/// (enforced at the SQL/HTTP write edge only). Kit's per-write `validate_row`
-/// still owns enum validation for embedded writes — that's a known carve-out
-/// from PLAN.md phase 4 and not part of this conformance.
+/// Engine commit enforces regex and enum membership through native CHECKs;
+/// Kit-only validation deliberately does not repeat those checks per write.
 pub fn run_phase4_engine_native() -> Result<(), String> {
     use mongreldb_kit::{CheckConstraint, Column, ColumnType, DefaultKind, Table};
 
@@ -1873,7 +1881,7 @@ pub fn run_phase4_engine_native() -> Result<(), String> {
     let schema = Schema::new(vec![table]).map_err(|e| e.to_string())?;
 
     let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let mut db = Database::create(tmp.path(), schema).map_err(|e| e.to_string())?;
+    let db = Database::create(tmp.path(), schema).map_err(|e| e.to_string())?;
 
     // (1) Static default applied: omitting `label` writes "draft".
     {
@@ -1894,10 +1902,8 @@ pub fn run_phase4_engine_native() -> Result<(), String> {
         txn.commit().map_err(|e| e.to_string())?;
     }
 
-    // (2) Row that violates the regex is rejected. The same constraint is
-    // enforced both kit-side (`validate_row` evaluates the regex) and engine
-    // side (`Schema.constraints.checks` lowered by `to_core_schema`). Either
-    // path firing is acceptable; both must agree the row is invalid.
+    // (2) Row that violates the regex is rejected by the engine CHECK lowered
+    // by `to_core_schema`.
     {
         let mut txn = db.begin().map_err(|e| e.to_string())?;
         let row = Map::from_iter([
@@ -1918,20 +1924,31 @@ pub fn run_phase4_engine_native() -> Result<(), String> {
             Err(e) => Some(e),
         };
         let msg = insert_err.map(|e| format!("{e}")).unwrap_or_default();
-        if !msg.to_lowercase().contains("check")
-            && !msg.to_lowercase().contains("pattern")
-        {
-            return Err(format!(
-                "expected regex/CHECK rejection, got: {msg}"
-            ));
+        if !msg.to_lowercase().contains("check") && !msg.to_lowercase().contains("pattern") {
+            return Err(format!("expected regex/CHECK rejection, got: {msg}"));
         }
     }
 
-    // (3) A row that matches the regex commits successfully.
+    // (3) Enum membership is also deferred to an engine CHECK.
     {
         let mut txn = db.begin().map_err(|e| e.to_string())?;
         let row = Map::from_iter([
             ("id".into(), Value::Number(3.into())),
+            ("role".into(), Value::String("owner".into())),
+            ("slug".into(), Value::String("valid-slug".into())),
+        ]);
+        txn.insert("phase4_native", row)
+            .map_err(|e| e.to_string())?;
+        if txn.commit().is_ok() {
+            return Err("expected rejection of invalid enum value, got commit success".into());
+        }
+    }
+
+    // (4) A row that matches the regex and enum commits successfully.
+    {
+        let mut txn = db.begin().map_err(|e| e.to_string())?;
+        let row = Map::from_iter([
+            ("id".into(), Value::Number(4.into())),
             ("role".into(), Value::String("admin".into())),
             ("slug".into(), Value::String("beta-7".into())),
         ]);

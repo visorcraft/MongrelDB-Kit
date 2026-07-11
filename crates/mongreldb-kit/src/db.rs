@@ -333,7 +333,7 @@ impl Database {
         ensure_internal_tables(&inner)?;
         store_schema(path, &schema)?;
         for table in &schema.tables {
-            create_core_table(&inner, &table.name, to_core_schema(table))?;
+            create_core_table(&inner, &table.name, to_core_schema(table)?)?;
         }
         Ok(Self {
             inner,
@@ -359,7 +359,7 @@ impl Database {
 
         // Create core tables for every user table.
         for table in &schema.tables {
-            create_core_table(&inner, &table.name, to_core_schema(table))?;
+            create_core_table(&inner, &table.name, to_core_schema(table)?)?;
         }
 
         Ok(Self {
@@ -440,7 +440,7 @@ impl Database {
         ensure_internal_tables(&inner)?;
         store_schema(path, &schema)?;
         for table in &schema.tables {
-            create_core_table(&inner, &table.name, to_core_schema(table))?;
+            create_core_table(&inner, &table.name, to_core_schema(table)?)?;
         }
         Ok(Self {
             inner,
@@ -519,7 +519,7 @@ impl Database {
         ensure_internal_tables(&inner)?;
         store_schema(path, &schema)?;
         for table in &schema.tables {
-            create_core_table(&inner, &table.name, to_core_schema(table))?;
+            create_core_table(&inner, &table.name, to_core_schema(table)?)?;
         }
         Ok(Self {
             inner,

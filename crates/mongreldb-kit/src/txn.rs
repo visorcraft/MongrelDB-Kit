@@ -201,7 +201,7 @@ impl<'a> Transaction<'a> {
         for col in &t.columns {
             row.entry(col.name.clone()).or_insert(Value::Null);
         }
-        mongreldb_kit_core::validation::validate_row(t, &row)?;
+        mongreldb_kit_core::validation::validate_row_kit_only(t, &row)?;
 
         // P6: split the batch cache into its disjoint field borrows so both the
         // immutable unique-guard slice and the mutable FK-parent map are
@@ -274,7 +274,7 @@ impl<'a> Transaction<'a> {
             }
         }
         self.apply_update_defaults(&mut values, &patch_keys, &t);
-        mongreldb_kit_core::validation::validate_row(&t, &values)?;
+        mongreldb_kit_core::validation::validate_row_kit_only(&t, &values)?;
         self.check_unique_constraints(&t, &values, Some(&old_row.values), None)?;
         self.check_foreign_keys(&t, &values, None)?;
 
@@ -558,7 +558,7 @@ impl<'a> Transaction<'a> {
         for col in &t.columns {
             values.entry(col.name.clone()).or_insert(Value::Null);
         }
-        mongreldb_kit_core::validation::validate_row(&t, &values)?;
+        mongreldb_kit_core::validation::validate_row_kit_only(&t, &values)?;
         let pk_map = pk_values_map(&t, &values);
         let existing = self.get_by_pk_internal(table, &pk_map)?;
         match (existing, on_conflict) {
@@ -573,7 +573,7 @@ impl<'a> Transaction<'a> {
                     }
                 }
                 self.apply_update_defaults(&mut merged, &patch_keys, &t);
-                mongreldb_kit_core::validation::validate_row(&t, &merged)?;
+                mongreldb_kit_core::validation::validate_row_kit_only(&t, &merged)?;
                 self.check_unique_constraints(&t, &merged, Some(&old.values), None)?;
                 self.check_foreign_keys(&t, &merged, None)?;
                 self.reserve_unique_guards(&t, &merged, Some(&old.values))?;
@@ -649,7 +649,7 @@ impl<'a> Transaction<'a> {
                 }
             }
             self.apply_update_defaults(&mut values, &patch_keys, &t);
-            mongreldb_kit_core::validation::validate_row(&t, &values)?;
+            mongreldb_kit_core::validation::validate_row_kit_only(&t, &values)?;
             self.check_unique_constraints(&t, &values, Some(&row.values), None)?;
             self.check_foreign_keys(&t, &values, None)?;
             self.reserve_unique_guards(&t, &values, Some(&row.values))?;
@@ -1682,7 +1682,7 @@ impl<'a> Transaction<'a> {
             values.insert(col.clone(), Value::Null);
         }
         // Re-run validation (including checks) on the patched child row.
-        mongreldb_kit_core::validation::validate_row(&child_table, &values)?;
+        mongreldb_kit_core::validation::validate_row_kit_only(&child_table, &values)?;
         // Recompute unique guards for the patched row. The row itself survives a
         // set-null (only its FK columns change), so its primary-key guard is
         // re-reserved after `delete_guards_for` clears it.

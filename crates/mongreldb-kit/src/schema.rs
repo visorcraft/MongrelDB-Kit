@@ -1,7 +1,9 @@
 //! Schema/value conversion between the kit model and MongrelDB core.
 
 use crate::error::{KitError, Result};
-use mongreldb_core::constraint::{CheckConstraint as CoreCheckConstraint, CheckExpr, TableConstraints};
+use mongreldb_core::constraint::{
+    CheckConstraint as CoreCheckConstraint, CheckExpr, TableConstraints,
+};
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::{
     ColumnDef, ColumnFlags, DefaultExpr, IndexDef, IndexKind, Schema as CoreSchema, TypeId,
@@ -13,20 +15,15 @@ use serde_json::{Map, Value};
 
 /// Convert a kit table to a core schema.
 ///
-/// Engine 0.46.x accepts column-level `enum_values`, regex CHECK constraints,
-/// and `Static` / `Now` / `Uuid` defaults natively on `create_table`. This
-/// pass lowers the kit model into those engine-native shapes so the kit doesn't
-/// have to re-validate on every write.
+/// Engine 0.46.x accepts column-level `enum_values`, CHECK constraints, and
+/// `Static` / `Now` / `Uuid` defaults natively on `create_table`. This pass
+/// lowers the kit model into those engine-native shapes so the kit doesn't
+/// have to re-validate them on every write.
 ///
-/// Out of scope (kept kit-side per PLAN.md phase 4):
-/// - Table-level `check_constraints` — until the SQL CHECK compiler ships the
-///   kit cannot lower arbitrary boolean expressions to the engine's `CheckExpr`
-///   IR, so kit's per-write `validate_row` continues to enforce them.
-/// - `Column.check_expr` (named custom checks) — same reason; runtime
-///   registration only.
-/// - `DefaultKind::Sequence` / `DefaultKind::CustomName` — cannot cross the
+/// Kept kit-side:
+/// - `DefaultKind::Sequence` / `DefaultKind::CustomName` cannot cross the
 ///   in-process boundary; resolved kit-side at write stage time.
-pub fn to_core_schema(table: &KitTable) -> CoreSchema {
+pub fn to_core_schema(table: &KitTable) -> Result<CoreSchema> {
     let mut next_check_id: u16 = 1;
     let mut core_checks: Vec<CoreCheckConstraint> = Vec::new();
     let columns: Vec<ColumnDef> = table
@@ -42,6 +39,28 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
         .collect();
 
     for c in &table.columns {
+        if let Some(variants) = &c.enum_values {
+            if let Some(expr) = variants
+                .iter()
+                .map(|variant| {
+                    CheckExpr::Eq(
+                        Box::new(CheckExpr::Col(c.id as u16)),
+                        Box::new(CheckExpr::Lit(CoreValue::Bytes(
+                            variant.as_bytes().to_vec(),
+                        ))),
+                    )
+                })
+                .reduce(|left, right| CheckExpr::Or(Box::new(left), Box::new(right)))
+            {
+                let id = next_check_id;
+                next_check_id = next_check_id.saturating_add(1);
+                core_checks.push(CoreCheckConstraint {
+                    id,
+                    name: format!("{}_enum", c.name),
+                    expr,
+                });
+            }
+        }
         if let Some(pattern) = &c.regex {
             let id = next_check_id;
             next_check_id = next_check_id.saturating_add(1);
@@ -55,6 +74,27 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
                     case_insensitive: false,
                     cached: std::sync::OnceLock::new(),
                 },
+            });
+        }
+    }
+
+    for check in &table.check_constraints {
+        let id = next_check_id;
+        next_check_id = next_check_id.saturating_add(1);
+        core_checks.push(CoreCheckConstraint {
+            id,
+            name: check.name.clone(),
+            expr: lower_kit_check(&check.expr, table)?,
+        });
+    }
+    for column in &table.columns {
+        if let Some(expression) = &column.check_expr {
+            let id = next_check_id;
+            next_check_id = next_check_id.saturating_add(1);
+            core_checks.push(CoreCheckConstraint {
+                id,
+                name: format!("{}_check", column.name),
+                expr: lower_kit_check(expression, table)?,
             });
         }
     }
@@ -93,7 +133,7 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
         }
     }
 
-    CoreSchema {
+    Ok(CoreSchema {
         schema_id: table.id as u64,
         columns,
         indexes,
@@ -104,13 +144,75 @@ pub fn to_core_schema(table: &KitTable) -> CoreSchema {
             checks: core_checks,
         },
         clustered: false,
+    })
+}
+
+fn lower_kit_check(expression: &str, table: &KitTable) -> Result<CheckExpr> {
+    use mongreldb_kit_core::{CheckExpression, CheckOperand, CheckOperator};
+
+    fn operand(operand: CheckOperand, table: &KitTable) -> Result<CheckExpr> {
+        Ok(match operand {
+            CheckOperand::Column(name) => CheckExpr::Col(
+                table
+                    .column(&name)
+                    .ok_or_else(|| {
+                        KitError::Validation(format!(
+                            "check expression references unknown column {name:?}"
+                        ))
+                    })?
+                    .id as u16,
+            ),
+            CheckOperand::Number(value)
+                if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 =>
+            {
+                CheckExpr::Lit(CoreValue::Int64(value as i64))
+            }
+            CheckOperand::Number(value) => CheckExpr::Lit(CoreValue::Float64(value)),
+            CheckOperand::String(value) => CheckExpr::Lit(CoreValue::Bytes(value.into_bytes())),
+            CheckOperand::Bool(value) => CheckExpr::Lit(CoreValue::Bool(value)),
+            CheckOperand::Null => CheckExpr::Lit(CoreValue::Null),
+        })
     }
+
+    fn lower(expression: CheckExpression, table: &KitTable) -> Result<CheckExpr> {
+        Ok(match expression {
+            CheckExpression::Compare { left, op, right } => {
+                let left = Box::new(operand(left, table)?);
+                let right = Box::new(operand(right, table)?);
+                match op {
+                    CheckOperator::Eq => CheckExpr::Eq(left, right),
+                    CheckOperator::Ne => CheckExpr::Ne(left, right),
+                    CheckOperator::Lt => CheckExpr::Lt(left, right),
+                    CheckOperator::Le => CheckExpr::Le(left, right),
+                    CheckOperator::Gt => CheckExpr::Gt(left, right),
+                    CheckOperator::Ge => CheckExpr::Ge(left, right),
+                }
+            }
+            CheckExpression::And(left, right) => CheckExpr::And(
+                Box::new(lower(*left, table)?),
+                Box::new(lower(*right, table)?),
+            ),
+            CheckExpression::Or(left, right) => CheckExpr::Or(
+                Box::new(lower(*left, table)?),
+                Box::new(lower(*right, table)?),
+            ),
+            CheckExpression::Not(expression) => {
+                CheckExpr::Not(Box::new(lower(*expression, table)?))
+            }
+        })
+    }
+
+    let parsed = mongreldb_kit_core::parse_check(expression)
+        .map_err(|error| KitError::Validation(error.0))?;
+    let lowered = lower(parsed, table)?;
+    lowered.validate().map_err(KitError::from)?;
+    Ok(lowered)
 }
 
 fn resolve_type(col: &Column) -> TypeId {
     if let Some(variants) = &col.enum_values {
         return TypeId::Enum {
-            variants: variants.iter().cloned().collect::<Vec<_>>().into(),
+            variants: variants.to_vec().into(),
         };
     }
     match col.storage_type {
@@ -438,16 +540,24 @@ mod tests {
                 None,
             ),
         ]);
-        let core = to_core_schema(&table);
+        let core = to_core_schema(&table).unwrap();
         let role = core.columns.iter().find(|c| c.name == "role").unwrap();
         match &role.ty {
             TypeId::Enum { variants } => {
-                assert_eq!(variants.as_ref(), &["user".to_string(), "admin".to_string()])
+                assert_eq!(
+                    variants.as_ref(),
+                    &["user".to_string(), "admin".to_string()]
+                )
             }
             other => panic!("expected TypeId::Enum, got {other:?}"),
         }
         assert_eq!(role.default_value, None);
-        assert!(core.constraints.checks.is_empty());
+        let check = &core.constraints.checks[0];
+        assert_eq!(check.name, "role_enum");
+        let valid = std::collections::HashMap::from([(2, CoreValue::Bytes(b"user".to_vec()))]);
+        let invalid = std::collections::HashMap::from([(2, CoreValue::Bytes(b"owner".to_vec()))]);
+        assert!(check.expr.satisfied(&valid));
+        assert!(!check.expr.satisfied(&invalid));
     }
 
     #[test]
@@ -456,7 +566,7 @@ mod tests {
             kit_text_column(1, "id", None, None, None),
             kit_text_column(2, "slug", None, Some("^[a-z0-9-]+$".into()), None),
         ]);
-        let core = to_core_schema(&table);
+        let core = to_core_schema(&table).unwrap();
         assert_eq!(core.constraints.checks.len(), 1, "{:?}", core.constraints);
         let check = &core.constraints.checks[0];
         assert_eq!(check.name, "slug_regex");
@@ -498,14 +608,17 @@ mod tests {
             seq_col,
             custom_col,
         ]);
-        let core = to_core_schema(&table);
+        let core = to_core_schema(&table).unwrap();
         let by = |n: &str| core.columns.iter().find(|c| c.name == n).unwrap();
 
         assert!(matches!(
             by("label").default_value,
             Some(DefaultExpr::Static(CoreValue::Bytes(_)))
         ));
-        assert!(matches!(by("created").default_value, Some(DefaultExpr::Now)));
+        assert!(matches!(
+            by("created").default_value,
+            Some(DefaultExpr::Now)
+        ));
         assert!(matches!(by("uuid").default_value, Some(DefaultExpr::Uuid)));
         // Kit-only shapes stay kit-side (None = no engine default).
         assert_eq!(by("seq").default_value, None);
@@ -513,14 +626,32 @@ mod tests {
     }
 
     #[test]
-    fn table_level_check_constraints_stay_kit_side() {
-        let mut table = envelope_table(vec![kit_text_column(1, "id", None, None, None)]);
+    fn table_and_column_checks_lower_to_engine() {
+        let mut balance = Column::new(2, "balance", ColumnType::Int64);
+        balance.check_expr = Some("balance <= 100".into());
+        let mut table = envelope_table(vec![kit_text_column(1, "id", None, None, None), balance]);
         table.check_constraints = vec![mongreldb_kit_core::schema::CheckConstraint {
             name: "balance_positive".into(),
-            expr: "balance > 0".into(),
+            expr: "balance > 0 AND id > 0".into(),
         }];
-        let core = to_core_schema(&table);
-        // No engine CHECK emitted — kit's validate_row keeps evaluating it.
-        assert!(core.constraints.checks.is_empty());
+        let core = to_core_schema(&table).unwrap();
+        assert_eq!(core.constraints.checks.len(), 2);
+        let valid =
+            std::collections::HashMap::from([(1, CoreValue::Int64(1)), (2, CoreValue::Int64(50))]);
+        let invalid =
+            std::collections::HashMap::from([(1, CoreValue::Int64(1)), (2, CoreValue::Int64(101))]);
+        assert!(core
+            .constraints
+            .checks
+            .iter()
+            .all(|check| check.expr.satisfied(&valid)));
+        assert!(core
+            .constraints
+            .checks
+            .iter()
+            .any(|check| !check.expr.satisfied(&invalid)));
+
+        table.check_constraints[0].expr = "missing > 0".into();
+        assert!(to_core_schema(&table).is_err());
     }
 }

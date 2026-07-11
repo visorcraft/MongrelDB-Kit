@@ -39,37 +39,57 @@ impl ValidationError {
 /// * table-level `check_constraints` names (validation of the expression itself
 ///   is left to the runtime that registered the named check)
 pub fn validate_row(table: &Table, row: &Map<String, Value>) -> Result<(), ValidationError> {
+    validate_row_inner(table, row, true)
+}
+
+/// Validate only constraints that are not already enforced by the engine schema.
+/// Enum, regex, table CHECK, and column CHECK validation is omitted because
+/// `to_core_schema` lowers them into engine constraints.
+pub fn validate_row_kit_only(
+    table: &Table,
+    row: &Map<String, Value>,
+) -> Result<(), ValidationError> {
+    validate_row_inner(table, row, false)
+}
+
+fn validate_row_inner(
+    table: &Table,
+    row: &Map<String, Value>,
+    validate_engine_constraints: bool,
+) -> Result<(), ValidationError> {
     for col in &table.columns {
         let value = row.get(&col.name);
-        validate_column(table, col, value, row)?;
+        validate_column(table, col, value, row, validate_engine_constraints)?;
     }
 
-    for check in &table.check_constraints {
-        if check.expr.trim().is_empty() {
-            return Err(ValidationError::new(
-                &table.name,
-                "",
-                format!(
-                    "check constraint \"{}\" has an empty expression",
-                    check.name
-                ),
-            ));
-        }
-        match crate::check::eval_check(&check.expr, row) {
-            Ok(true) => {}
-            Ok(false) => {
+    if validate_engine_constraints {
+        for check in &table.check_constraints {
+            if check.expr.trim().is_empty() {
                 return Err(ValidationError::new(
                     &table.name,
                     "",
-                    format!("check constraint \"{}\" failed", check.name),
+                    format!(
+                        "check constraint \"{}\" has an empty expression",
+                        check.name
+                    ),
                 ));
             }
-            Err(e) => {
-                return Err(ValidationError::new(
-                    &table.name,
-                    "",
-                    format!("check constraint \"{}\" is invalid: {}", check.name, e.0),
-                ));
+            match crate::check::eval_check(&check.expr, row) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(ValidationError::new(
+                        &table.name,
+                        "",
+                        format!("check constraint \"{}\" failed", check.name),
+                    ));
+                }
+                Err(e) => {
+                    return Err(ValidationError::new(
+                        &table.name,
+                        "",
+                        format!("check constraint \"{}\" is invalid: {}", check.name, e.0),
+                    ));
+                }
             }
         }
     }
@@ -82,6 +102,7 @@ fn validate_column(
     col: &Column,
     value: Option<&Value>,
     row: &Map<String, Value>,
+    validate_engine_constraints: bool,
 ) -> Result<(), ValidationError> {
     let value = match value {
         Some(Value::Null) | None => {
@@ -99,14 +120,16 @@ fn validate_column(
 
     type_check(table, col, value)?;
 
-    if let Some(enum_values) = &col.enum_values {
-        if let Value::String(s) = value {
-            if !enum_values.contains(s) {
-                return Err(ValidationError::new(
-                    &table.name,
-                    &col.name,
-                    format!("value \"{s}\" must be one of {}", enum_values.join(", ")),
-                ));
+    if validate_engine_constraints {
+        if let Some(enum_values) = &col.enum_values {
+            if let Value::String(s) = value {
+                if !enum_values.contains(s) {
+                    return Err(ValidationError::new(
+                        &table.name,
+                        &col.name,
+                        format!("value \"{s}\" must be one of {}", enum_values.join(", ")),
+                    ));
+                }
             }
         }
     }
@@ -152,20 +175,22 @@ fn validate_column(
                     ));
                 }
             }
-            if let Some(pattern) = &col.regex {
-                let re = regex::Regex::new(pattern).map_err(|e| {
-                    ValidationError::new(
-                        &table.name,
-                        &col.name,
-                        format!("invalid regex pattern: {e}"),
-                    )
-                })?;
-                if !re.is_match(s) {
-                    return Err(ValidationError::new(
-                        &table.name,
-                        &col.name,
-                        "does not match required pattern",
-                    ));
+            if validate_engine_constraints {
+                if let Some(pattern) = &col.regex {
+                    let re = regex::Regex::new(pattern).map_err(|e| {
+                        ValidationError::new(
+                            &table.name,
+                            &col.name,
+                            format!("invalid regex pattern: {e}"),
+                        )
+                    })?;
+                    if !re.is_match(s) {
+                        return Err(ValidationError::new(
+                            &table.name,
+                            &col.name,
+                            "does not match required pattern",
+                        ));
+                    }
                 }
             }
         }
@@ -212,31 +237,33 @@ fn validate_column(
         _ => {}
     }
 
-    if let Some(expr) = &col.check_expr {
-        if expr.trim().is_empty() {
-            return Err(ValidationError::new(
-                &table.name,
-                &col.name,
-                "column check expression is empty",
-            ));
-        }
-        // Column checks are evaluated against the full row so they may
-        // reference the column by name (and any sibling column).
-        match crate::check::eval_check(expr, row) {
-            Ok(true) => {}
-            Ok(false) => {
+    if validate_engine_constraints {
+        if let Some(expr) = &col.check_expr {
+            if expr.trim().is_empty() {
                 return Err(ValidationError::new(
                     &table.name,
                     &col.name,
-                    "column check constraint failed",
+                    "column check expression is empty",
                 ));
             }
-            Err(e) => {
-                return Err(ValidationError::new(
-                    &table.name,
-                    &col.name,
-                    format!("column check constraint is invalid: {}", e.0),
-                ));
+            // Column checks are evaluated against the full row so they may
+            // reference the column by name (and any sibling column).
+            match crate::check::eval_check(expr, row) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(ValidationError::new(
+                        &table.name,
+                        &col.name,
+                        "column check constraint failed",
+                    ));
+                }
+                Err(e) => {
+                    return Err(ValidationError::new(
+                        &table.name,
+                        &col.name,
+                        format!("column check constraint is invalid: {}", e.0),
+                    ));
+                }
             }
         }
     }
@@ -424,6 +451,30 @@ mod tests {
         );
         let err = validate_row(&table, &r).unwrap_err();
         assert_eq!(err.column, "zip");
+    }
+
+    #[test]
+    fn kit_only_validation_defers_engine_constraints() {
+        let mut table = users_table();
+        table.columns[1].check_expr = Some("handle = 'allowed'".into());
+        table.check_constraints = vec![CheckConstraint {
+            name: "role_user".into(),
+            expr: "role = 'user'".into(),
+        }];
+        let r = row(
+            json!({ "id": 1, "email": "a@b.com", "handle": "ab", "role": "other", "zip": "bad" }),
+        );
+        validate_row_kit_only(&table, &r).unwrap();
+
+        let invalid_length = row(
+            json!({ "id": 1, "email": "a@b.com", "handle": "x", "role": "other", "zip": "bad" }),
+        );
+        assert_eq!(
+            validate_row_kit_only(&table, &invalid_length)
+                .unwrap_err()
+                .column,
+            "handle"
+        );
     }
 
     #[test]
