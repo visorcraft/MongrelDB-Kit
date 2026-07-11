@@ -16,7 +16,7 @@ cargo run -p mongreldb-kit-cli -- <command> [args]
 Release binaries are attached to GitHub releases:
 
 ```sh
-VERSION=v0.47.2
+VERSION=v0.48.0
 ASSET=mongreldb-kit-linux-x64 # use mongreldb-kit-linux-arm64 on ARM64 Linux
 curl -L -o /usr/local/bin/mongreldb-kit \
   "https://github.com/visorcraft/MongrelDB-Kit/releases/download/${VERSION}/${ASSET}"
