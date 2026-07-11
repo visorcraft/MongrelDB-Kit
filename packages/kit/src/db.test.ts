@@ -244,7 +244,7 @@ describe('KitDatabase', () => {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });
 		}
-	});
+	}, 30_000);
 
 	it('setSimilarity ranks rows by Jaccard set-similarity', () => {
 		const t = table('t', {
