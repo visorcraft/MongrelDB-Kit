@@ -81,6 +81,20 @@ class RemoteDatabase:
         except KeyError:
             raise StorageError(f"unknown table {name!r}") from None
 
+    def set_history_retention_epochs(self, epochs: int) -> None:
+        """Set the daemon's durable MVCC history-retention window."""
+        if epochs < 0:
+            raise ValueError("epochs must be non-negative")
+        self._put_json("/history/retention", {"history_retention_epochs": epochs})
+
+    def history_retention_epochs(self) -> int:
+        """Return the daemon's configured history-retention depth."""
+        return int(self._get_json("/history/retention")["history_retention_epochs"])
+
+    def earliest_retained_epoch(self) -> int:
+        """Return the oldest epoch retained by the daemon."""
+        return int(self._get_json("/history/retention")["earliest_retained_epoch"])
+
     # ── reads ─────────────────────────────────────────────────────────────
 
     def sql_arrow(self, sql: str) -> bytes:
@@ -179,6 +193,12 @@ class RemoteDatabase:
     def _post_json(self, path: str, payload: Any) -> Any:
         data = json.dumps(payload).encode("utf-8")
         with self._open("POST", path, body=data) as resp:
+            raw = resp.read()
+            return json.loads(raw.decode("utf-8")) if raw else {}
+
+    def _put_json(self, path: str, payload: Any) -> Any:
+        data = json.dumps(payload).encode("utf-8")
+        with self._open("PUT", path, body=data) as resp:
             raw = resp.read()
             return json.loads(raw.decode("utf-8")) if raw else {}
 

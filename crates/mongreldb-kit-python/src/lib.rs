@@ -366,6 +366,20 @@ impl PyDatabase {
         Ok(self.require_db()?.snapshot_epoch())
     }
 
+    fn set_history_retention_epochs(&self, epochs: u64) -> PyResult<()> {
+        self.require_db()?
+            .set_history_retention_epochs(epochs)
+            .map_err(map_err)
+    }
+
+    fn history_retention_epochs(&self) -> PyResult<u64> {
+        Ok(self.require_db()?.history_retention_epochs())
+    }
+
+    fn earliest_retained_epoch(&self) -> PyResult<u64> {
+        Ok(self.require_db()?.earliest_retained_epoch())
+    }
+
     fn create_procedure(&self, procedure_json: &str) -> PyResult<String> {
         let value: Value = serde_json::from_str(procedure_json).map_err(py_json_err)?;
         let spec = mongreldb_kit_core::ProcedureSpec::new(value);

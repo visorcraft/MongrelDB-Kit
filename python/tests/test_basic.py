@@ -462,7 +462,10 @@ def test_tsv_export_import_round_trip():
 
 
 def test_rows_at_epoch_time_travel():
-    db = Database.create(tmp_db(), users_orders_schema())
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+    db.set_history_retention_epochs(100)
+    assert db.history_retention_epochs() == 100
     with db.begin() as txn:
         insert_user(txn, 1, "a@example.com", "orig")
         txn.commit()
@@ -474,7 +477,11 @@ def test_rows_at_epoch_time_travel():
     assert len(past) == 1 and past[0]["name"] == "orig"
     now = db.rows_at_epoch("users", db.snapshot_epoch())
     assert now[0]["name"] == "updated"
+    assert db.earliest_retained_epoch() <= e1
     db.close()
+    reopened = Database.open(path)
+    assert reopened.history_retention_epochs() == 100
+    reopened.close()
 
 
 def test_approx_aggregate():

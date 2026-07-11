@@ -180,6 +180,7 @@ describe('KitDatabase', () => {
 		const db = KitDatabase.openSync(dir, new Schema([t]));
 		try {
 			db.setHistoryRetentionEpochs(100);
+			expect(db.historyRetentionEpochs()).toBe(100n);
 			db.insertInto(t).values({ id: 1n, name: 'orig' }).executeSync();
 			const e1 = db.snapshotEpoch();
 			db.updateTable(t).set({ name: 'updated' }).where(eq(t.id, 1n)).executeSync();
@@ -188,6 +189,7 @@ describe('KitDatabase', () => {
 			expect(past).toEqual([{ id: 1n, name: 'orig' }]);
 			const now = db.rowsAtEpoch('t', db.snapshotEpoch());
 			expect(now).toEqual([{ id: 1n, name: 'updated' }]);
+			expect(db.earliestRetainedEpoch()).toBeLessThanOrEqual(e1);
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });

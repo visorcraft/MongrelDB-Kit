@@ -8,6 +8,12 @@ import {
 	type VirtualTableSpec
 } from './external.js';
 
+type RemoteRetention = {
+	setHistoryRetentionEpochs(epochs: bigint): void;
+	historyRetentionEpochs(): bigint;
+	earliestRetainedEpoch(): bigint;
+};
+
 /**
  * A thin Kit client for a running `mongreldb-server` daemon.
  *
@@ -21,11 +27,11 @@ import {
  * would need the `mongreldb-client` crate for an equivalent.
  */
 export class RemoteDatabase {
-	private readonly inner: NativeRemoteDatabase;
+	private readonly inner: NativeRemoteDatabase & RemoteRetention;
 
 	/** Connect (lazily) to a daemon at `url`, e.g. `http://127.0.0.1:8453`. */
 	constructor(url: string) {
-		this.inner = new NativeRemoteDatabase(url);
+		this.inner = new NativeRemoteDatabase(url) as NativeRemoteDatabase & RemoteRetention;
 	}
 
 	/** Liveness check; returns the server's health string (throws if down). */
@@ -41,6 +47,18 @@ export class RemoteDatabase {
 	/** Row count of `table`. */
 	count(table: string): number {
 		return this.inner.count(table);
+	}
+
+	setHistoryRetentionEpochs(epochs: bigint): void {
+		this.inner.setHistoryRetentionEpochs(epochs);
+	}
+
+	historyRetentionEpochs(): bigint {
+		return this.inner.historyRetentionEpochs();
+	}
+
+	earliestRetainedEpoch(): bigint {
+		return this.inner.earliestRetainedEpoch();
 	}
 
 	/** Run a SQL query; returns the result as an Arrow (columnar) table. */

@@ -815,6 +815,20 @@ impl Database {
         self.inner.snapshot().0.epoch.0
     }
 
+    pub fn set_history_retention_epochs(&self, epochs: u64) -> Result<()> {
+        self.inner
+            .set_history_retention_epochs(epochs)
+            .map_err(KitError::from)
+    }
+
+    pub fn history_retention_epochs(&self) -> u64 {
+        self.inner.history_retention_epochs()
+    }
+
+    pub fn earliest_retained_epoch(&self) -> u64 {
+        self.inner.earliest_retained_epoch().0
+    }
+
     /// Export every visible row of `table` as a TSV document (header row of
     /// column names, tab-separated cells, `NULL` = empty field). See
     /// [`crate::tsv`] for the escaping rules.

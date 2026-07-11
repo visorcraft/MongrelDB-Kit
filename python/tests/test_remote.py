@@ -40,6 +40,7 @@ class Stub:
         # Per-path canned POST responses: path → list of (status, body).
         self.canned = {}
         self.requests = []
+        self.history = {"history_retention_epochs": 1, "earliest_retained_epoch": 0}
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -57,6 +58,19 @@ class Stub:
                 outer.requests.append(("GET", self.path, None))
                 if self.path == "/kit/schema":
                     self._send(200, json.dumps(SCHEMA).encode())
+                elif self.path == "/history/retention":
+                    self._send(200, json.dumps(outer.history).encode())
+                else:
+                    self._send(404, b"not found")
+
+            def do_PUT(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length else b""
+                body = json.loads(raw) if raw else {}
+                outer.requests.append(("PUT", self.path, body))
+                if self.path == "/history/retention":
+                    outer.history["history_retention_epochs"] = body["history_retention_epochs"]
+                    self._send(200, json.dumps(outer.history).encode())
                 else:
                     self._send(404, b"not found")
 
@@ -102,6 +116,15 @@ def test_connect_loads_schema(stub):
     db = RemoteDatabase(stub.url())
     assert "users" in db.table_names()
     assert db.table("users")["primary_key"] == 0
+
+
+def test_history_retention_round_trip(stub):
+    db = RemoteDatabase(stub.url())
+    assert db.history_retention_epochs() == 1
+    assert db.earliest_retained_epoch() == 0
+    db.set_history_retention_epochs(100)
+    assert db.history_retention_epochs() == 100
+    assert any(r[0] == "PUT" and r[1] == "/history/retention" for r in stub.requests)
 
 
 def test_insert_batch_decodes_returning_row(stub):
@@ -230,6 +253,11 @@ def test_create_table_forwards_body_and_returns_id(stub):
                     "ty": "timestamp",
                     "default_expr": "now",
                 },
+                {"id": 3, "name": "label", "ty": "varchar", "default_value": "draft"},
+                {"id": 4, "name": "count", "ty": "int64", "default_value": 7},
+                {"id": 5, "name": "enabled", "ty": "bool", "default_value": True},
+                {"id": 6, "name": "note", "ty": "varchar", "nullable": True, "default_value": None},
+                {"id": 7, "name": "literal_now", "ty": "varchar", "default_value": "now"},
             ],
             "constraints": {
                 "checks": [
@@ -252,6 +280,12 @@ def test_create_table_forwards_body_and_returns_id(stub):
     assert posted["columns"][0]["primary_key"] is True
     assert posted["columns"][1]["enum_variants"] == ["user", "admin"]
     assert posted["columns"][2]["default_expr"] == "now"
+    assert posted["columns"][3]["default_value"] == "draft"
+    assert posted["columns"][4]["default_value"] == 7
+    assert posted["columns"][5]["default_value"] is True
+    assert "default_value" in posted["columns"][6]
+    assert posted["columns"][6]["default_value"] is None
+    assert posted["columns"][7]["default_value"] == "now"
     assert posted["constraints"]["checks"][0]["name"] == "id_positive"
     # After create the facade refreshes /kit/schema (a GET).
     assert any(r[0] == "GET" and r[1] == "/kit/schema" for r in stub.requests)

@@ -326,6 +326,20 @@ class Database:
         """The current visible commit epoch (monotonically increasing version)."""
         return self._handle.snapshot_epoch()
 
+    def set_history_retention_epochs(self, epochs: int) -> None:
+        """Set the number of committed epochs retained for time travel."""
+        if epochs < 0:
+            raise ValueError("epochs must be non-negative")
+        self._handle.set_history_retention_epochs(epochs)
+
+    def history_retention_epochs(self) -> int:
+        """Return the configured history-retention depth."""
+        return self._handle.history_retention_epochs()
+
+    def earliest_retained_epoch(self) -> int:
+        """Return the oldest epoch still available for time travel."""
+        return self._handle.earliest_retained_epoch()
+
     def create_procedure(self, procedure: Any) -> dict[str, Any]:
         procedure_json = procedure if isinstance(procedure, str) else json.dumps(procedure)
         return json.loads(self._handle.create_procedure(procedure_json))
