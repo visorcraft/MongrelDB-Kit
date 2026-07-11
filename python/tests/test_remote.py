@@ -40,7 +40,7 @@ class Stub:
         self.kit_txn_responses = []  # list of (status, body)
         # Per-path canned POST responses: path → list of (status, body).
         self.canned = {}
-        # Per-path canned error responses: (method, path) → (status, body).
+        # Per-(method, path) canned error responses: (method, path) → (status, body).
         self.errors = {}
         self.requests = []
         self.history = {"history_retention_epochs": 1, "earliest_retained_epoch": 0}
@@ -76,8 +76,8 @@ class Stub:
                 body = json.loads(raw) if raw else {}
                 outer.requests.append(("PUT", self.path, body))
                 if ("PUT", self.path) in outer.errors:
-                    status, b = outer.errors[("PUT", self.path)]
-                    self._send(status, json.dumps(b).encode())
+                    status, body = outer.errors[("PUT", self.path)]
+                    self._send(status, json.dumps(body).encode())
                     return
                 if self.path == "/history/retention":
                     outer.history["history_retention_epochs"] = body["history_retention_epochs"]
@@ -140,8 +140,7 @@ def test_history_retention_round_trip(stub):
     put_reqs = [r for r in stub.requests if r[0] == "PUT" and r[1] == "/history/retention"]
     assert len(put_reqs) == 1
     assert put_reqs[0][2] == {"history_retention_epochs": 100}
-    assert len(get_reqs) >= 2
-    assert set(stub.history.keys()) == {"history_retention_epochs", "earliest_retained_epoch"}
+    assert len(get_reqs) == 3
 
 
 def test_history_retention_error_propagation(stub):

@@ -498,12 +498,13 @@ def test_history_retention_cannot_restore_lost_history():
     e2 = db.snapshot_epoch()
     assert e2 > e1
 
-    # Shrink the window to one epoch: the older snapshot is pruned.
+    # Shrink the window: the engine may retain more than requested, but it must
+    # not retain an epoch older than the current one. Re-expanding the window
+    # cannot move the earliest retained epoch backward.
     db.set_history_retention_epochs(1)
     earliest_after_shrink = db.earliest_retained_epoch()
-    assert earliest_after_shrink <= e2
+    assert e1 <= earliest_after_shrink <= e2
 
-    # Expanding the window again cannot bring the pruned epoch back.
     db.set_history_retention_epochs(100)
     assert db.earliest_retained_epoch() == earliest_after_shrink
     db.close()
