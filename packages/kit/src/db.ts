@@ -746,6 +746,27 @@ export class KitDatabase {
 	}
 
 	/**
+	 * Set how many committed epochs of history to retain for MVCC time-travel
+	 * reads ({@link rowsAtEpoch}). The engine default keeps only the latest
+	 * epoch, so raise this *before* writing data you want to read back at a
+	 * past snapshot. The setting persists across close/reopen and cannot
+	 * restore history that was already pruned.
+	 */
+	setHistoryRetentionEpochs(epochs: number): void {
+		this.db.setHistoryRetentionEpochs(epochs);
+	}
+
+	/** The configured history-retention depth — how many committed epochs are kept for time-travel reads. */
+	historyRetentionEpochs(): bigint {
+		return this.db.historyRetentionEpochs();
+	}
+
+	/** The oldest epoch still retained for time-travel reads ({@link rowsAtEpoch}). */
+	earliestRetainedEpoch(): bigint {
+		return this.db.earliestRetainedEpoch();
+	}
+
+	/**
 	 * Async twin of {@link flush}. Yields a microtask between table flushes; the
 	 * underlying engine `flush` is synchronous (the addon ships no
 	 * `flushAsync` on `Database`), so each call still blocks — but the await

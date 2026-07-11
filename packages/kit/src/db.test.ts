@@ -179,6 +179,7 @@ describe('KitDatabase', () => {
 		const dir = makeTempDir();
 		const db = KitDatabase.openSync(dir, new Schema([t]));
 		try {
+			db.setHistoryRetentionEpochs(100);
 			db.insertInto(t).values({ id: 1n, name: 'orig' }).executeSync();
 			const e1 = db.snapshotEpoch();
 			db.updateTable(t).set({ name: 'updated' }).where(eq(t.id, 1n)).executeSync();
