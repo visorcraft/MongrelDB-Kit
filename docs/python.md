@@ -131,6 +131,46 @@ if __name__ == "__main__":
     main()
 ```
 
+## History retention and time-travel reads
+
+Both the embedded `Database` and the daemon client `RemoteDatabase` expose
+history-retention controls. Set retention **before** writing data you want to
+read back in time; the engine default keeps only the latest epoch, and raising
+the window later cannot restore history that has already been pruned.
+
+```python
+from mongreldb_kit import Database, RemoteDatabase
+
+# Embedded
+db = Database.create(path, schema())
+db.set_history_retention_epochs(100)
+assert db.history_retention_epochs() == 100
+assert db.earliest_retained_epoch() >= 0
+
+with db.begin() as txn:
+    txn.insert("events", {"id": 1, "name": "orig"})
+    txn.commit()
+e1 = db.snapshot_epoch()
+
+with db.begin() as txn:
+    txn.update("events", 1, {"name": "updated"})
+    txn.commit()
+
+# Read the row as it existed at e1.
+past = db.rows_at_epoch("events", e1)
+assert past[0]["name"] == "orig"
+
+# Remote daemon client
+remote = RemoteDatabase("http://127.0.0.1:8453")
+remote.set_history_retention_epochs(100)
+assert remote.history_retention_epochs() == 100
+assert remote.earliest_retained_epoch() >= 0
+```
+
+Use `db.rows_at_epoch(table, epoch)` for embedded time-travel reads, or
+`SELECT ... AS OF EPOCH <epoch>` through `db.sql_arrow(...)` / `remote.sql_arrow(...)`
+for SQL time travel against a daemon.
+
 ## Schema helpers
 
 | Function | Purpose |
@@ -166,6 +206,10 @@ if __name__ == "__main__":
 
 Default shapes mirror the cross-language `DefaultKind` JSON: `{"static": <value>}`,
 `{"sequence": "<name>"}`, `{"custom_name": "<name>"}`, and the bare strings `"now"` and `"uuid"`.
+Static defaults are literal and preserve their JSON type on the wire: `"draft"`, `7`, `true`, and
+`null` are sent as distinct `default_value` fields, while `"now"` and `"uuid"` as bare strings become
+`default_expr`. If you need the literal strings `"now"` or `"uuid"` as stored defaults, use
+`{"static": "now"}` or `{"static": "uuid"}` instead of the bare shorthand.
 A column whose default is `{"sequence": ...}` is auto-assigned a **1-based** id when the inserted row
 omits it (the first row is `1`, never `0`). `check_expr` and the table-level `check(name, expr)` use
 the serialized string-expression grammar - the cross-language form, not a Python callable.

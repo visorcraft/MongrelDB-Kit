@@ -65,11 +65,24 @@ Both the embedded `KitDatabase` and the daemon client `RemoteDatabase` expose
 history-retention controls:
 
 ```ts
+// TypeScript
 db.setHistoryRetentionEpochs(100);   // embedded: number argument
 remote.setHistoryRetentionEpochs(100n); // remote: bigint argument
 console.log(db.historyRetentionEpochs());     // bigint
 console.log(remote.historyRetentionEpochs()); // bigint
 console.log(db.earliestRetainedEpoch());      // bigint
+```
+
+```python
+# Python (embedded)
+db.set_history_retention_epochs(100)
+print(db.history_retention_epochs())  # int
+print(db.earliest_retained_epoch())   # int
+
+# Python (remote)
+remote.set_history_retention_epochs(100)
+print(remote.history_retention_epochs())
+print(remote.earliest_retained_epoch())
 ```
 
 Set retention **before** writing the data you want to time-travel back to. The

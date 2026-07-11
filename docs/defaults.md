@@ -58,6 +58,11 @@ If you need the literal string `"now"` or `"uuid"` as a stored default, use
 literal from the dynamic expression by the presence of `defaultValue` versus
 `defaultExpr`.
 
+In Python the same shapes apply: use `{"static": <value>}` for literal static
+defaults (including `{"static": "now"}` for the literal string), bare `"now"` or
+`"uuid"` for dynamic expressions, `{"sequence": "<name>"}` for auto-increment,
+and `{"custom_name": "<name>"}` for custom providers.
+
 ### The `generated` shorthand
 
 `generated: 'uuid'` and `generated: 'now'` are convenience shorthands equivalent to `default:

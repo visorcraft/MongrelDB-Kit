@@ -484,6 +484,31 @@ def test_rows_at_epoch_time_travel():
     reopened.close()
 
 
+def test_history_retention_cannot_restore_lost_history():
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+    db.set_history_retention_epochs(100)
+    with db.begin() as txn:
+        insert_user(txn, 1, "a@example.com", "orig")
+        txn.commit()
+    e1 = db.snapshot_epoch()
+    with db.begin() as txn:
+        txn.update_where("users", filter={"id": 1}, set={"name": "updated"})
+        txn.commit()
+    e2 = db.snapshot_epoch()
+    assert e2 > e1
+
+    # Shrink the window to one epoch: the older snapshot is pruned.
+    db.set_history_retention_epochs(1)
+    earliest_after_shrink = db.earliest_retained_epoch()
+    assert earliest_after_shrink <= e2
+
+    # Expanding the window again cannot bring the pruned epoch back.
+    db.set_history_retention_epochs(100)
+    assert db.earliest_retained_epoch() == earliest_after_shrink
+    db.close()
+
+
 def test_approx_aggregate():
     db = Database.create(tmp_db(), users_orders_schema())
     with db.begin() as txn:

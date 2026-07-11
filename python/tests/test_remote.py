@@ -16,6 +16,7 @@ from mongreldb_kit import (
     DuplicateError,
     ForeignKeyError,
     RemoteDatabase,
+    StorageError,
     ValidationError,
 )
 
@@ -39,6 +40,8 @@ class Stub:
         self.kit_txn_responses = []  # list of (status, body)
         # Per-path canned POST responses: path → list of (status, body).
         self.canned = {}
+        # Per-path canned error responses: (method, path) → (status, body).
+        self.errors = {}
         self.requests = []
         self.history = {"history_retention_epochs": 1, "earliest_retained_epoch": 0}
         outer = self
@@ -56,6 +59,10 @@ class Stub:
 
             def do_GET(self):
                 outer.requests.append(("GET", self.path, None))
+                if ("GET", self.path) in outer.errors:
+                    status, body = outer.errors[("GET", self.path)]
+                    self._send(status, json.dumps(body).encode())
+                    return
                 if self.path == "/kit/schema":
                     self._send(200, json.dumps(SCHEMA).encode())
                 elif self.path == "/history/retention":
@@ -68,6 +75,10 @@ class Stub:
                 raw = self.rfile.read(length) if length else b""
                 body = json.loads(raw) if raw else {}
                 outer.requests.append(("PUT", self.path, body))
+                if ("PUT", self.path) in outer.errors:
+                    status, b = outer.errors[("PUT", self.path)]
+                    self._send(status, json.dumps(b).encode())
+                    return
                 if self.path == "/history/retention":
                     outer.history["history_retention_epochs"] = body["history_retention_epochs"]
                     self._send(200, json.dumps(outer.history).encode())
@@ -124,7 +135,31 @@ def test_history_retention_round_trip(stub):
     assert db.earliest_retained_epoch() == 0
     db.set_history_retention_epochs(100)
     assert db.history_retention_epochs() == 100
-    assert any(r[0] == "PUT" and r[1] == "/history/retention" for r in stub.requests)
+
+    get_reqs = [r for r in stub.requests if r[0] == "GET" and r[1] == "/history/retention"]
+    put_reqs = [r for r in stub.requests if r[0] == "PUT" and r[1] == "/history/retention"]
+    assert len(put_reqs) == 1
+    assert put_reqs[0][2] == {"history_retention_epochs": 100}
+    assert len(get_reqs) >= 2
+    assert set(stub.history.keys()) == {"history_retention_epochs", "earliest_retained_epoch"}
+
+
+def test_history_retention_error_propagation(stub):
+    stub.errors[("GET", "/history/retention")] = (
+        503,
+        {"error": {"code": "STORAGE_ERROR", "message": "unavailable"}},
+    )
+    stub.errors[("PUT", "/history/retention")] = (
+        503,
+        {"error": {"code": "STORAGE_ERROR", "message": "unavailable"}},
+    )
+    db = RemoteDatabase(stub.url())
+    with pytest.raises(StorageError):
+        db.history_retention_epochs()
+    with pytest.raises(StorageError):
+        db.earliest_retained_epoch()
+    with pytest.raises(StorageError):
+        db.set_history_retention_epochs(50)
 
 
 def test_insert_batch_decodes_returning_row(stub):
@@ -280,12 +315,15 @@ def test_create_table_forwards_body_and_returns_id(stub):
     assert posted["columns"][0]["primary_key"] is True
     assert posted["columns"][1]["enum_variants"] == ["user", "admin"]
     assert posted["columns"][2]["default_expr"] == "now"
+    assert "default_value" not in posted["columns"][2]
     assert posted["columns"][3]["default_value"] == "draft"
     assert posted["columns"][4]["default_value"] == 7
     assert posted["columns"][5]["default_value"] is True
     assert "default_value" in posted["columns"][6]
     assert posted["columns"][6]["default_value"] is None
+    assert "default_expr" not in posted["columns"][6]
     assert posted["columns"][7]["default_value"] == "now"
+    assert "default_expr" not in posted["columns"][7]
     assert posted["constraints"]["checks"][0]["name"] == "id_positive"
     # After create the facade refreshes /kit/schema (a GET).
     assert any(r[0] == "GET" and r[1] == "/kit/schema" for r in stub.requests)
