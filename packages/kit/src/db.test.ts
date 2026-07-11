@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, real, json, index } from './schema.js';
+import { Schema, table, int, text, bool, real, json, index } from './schema.js';
 import { eq, gt, gte } from './query.js';
 import { procedure } from './procedure.js';
 import { newColumn, textValue, trigger } from './trigger.js';
@@ -42,6 +42,51 @@ describe('KitDatabase', () => {
 			const [row] = db.selectFrom(users).executeSync();
 			expect(row).toMatchObject({ id: 1n, role: 'user', label: 'new' });
 			expect(row.created_at).toEqual(expect.any(String));
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('static-default matrix is reflected in native column specs and applied on insert', () => {
+		const t = table('defaults', {
+			columns: [
+				int('id', { primaryKey: true }),
+				text('s', { default: staticDefault('draft') }),
+				int('n', { default: staticDefault(7) }),
+				bool('b', { default: staticDefault(true) }),
+				text('nil', { nullable: true, default: staticDefault(null) }),
+				text('literal_now', { default: staticDefault('now') }),
+				text('dynamic_now', { default: nowDefault() })
+			],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([t]));
+		try {
+			const specs = db.nativeDb.tableColumnSpecs('defaults');
+			const get = (name: string) => specs.find((c) => c.name === name)!;
+
+			expect(get('s').defaultValue?.text).toBe('draft');
+			expect(get('n').defaultValue?.int64).toBe(7n);
+			expect(get('b').defaultValue?.boolean).toBe(true);
+
+			const nilSpec = get('nil');
+			expect(nilSpec.defaultValue).toBeDefined();
+			expect(Object.keys(nilSpec.defaultValue!).filter((k) => k !== 'columnId')).toHaveLength(0);
+
+			expect(get('literal_now').defaultValue?.text).toBe('now');
+			expect(get('literal_now').defaultExpr).toBeUndefined();
+			expect(get('dynamic_now').defaultExpr).toBe('now');
+			expect(get('dynamic_now').defaultValue).toBeUndefined();
+
+			const row = db.insertInto(t).values({ id: 1n }).executeSync();
+			expect(row.s).toBe('draft');
+			expect(row.n).toBe(7n);
+			expect(row.b).toBe(true);
+			expect(row.nil).toBeNull();
+			expect(row.literal_now).toBe('now');
+			expect(row.dynamic_now).toEqual(expect.any(String));
 		} finally {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });

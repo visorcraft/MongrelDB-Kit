@@ -194,6 +194,30 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		expect(typeof result).toBe('boolean');
 	});
 
+	test('retention settings and AS OF EPOCH time-travel reads', async () => {
+		const { RemoteDatabase } = await import('./remote.js');
+		const remote = new RemoteDatabase(daemonUrl);
+
+		remote.setHistoryRetentionEpochs(100n);
+		expect(remote.historyRetentionEpochs()).toBe(100n);
+		expect(remote.earliestRetainedEpoch()).toBeGreaterThan(0n);
+
+		remote.sql(
+			'CREATE TABLE time_travel (id BIGINT PRIMARY KEY, name VARCHAR(50))'
+		);
+		remote.sql("INSERT INTO time_travel (id, name) VALUES (1, 'orig')");
+		const epochRows = remote.sqlRows('SELECT snapshot_epoch() AS e');
+		const e1 = BigInt(epochRows[0].e as number | bigint);
+
+		remote.sql("UPDATE time_travel SET name = 'updated' WHERE id = 1");
+
+		const past = remote.sqlRows(
+			`SELECT name FROM time_travel AS OF EPOCH ${e1} WHERE id = 1`
+		);
+		expect(past).toHaveLength(1);
+		expect(past[0].name).toBe('orig');
+	});
+
 	test('sql DROP TABLE', async () => {
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);

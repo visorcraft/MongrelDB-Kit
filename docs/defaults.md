@@ -31,6 +31,33 @@ text('public_id', { default: uuidDefault() }),
 text('token',     { default: customDefault(() => crypto.randomUUID()) }),
 ```
 
+### Static defaults and the `default_value` / `default_expr` distinction
+
+`staticDefault(value)` stores a literal default directly in the engine schema:
+
+| Declared default | Engine representation on insert |
+| --- | --- |
+| `staticDefault('draft')` | `defaultValue.text === 'draft'` |
+| `staticDefault(7)` | `defaultValue.int64 === 7n` |
+| `staticDefault(true)` | `defaultValue.boolean === true` |
+| `staticDefault(null)` | `defaultValue` present with only `columnId` (no typed value field) |
+| `staticDefault('now')` | `defaultValue.text === 'now'` — a literal string, not dynamic |
+
+Dynamic defaults, by contrast, are represented as `defaultExpr` and evaluated at
+insert time:
+
+| Declared default | Engine representation |
+| --- | --- |
+| `nowDefault()` | `defaultExpr === 'now'`, no `defaultValue` |
+| `uuidDefault()` | `defaultExpr === 'uuid'`, no `defaultValue` |
+| `generated: 'now'` | same as `default: nowDefault()` |
+| `generated: 'uuid'` | same as `default: uuidDefault()` |
+
+If you need the literal string `"now"` or `"uuid"` as a stored default, use
+`staticDefault('now')` or `staticDefault('uuid')`. The engine distinguishes the
+literal from the dynamic expression by the presence of `defaultValue` versus
+`defaultExpr`.
+
 ### The `generated` shorthand
 
 `generated: 'uuid'` and `generated: 'now'` are convenience shorthands equivalent to `default:

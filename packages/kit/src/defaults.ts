@@ -53,7 +53,12 @@ export function applyDefaults(
 
 		switch (source.kind) {
 			case 'static':
-				out[col.name] = source.value;
+				// Static defaults declared with plain numbers (e.g. staticDefault(7))
+				// must become bigints for int64 columns before validation/toCells.
+				out[col.name] =
+					col.storageType === 'int64' && typeof source.value === 'number'
+						? BigInt(source.value)
+						: source.value;
 				break;
 			case 'now':
 				out[col.name] = col.storageType === 'date' ? ctx.now.slice(0, 10) : ctx.now;

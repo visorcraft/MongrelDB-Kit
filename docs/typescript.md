@@ -251,6 +251,40 @@ same builder - see the [Query builder](./query-builder.md) guide for the full su
 > VIEW`) created via `db.sql()` persist across subsequent `sql()` / `sqlRows()`
 > calls. See [Migrations → SQL views](./migrations.md#sql-views).
 
+### History retention and time-travel reads
+
+The embedded `KitDatabase` and the daemon client `RemoteDatabase` both expose
+history-retention controls. Set retention **before** writing data you want to
+read back at an older snapshot; the engine default keeps only the latest epoch,
+and raising retention later cannot recover pruned history.
+
+Embedded:
+
+```ts
+// Keep the last 100 committed epochs visible to MVCC time-travel reads.
+db.setHistoryRetentionEpochs(100);
+console.log(db.historyRetentionEpochs());  // 100n
+console.log(db.earliestRetainedEpoch());   // oldest epoch still retained
+
+// Read the whole table as it looked at a past epoch.
+const pastRows = db.rowsAtEpoch('users', epoch);
+```
+
+Remote (daemon client):
+
+```ts
+remote.setHistoryRetentionEpochs(100n);
+console.log(remote.historyRetentionEpochs()); // 100n
+console.log(remote.earliestRetainedEpoch());  // oldest epoch still retained
+```
+
+You can also query a past snapshot through SQL, both embedded and on the
+daemon, with the `AS OF EPOCH` extension:
+
+```ts
+await db.sqlRows('SELECT name FROM users AS OF EPOCH 42 WHERE id = 1');
+```
+
 ### Advanced SQL via `db.sqlRows()`
 
 The embedded SQL session runs DataFusion 54, which supports the full SQL

@@ -57,7 +57,7 @@ export function toCells(table: TableSpec, row: Record<string, unknown>): Cell[] 
 			case 'bool':
 				return { columnId: col.id, boolean: value as boolean };
 			case 'int64':
-				return { columnId: col.id, int64: value as bigint };
+				return { columnId: col.id, int64: typeof value === 'bigint' ? value : BigInt(value as number) };
 			case 'float64':
 				return { columnId: col.id, float64: value as number };
 			case 'text':

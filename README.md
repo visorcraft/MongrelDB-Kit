@@ -59,6 +59,26 @@
 - [Testing](docs/testing.md)
 - [Production checklist](docs/production-checklist.md)
 
+## History retention and time-travel reads
+
+Both the embedded `KitDatabase` and the daemon client `RemoteDatabase` expose
+history-retention controls:
+
+```ts
+db.setHistoryRetentionEpochs(100);   // embedded: number argument
+remote.setHistoryRetentionEpochs(100n); // remote: bigint argument
+console.log(db.historyRetentionEpochs());     // bigint
+console.log(remote.historyRetentionEpochs()); // bigint
+console.log(db.earliestRetainedEpoch());      // bigint
+```
+
+Set retention **before** writing the data you want to time-travel back to. The
+engine default keeps only the latest epoch, so older snapshots are pruned
+unless retention is raised first. Increasing retention later cannot restore
+history that has already been removed. Read past snapshots with
+`db.rowsAtEpoch('table', epoch)` (embedded) or `SELECT ... AS OF EPOCH <epoch>`
+(embedded SQL and the daemon).
+
 ## Quick Example
 
 Minimal TypeScript schema and CRUD flow:
