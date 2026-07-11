@@ -7,12 +7,47 @@ import { Schema, table, int, text, real, json, index } from './schema.js';
 import { eq, gt, gte } from './query.js';
 import { procedure } from './procedure.js';
 import { newColumn, textValue, trigger } from './trigger.js';
+import { nowDefault, staticDefault } from './defaults.js';
 
 function makeTempDir(): string {
 	return mkdtempSync(join(tmpdir(), 'kit-db-test-'));
 }
 
 describe('KitDatabase', () => {
+	it('passes enum and defaults into the native engine schema', () => {
+		const users = table('users', {
+			columns: [
+				int('id', { primaryKey: true }),
+				text('role', { enumValues: ['user', 'admin'] }),
+				text('label', { default: staticDefault('new') }),
+				text('created_at', { default: nowDefault() })
+			],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([users]));
+		try {
+			const specs = db.nativeDb.tableColumnSpecs('users');
+			expect(specs.find((column) => column.name === 'role')?.enumVariants).toEqual([
+				'user',
+				'admin'
+			]);
+			expect(specs.find((column) => column.name === 'created_at')?.defaultExpr).toBe('now');
+			const nativeUsers = db.nativeDb.table('users');
+			nativeUsers.put([
+				{ columnId: 1, int64: 1n },
+				{ columnId: 2, text: 'user' }
+			]);
+			nativeUsers.commit();
+			const [row] = db.selectFrom(users).executeSync();
+			expect(row).toMatchObject({ id: 1n, role: 'user', label: 'new' });
+			expect(row.created_at).toEqual(expect.any(String));
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('open creates temp directory, internal tables exist, app table list is empty', async () => {
 		const dir = makeTempDir();
 		const db = await KitDatabase.open(dir, new Schema([]));

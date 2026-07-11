@@ -115,6 +115,9 @@ type MongrelColumnSpec = {
 	nullable: boolean;
 	autoIncrement?: boolean;
 	embeddingDim?: number;
+	defaultValue?: Cell;
+	defaultExpr?: string;
+	enumVariants?: string[];
 };
 
 function columnId(table: TableSpec, name: string): number {
@@ -164,15 +167,26 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 	}
 }
 
-function toMongrelColumnSpec(column: ColumnSpec): MongrelColumnSpec {
+function toMongrelColumnSpec(table: TableSpec, column: ColumnSpec): MongrelColumnSpec {
 	return {
 		id: column.id,
 		name: column.name,
-		ty: toMongrelColumnType(column.storageType),
+		ty: column.enumValues ? ColumnType.Enum : toMongrelColumnType(column.storageType),
 		primaryKey: column.primaryKey,
 		nullable: column.nullable,
 		autoIncrement: column.default?.kind === 'sequence',
-		embeddingDim: column.embeddingDim
+		embeddingDim: column.embeddingDim,
+		defaultValue:
+			column.default?.kind === 'static'
+				? toCells(table, { [column.name]: column.default.value }).find(
+						(cell) => cell.columnId === column.id
+					)
+				: undefined,
+		defaultExpr:
+			column.default?.kind === 'now' || column.default?.kind === 'uuid'
+				? column.default.kind
+				: (column.generated ?? undefined),
+		enumVariants: column.enumValues
 	};
 }
 
@@ -223,7 +237,7 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 	}
 
 	return {
-		columns: table.columns.map(toMongrelColumnSpec),
+		columns: table.columns.map((column) => toMongrelColumnSpec(table, column)),
 		indexes
 	};
 }
@@ -476,7 +490,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.47.0';
+	return '0.47.1';
 }
 
 function makeContext(kit: KitDatabase): MigrationContext {
@@ -897,11 +911,11 @@ function addColumnSync(kit: KitDatabase, tableName: string, column: ColumnSpec):
 		}
 	}
 
-	column.id = Number(db.addColumn(tableName, toMongrelColumnSpec(column)));
 	const updatedTable: TableSpec = {
 		...table,
 		columns: [...table.columns, column]
 	};
+	column.id = Number(db.addColumn(tableName, toMongrelColumnSpec(updatedTable, column)));
 
 	if (!column.nullable) {
 		const defaultValue = computeDefaultValue(column, kit);
@@ -949,6 +963,10 @@ function alterColumnSync(
 	}
 	const existing = table.columns[existingIndex];
 	const resolved: ColumnSpec = { ...newColumn, id: existing.id };
+	const resolvedTable: TableSpec = {
+		...table,
+		columns: table.columns.map((column, index) => (index === existingIndex ? resolved : column))
+	};
 
 	if (
 		resolved.name !== existing.name &&
@@ -957,18 +975,31 @@ function alterColumnSync(
 		throw new KitMigrationError(`Column "${resolved.name}" already exists in table "${tableName}"`);
 	}
 
-	const oldNativeTy = toMongrelColumnType(existing.storageType);
-	const newNativeTy = toMongrelColumnType(resolved.storageType);
+	const oldNativeTy = existing.enumValues
+		? ColumnType.Enum
+		: toMongrelColumnType(existing.storageType);
+	const newNativeTy = resolved.enumValues
+		? ColumnType.Enum
+		: toMongrelColumnType(resolved.storageType);
 	const nativeChange =
 		resolved.name !== existing.name ||
 		newNativeTy !== oldNativeTy ||
 		resolved.nullable !== existing.nullable ||
 		resolved.primaryKey !== existing.primaryKey ||
-		(resolved.default?.kind === 'sequence') !== (existing.default?.kind === 'sequence');
+		JSON.stringify(resolved.enumValues) !== JSON.stringify(existing.enumValues) ||
+		resolved.default?.kind !== existing.default?.kind ||
+		resolved.generated !== existing.generated ||
+		(resolved.default?.kind === 'static' &&
+			existing.default?.kind === 'static' &&
+			!Object.is(resolved.default.value, existing.default.value));
 
 	if (nativeChange) {
 		try {
-			kit.nativeDb.alterColumn(tableName, columnName, toMongrelColumnSpec(resolved));
+			kit.nativeDb.alterColumn(
+				tableName,
+				columnName,
+				toMongrelColumnSpec(resolvedTable, resolved)
+			);
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : String(cause);
 			throw new KitMigrationError(`alterColumn failed for "${tableName}"."${columnName}": ${message}`);

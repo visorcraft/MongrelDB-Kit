@@ -47,8 +47,12 @@ def run_insert(db, scenario, expected):
         txn.rollback()
         _assert_error(scenario["name"], expected, exc)
         return
+    try:
+        txn.commit()
+    except Exception as exc:
+        _assert_error(scenario["name"], expected, exc)
+        return
     assert "error" not in expected, f"{scenario['name']} expected error but succeeded"
-    txn.commit()
     assert result == expected["row"], (
         f"{scenario['name']} row mismatch: {result} != {expected['row']}"
     )
@@ -62,8 +66,12 @@ def run_update(db, scenario, expected):
         txn.rollback()
         _assert_error(scenario["name"], expected, exc)
         return
+    try:
+        txn.commit()
+    except Exception as exc:
+        _assert_error(scenario["name"], expected, exc)
+        return
     assert "error" not in expected, f"{scenario['name']} expected error but succeeded"
-    txn.commit()
     assert result == expected["row"], (
         f"{scenario['name']} row mismatch: {result} != {expected['row']}"
     )

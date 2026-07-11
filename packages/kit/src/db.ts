@@ -8,6 +8,7 @@ import type {
 	IndexKindSpec as NativeIndexKindSpec,
 	ConditionKind as NativeConditionKind,
 	ConditionSpec,
+	Cell,
 	PutResult,
 	RowJs,
 	TypedColumn,
@@ -34,7 +35,7 @@ import {
 	type VirtualTableSpec
 } from './external.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
-import { isReferencedTable, deleteGuardsForTable, type ConstraintKit } from './constraints.js';
+import { isReferencedTable, deleteGuardsForTable, toCells, type ConstraintKit } from './constraints.js';
 import { KitError, isRetryableConflict } from './errors.js';
 
 /** Members of a set-valued cell: a JSON array, or a JSON string of one. */
@@ -75,6 +76,9 @@ type MongrelColumnSpec = {
 	nullable: boolean;
 	autoIncrement?: boolean;
 	embeddingDim?: number;
+	defaultValue?: Cell;
+	defaultExpr?: string;
+	enumVariants?: string[];
 	encrypted?: boolean;
 	encryptedIndexable?: boolean;
 };
@@ -244,13 +248,24 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 		columns: table.columns.map((col) => ({
 			id: col.id,
 			name: col.name,
-			ty: toMongrelColumnType(col.storageType),
+			ty: col.enumValues ? addon.ColumnType.Enum : toMongrelColumnType(col.storageType),
 			primaryKey: col.primaryKey,
 			nullable: col.nullable,
 			// A Kit sequence-default column maps to the engine's native
 			// AUTO_INCREMENT allocator (a per-table WAL-durable counter).
 			autoIncrement: col.default?.kind === 'sequence',
 			embeddingDim: col.embeddingDim,
+			defaultValue:
+				col.default?.kind === 'static'
+					? toCells(table, { [col.name]: col.default.value }).find(
+							(cell) => cell.columnId === col.id
+						)
+					: undefined,
+			defaultExpr:
+				col.default?.kind === 'now' || col.default?.kind === 'uuid'
+					? col.default.kind
+					: (col.generated ?? undefined),
+			enumVariants: col.enumValues,
 			encrypted: col.encrypted,
 			encryptedIndexable: col.encryptedIndexable
 		})),

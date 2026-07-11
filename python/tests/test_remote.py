@@ -216,8 +216,30 @@ def test_create_table_forwards_body_and_returns_id(stub):
     tid = db.create_table(
         {
             "name": "accounts",
-            "columns": [{"id": 0, "name": "id", "ty": "int64", "primary_key": True}],
-            "constraints": {"uniques": []},
+            "columns": [
+                {"id": 0, "name": "id", "ty": "int64", "primary_key": True},
+                {
+                    "id": 1,
+                    "name": "role",
+                    "ty": "enum",
+                    "enum_variants": ["user", "admin"],
+                },
+                {
+                    "id": 2,
+                    "name": "created_at",
+                    "ty": "timestamp",
+                    "default_expr": "now",
+                },
+            ],
+            "constraints": {
+                "checks": [
+                    {
+                        "id": 1,
+                        "name": "id_positive",
+                        "expr": {"Gt": [{"Col": 0}, {"Lit": {"Int64": 0}}]},
+                    }
+                ]
+            },
         }
     )
     assert tid == 7
@@ -228,5 +250,8 @@ def test_create_table_forwards_body_and_returns_id(stub):
     posted = create_req[2]
     assert posted["name"] == "accounts"
     assert posted["columns"][0]["primary_key"] is True
+    assert posted["columns"][1]["enum_variants"] == ["user", "admin"]
+    assert posted["columns"][2]["default_expr"] == "now"
+    assert posted["constraints"]["checks"][0]["name"] == "id_positive"
     # After create the facade refreshes /kit/schema (a GET).
     assert any(r[0] == "GET" and r[1] == "/kit/schema" for r in stub.requests)
