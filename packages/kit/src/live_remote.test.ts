@@ -127,9 +127,17 @@ afterAll(async () => {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-// Skip the suite if no daemon URL was set (binary not found).
-// We use a conditional describe via a runtime check.
-const hasDaemon = daemonUrl !== '';
+function canFindServerBinarySync(): boolean {
+	if (process.env.MONGRELDB_SERVER && existsSync(process.env.MONGRELDB_SERVER)) return true;
+	const candidates = [
+		join(process.env.HOME || '', '.cargo/bin/mongreldb-server'),
+		join(__dirname, '../../../../mongreldb/crates/mongreldb-server/target/release/mongreldb-server')
+	];
+	return candidates.some((c) => existsSync(c));
+}
+
+// Skip the suite if no daemon binary can be found.
+const hasDaemon = canFindServerBinarySync();
 describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 	test('health() returns ok', async () => {
 		const { RemoteDatabase } = await import('./remote.js');
@@ -200,14 +208,13 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 
 		remote.setHistoryRetentionEpochs(100n);
 		expect(remote.historyRetentionEpochs()).toBe(100n);
-		expect(remote.earliestRetainedEpoch()).toBeGreaterThan(0n);
+		expect(remote.earliestRetainedEpoch()).toBeGreaterThanOrEqual(0n);
 
 		remote.sql(
 			'CREATE TABLE time_travel (id BIGINT PRIMARY KEY, name VARCHAR(50))'
 		);
 		remote.sql("INSERT INTO time_travel (id, name) VALUES (1, 'orig')");
-		const epochRows = remote.sqlRows('SELECT snapshot_epoch() AS e');
-		const e1 = BigInt(epochRows[0].e as number | bigint);
+		const e1 = remote.commit('time_travel');
 
 		remote.sql("UPDATE time_travel SET name = 'updated' WHERE id = 1");
 

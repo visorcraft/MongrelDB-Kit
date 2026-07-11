@@ -1,5 +1,5 @@
 import { RemoteDatabase as NativeRemoteDatabase } from '@visorcraft/mongreldb/native.js';
-import { tableFromIPC, type Table as ArrowTable } from 'apache-arrow';
+import { tableFromIPC, tableFromJSON, type Table as ArrowTable } from 'apache-arrow';
 import { procedureJson, type ProcedureCallOptions, type ProcedureSpec } from './procedure.js';
 import { triggerJson, type TriggerSpec } from './trigger.js';
 import {
@@ -45,7 +45,7 @@ export class RemoteDatabase {
 	}
 
 	/** Row count of `table`. */
-	count(table: string): number {
+	count(table: string): bigint {
 		return this.inner.count(table);
 	}
 
@@ -63,7 +63,12 @@ export class RemoteDatabase {
 
 	/** Run a SQL query; returns the result as an Arrow (columnar) table. */
 	sql(sql: string): ArrowTable {
-		return tableFromIPC(this.inner.sql(sql));
+		const bytes = this.inner.sql(sql);
+		// DDL/DML commands return an empty body; produce an empty Arrow table.
+		if (bytes.length === 0) {
+			return tableFromJSON([]) as unknown as ArrowTable;
+		}
+		return tableFromIPC(bytes);
 	}
 
 	sqlRows(sql: string): Record<string, unknown>[] {
