@@ -26,9 +26,9 @@ if [[ "$NEW" == "$OLD" ]]; then
 fi
 echo "Bumping mongreldb-kit $OLD -> $NEW"
 
-# All four Rust crates share one version number; this also rewrites the
-# path-dependency version pins each carries on the others (they use the same
-# `version = "X.Y.Z"` shape, so one pass covers both). Add new crates here.
+# All four Rust crates share one version number; the loop below also rewrites
+# the version pins each carries on its sibling Kit crates (scoped so engine
+# deps like mongreldb-core / mongreldb-query are never touched). Add new crates here.
 CARGO_FILES=(
   crates/mongreldb-kit-core/Cargo.toml
   crates/mongreldb-kit/Cargo.toml
@@ -36,7 +36,13 @@ CARGO_FILES=(
   crates/mongreldb-kit-python/Cargo.toml
 )
 for f in "${CARGO_FILES[@]}"; do
-  sed -i "s/version = \"$OLD\"/version = \"$NEW\"/g" "$f"
+  # Bump only the crate's own [package] version (the sole standalone
+  # `version = "x"` line) and the Kit-internal cross-pins on sibling Kit
+  # crates. Engine / external deps (mongreldb-core, mongreldb-query, ...) use
+  # the same `version = "x"` shape, so a blanket replace would bump them too
+  # whenever Kit's version matches the engine's -- scope both seds to avoid that.
+  sed -i "s/^version = \"$OLD\"$/version = \"$NEW\"/" "$f"
+  sed -i -E "/^(mongreldb-kit|mongreldb-kit-core|mongreldb-kit-cli|mongreldb-kit-python) = / s/version = \"$OLD\"/version = \"$NEW\"/" "$f"
 done
 sed -i "s/version = \"$OLD\"/version = \"$NEW\"/" python/mongreldb_kit/pyproject.toml
 sed -i "s/\"version\": \"$OLD\"/\"version\": \"$NEW\"/" packages/kit/package.json
