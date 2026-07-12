@@ -18,7 +18,7 @@ import * as net from 'node:net';
 
 // ── Daemon management ──────────────────────────────────────────────────────
 
-const SERVER_VERSION = 'v0.48.0';
+const SERVER_VERSION = 'v0.49.0';
 const DOWNLOAD_URL = `https://github.com/visorcraft/MongrelDB/releases/download/${SERVER_VERSION}/mongreldb-server-linux-x64`;
 
 async function findServerBinary(): Promise<string | null> {
@@ -131,7 +131,10 @@ function canFindServerBinarySync(): boolean {
 	if (process.env.MONGRELDB_SERVER && existsSync(process.env.MONGRELDB_SERVER)) return true;
 	const candidates = [
 		join(process.env.HOME || '', '.cargo/bin/mongreldb-server'),
-		join(__dirname, '../../../../mongreldb/crates/mongreldb-server/target/release/mongreldb-server')
+		join(__dirname, '../../../../mongreldb/crates/mongreldb-server/target/release/mongreldb-server'),
+		// Include the GitHub release download cache so the suite doesn't skip
+		// when findServerBinary() downloaded the binary on a prior run.
+		join(osTmpdir(), 'mdb-test-server', 'mongreldb-server'),
 	];
 	return candidates.some((c) => existsSync(c));
 }

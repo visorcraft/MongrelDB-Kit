@@ -71,6 +71,13 @@ struct CompactResp {
 struct CompactTableResp {
     status: String,
 }
+
+/// `GET/PUT /history/retention` response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HistoryRetention {
+    pub history_retention_epochs: u64,
+    pub earliest_retained_epoch: u64,
+}
 #[derive(Debug, Deserialize)]
 struct ColumnMeta {
     id: u16,
@@ -281,6 +288,34 @@ impl RemoteDatabase {
                 .map_err(ioe)?,
         )?;
         Ok(resp.status == "compacted")
+    }
+
+    /// Set the durable MVCC history-retention window in epochs
+    /// (`PUT /history/retention`). Returns the post-update window size and
+    /// earliest retained epoch.
+    pub fn set_history_retention_epochs(&self, epochs: u64) -> Result<HistoryRetention> {
+        let resp = self
+            .client
+            .put(self.url("/history/retention"))
+            .json(&json!({ "history_retention_epochs": epochs }))
+            .send()
+            .map_err(ioe)?;
+        decode(resp)
+    }
+
+    /// Read the current history-retention window size (`GET /history/retention`).
+    pub fn history_retention_epochs(&self) -> Result<u64> {
+        Ok(self.history_retention()?.history_retention_epochs)
+    }
+
+    /// Read the earliest retained epoch (`GET /history/retention`).
+    pub fn earliest_retained_epoch(&self) -> Result<u64> {
+        Ok(self.history_retention()?.earliest_retained_epoch)
+    }
+
+    /// Fetch the full history-retention descriptor (`GET /history/retention`).
+    pub fn history_retention(&self) -> Result<HistoryRetention> {
+        decode(self.client.get(self.url("/history/retention")).send().map_err(ioe)?)
     }
 
     fn url(&self, path: &str) -> String {

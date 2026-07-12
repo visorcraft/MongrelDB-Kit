@@ -70,3 +70,44 @@ fn rows_at_epoch_reads_history() {
     // A future epoch is rejected.
     assert!(db.rows_at_epoch("t", e2 + 100).is_err());
 }
+
+#[test]
+fn retention_round_trip_and_persistence() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, schema()).unwrap();
+
+    db.set_history_retention_epochs(512).unwrap();
+    assert_eq!(db.history_retention_epochs(), 512);
+
+    // Reopen — the setting persists.
+    drop(db);
+    let reopened = Database::open(&dir).unwrap();
+    assert_eq!(reopened.history_retention_epochs(), 512);
+}
+
+#[test]
+fn cannot_restore_lost_history() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, schema()).unwrap();
+
+    // Narrow window so old epochs are pruned.
+    db.set_history_retention_epochs(1).unwrap();
+
+    // Write two epochs.
+    let mut tx = db.begin().unwrap();
+    tx.insert("t", [("id".into(), json!(1)), ("val".into(), json!(10))].into_iter().collect()).unwrap();
+    tx.commit().unwrap();
+    let e1 = db.snapshot_epoch();
+
+    let mut tx = db.begin().unwrap();
+    tx.insert("t", [("id".into(), json!(2)), ("val".into(), json!(20))].into_iter().collect()).unwrap();
+    tx.commit().unwrap();
+
+    // e1 may have been pruned. Expanding the window must not restore it.
+    db.set_history_retention_epochs(10_000).unwrap();
+    let earliest = db.earliest_retained_epoch();
+    assert!(
+        earliest >= e1,
+        "earliest retained epoch ({earliest}) must not move before the first write ({e1})"
+    );
+}

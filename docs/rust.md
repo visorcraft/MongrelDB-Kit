@@ -566,3 +566,55 @@ cargo run
 - [Constraints](./constraints.md) · [Errors](./errors.md) - enforcement and the `KitError` categories.
 - [Migrations](./migrations.md) - migration ops and the runner.
 - [TypeScript](./typescript.md) · [Python](./python.md) - the sibling language surfaces.
+
+## History retention and time-travel reads
+
+MongrelDB retains a configurable window of committed epochs for MVCC
+time-travel reads. The default window is 1024 epochs.
+
+### Embedded mode
+
+```rust
+use mongreldb_kit::Database;
+
+let db = Database::open(&path, schema()).unwrap();
+
+// Raise the window before writing if you need to read past the default.
+db.set_history_retention_epochs(10_000).unwrap();
+
+// Current window and earliest retained epoch.
+let window = db.history_retention_epochs();
+let earliest = db.earliest_retained_epoch();
+
+// Insert and capture the epoch.
+let mut tx = db.begin().unwrap();
+tx.insert("t", [("id".into(), json!(1))].into_iter().collect()).unwrap();
+tx.commit().unwrap();
+let e1 = db.snapshot_epoch();
+
+// Read a past snapshot — `rows_at_epoch` returns rows as of that epoch.
+let past = db.rows_at_epoch("t", e1).unwrap();
+```
+
+Increasing the window cannot restore history that was already pruned, so
+`earliest_retained_epoch` never moves backward.
+
+### Remote mode
+
+When using `RemoteDatabase` (the `remote` cargo feature), the same three
+controls are forwarded to the daemon's `GET`/`PUT /history/retention` endpoints:
+
+```rust
+use mongreldb_kit::RemoteDatabase;
+
+let remote = RemoteDatabase::connect("http://127.0.0.1:8453").unwrap();
+remote.set_history_retention_epochs(10_000).unwrap();
+let window = remote.history_retention_epochs().unwrap();
+let earliest = remote.earliest_retained_epoch().unwrap();
+```
+
+For SQL time-travel, use `AS OF EPOCH` in a query string:
+
+```rust
+let rows = remote.sql_rows(&format!("SELECT * FROM t AS OF EPOCH {e1}")).unwrap();
+```
