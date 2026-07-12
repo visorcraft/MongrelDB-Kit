@@ -315,7 +315,12 @@ impl RemoteDatabase {
 
     /// Fetch the full history-retention descriptor (`GET /history/retention`).
     pub fn history_retention(&self) -> Result<HistoryRetention> {
-        decode(self.client.get(self.url("/history/retention")).send().map_err(ioe)?)
+        decode(
+            self.client
+                .get(self.url("/history/retention"))
+                .send()
+                .map_err(ioe)?,
+        )
     }
 
     fn url(&self, path: &str) -> String {

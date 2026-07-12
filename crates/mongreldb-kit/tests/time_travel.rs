@@ -95,12 +95,24 @@ fn cannot_restore_lost_history() {
 
     // Write two epochs.
     let mut tx = db.begin().unwrap();
-    tx.insert("t", [("id".into(), json!(1)), ("val".into(), json!(10))].into_iter().collect()).unwrap();
+    tx.insert(
+        "t",
+        [("id".into(), json!(1)), ("val".into(), json!(10))]
+            .into_iter()
+            .collect(),
+    )
+    .unwrap();
     tx.commit().unwrap();
     let e1 = db.snapshot_epoch();
 
     let mut tx = db.begin().unwrap();
-    tx.insert("t", [("id".into(), json!(2)), ("val".into(), json!(20))].into_iter().collect()).unwrap();
+    tx.insert(
+        "t",
+        [("id".into(), json!(2)), ("val".into(), json!(20))]
+            .into_iter()
+            .collect(),
+    )
+    .unwrap();
     tx.commit().unwrap();
 
     // e1 may have been pruned. Expanding the window must not restore it.
