@@ -1,6 +1,6 @@
 [package]
 name = "mongreldb-kit-cli"
-version = "0.49.0"
+version = "0.50.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Command-line tools for MongrelDB Kit: schema validation, migration apply/plan/status, drift diffing, and typed code generation."
@@ -13,8 +13,8 @@ name = "mongreldb-kit"
 path = "src/main.rs"
 
 [dependencies]
-mongreldb-kit = { path = "../mongreldb-kit", version = "0.49.0" }
-mongreldb-kit-core = { path = "../mongreldb-kit-core", version = "0.49.0" }
+mongreldb-kit = { path = "../mongreldb-kit", version = "0.50.0" }
+mongreldb-kit-core = { path = "../mongreldb-kit-core", version = "0.50.0" }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

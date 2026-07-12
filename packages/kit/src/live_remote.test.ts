@@ -18,7 +18,7 @@ import * as net from 'node:net';
 
 // ── Daemon management ──────────────────────────────────────────────────────
 
-const SERVER_VERSION = 'v0.49.0';
+const SERVER_VERSION = 'v0.50.0';
 const DOWNLOAD_URL = `https://github.com/visorcraft/MongrelDB/releases/download/${SERVER_VERSION}/mongreldb-server-linux-x64`;
 
 async function findServerBinary(): Promise<string | null> {
