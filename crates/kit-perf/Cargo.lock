@@ -2219,9 +2219,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.50.0"
+version = "0.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb2c3cdff7ba9957da28a16e9351ab3b36e5fa6d6383f13256db5861091f9b28"
+checksum = "14e84d3aa64f3a4b5627e0c140ed3632acb8f92694411b4930f537d5e9283b48"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2245,13 +2245,14 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 1.0.69",
  "tokio",
+ "xxhash-rust",
  "zeroize",
  "zstd",
 ]
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "arrow",
  "bincode",
@@ -2269,7 +2270,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.50.0"
+version = "0.51.0"
 dependencies = [
  "hex",
  "regex",
@@ -2282,9 +2283,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-query"
-version = "0.50.0"
+version = "0.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f6f6ebbb006d0deb221d5c9373bf8d02d996a71cf46e6612a43b555295e997a"
+checksum = "0f4c0e747f0aaa05c60e8a558fabde15914a0c3148248da44a33a108b6d047bd"
 dependencies = [
  "arrow",
  "async-trait",
@@ -3592,6 +3593,12 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d93c89cdc2d3a63c3ec48ffe926931bdc069eafa8e4402fe6d8f790c9d1e576"
 
 [[package]]
 name = "yoke"

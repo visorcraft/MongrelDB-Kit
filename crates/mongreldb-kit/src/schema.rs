@@ -6,7 +6,8 @@ use mongreldb_core::constraint::{
 };
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::{
-    ColumnDef, ColumnFlags, DefaultExpr, IndexDef, IndexKind, Schema as CoreSchema, TypeId,
+    ColumnDef, ColumnFlags, DefaultExpr, IndexDef, IndexKind, IndexOptions, Schema as CoreSchema,
+    TypeId,
 };
 use mongreldb_kit_core::schema::{
     Column, ColumnType, DefaultKind, IndexKind as KitIndexKind, Table as KitTable,
@@ -116,6 +117,7 @@ pub fn to_core_schema(table: &KitTable) -> Result<CoreSchema> {
                     column_id: col.id as u16,
                     kind,
                     predicate: None,
+                    options: IndexOptions::default(),
                 });
             }
         }
@@ -128,6 +130,7 @@ pub fn to_core_schema(table: &KitTable) -> Result<CoreSchema> {
                     column_id: col.id as u16,
                     kind: IndexKind::Bitmap,
                     predicate: None,
+                    options: IndexOptions::default(),
                 });
             }
         }
