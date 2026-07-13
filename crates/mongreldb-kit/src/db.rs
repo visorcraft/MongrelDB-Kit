@@ -1651,6 +1651,7 @@ impl Database {
         let mut guard = handle.lock();
         let q = mongreldb_core::query::Query {
             conditions: conditions.to_vec(),
+            limit: None,
         };
         guard.query(&q).map_err(KitError::from)
     }

@@ -27,7 +27,7 @@ def _find_server_binary() -> str | None:
     2. ~/.cargo/bin/mongreldb-server (cargo install)
     3. Sibling repo target dir
     4. PATH
-    5. Download from GitHub releases (v0.51.0 prebuilt Linux x64)
+    5. Download from GitHub releases (v0.52.0 prebuilt Linux x64)
     """
     candidates = [
         os.environ.get("MONGRELDB_SERVER", ""),
@@ -56,7 +56,7 @@ def _find_server_binary() -> str | None:
     if binary.exists() and os.access(binary, os.X_OK):
         return str(binary)
 
-    url = "https://github.com/visorcraft/MongrelDB/releases/download/v0.51.0/mongreldb-server-linux-x64"
+    url = "https://github.com/visorcraft/MongrelDB/releases/download/v0.52.0/mongreldb-server-linux-x64"
     try:
         print(f"Downloading mongreldb-server from {url}...")
         urllib.request.urlretrieve(url, binary)
