@@ -230,18 +230,24 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release
+          args: --release --find-interpreter
           manylinux: ${{ matrix.manylinux }}
           working-directory: python/mongreldb_kit
-          # The PyO3 module pulls mongreldb-kit + mongreldb-kit-core from
-          # crates.io (path deps stripped at publish), so wait for the
-          # publish-crates job first.
+          # `--find-interpreter` is required for the manylinux docker builds:
+          # actions/setup-python only provisions the host runner, so in the
+          # containerized Linux build maturin must discover the CPython
+          # interpreters under /opt/python itself. On macOS/Windows (host
+          # builds) it picks up the setup-python interpreter. Wheels land in
+          # the cargo workspace's target/wheels (repo root), not under the
+          # working-directory. The PyO3 module pulls mongreldb-kit +
+          # mongreldb-kit-core from crates.io (path deps stripped at
+          # publish), so wait for the publish-crates job first.
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.target }}
-          path: python/mongreldb_kit/target/wheels/*.whl
+          path: target/wheels/*.whl
           if-no-files-found: error
 
   publish-python-to-pypi:
