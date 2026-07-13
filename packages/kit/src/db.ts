@@ -856,26 +856,22 @@ export class KitDatabase {
 		return Promise.resolve(this.approxAggregate(table, agg, column, z));
 	}
 
-	/**
-	 * Stream `table` in batches of at most `batchSize` rows, invoking `cb` once
-	 * per batch. Implemented with `limit`/`offset` pagination, so memory stays
-	 * bounded to one batch. (Not snapshot-consistent across batches, and O(n·
-	 * pages) — the Rust/Python kit's `scan_batched` uses the engine's native
-	 * single-pass cursor.)
-	 */
+	/** Stream `table` in batches of at most `batchSize` rows. */
 	scanBatched(
 		table: string,
 		batchSize: number,
 		cb: (rows: Record<string, unknown>[]) => void
 	): void {
 		const spec = this.schema.table(table);
-		const size = Math.max(1, Math.floor(batchSize));
+		const size = Math.min(10_000, Math.max(1, Math.floor(batchSize)));
+		const nativeTable = this.db.table(table) as unknown as {
+			queryPage(conditions: ConditionSpec[], limit: number, offset: number): RowJs[];
+		};
 		let offset = 0;
 		for (;;) {
-			const rows = this.selectFrom(spec)
-				.limit(size)
-				.offset(offset)
-				.executeSync() as Record<string, unknown>[];
+			const rows = nativeTable
+				.queryPage([], size, offset)
+				.map((row) => rowFromRowJs(spec, row));
 			if (rows.length === 0) break;
 			cb(rows);
 			if (rows.length < size) break;

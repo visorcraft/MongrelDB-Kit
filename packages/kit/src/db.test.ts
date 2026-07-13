@@ -291,6 +291,32 @@ describe('KitDatabase', () => {
 		}
 	}, 30_000);
 
+	it('reads and batches rows beyond the native 10000-row page', () => {
+		const t = table('t', {
+			columns: [int('id', { primaryKey: true })],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([t]));
+		try {
+			db.insertInto(t)
+				.valuesMany(Array.from({ length: 10_050 }, (_, i) => ({ id: BigInt(i + 1) })))
+				.executeSync();
+			expect(db.selectFrom(t).limit(25).offset(10_000).executeSync()).toHaveLength(25);
+			expect(
+				db.selectFrom(t).where(gte(t.id, 1n)).limit(25).offset(10_000).executeSync()
+			).toHaveLength(25);
+			let count = 0;
+			db.scanBatched('t', 4_000, (rows) => {
+				count += rows.length;
+			});
+			expect(count).toBe(10_050);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
 	it('setSimilarity ranks rows by Jaccard set-similarity', () => {
 		const t = table('t', {
 			columns: [int('id', { primaryKey: true }), json('tags')],

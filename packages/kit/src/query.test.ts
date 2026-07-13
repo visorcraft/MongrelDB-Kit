@@ -125,6 +125,13 @@ function traceNativeTable(db: KitDatabase, tableName: string): {
 						return target.query(conditions);
 					};
 				}
+				if (prop === 'queryPage') {
+					return (conditions: unknown[], limit: number, offset: number) => {
+						calls.query++;
+						calls.conditions.push(conditions);
+						return target.queryPage(conditions, limit, offset);
+					};
+				}
 				if (prop === 'countWhere') {
 					return (conditions: unknown[]) => {
 						calls.countWhere++;

@@ -1649,10 +1649,12 @@ impl Database {
         }
         let handle = self.inner.table(table_name).map_err(KitError::from)?;
         let mut guard = handle.lock();
-        let q = mongreldb_core::query::Query {
-            conditions: conditions.to_vec(),
-            limit: None,
-        };
+        let q = conditions
+            .iter()
+            .cloned()
+            .fold(mongreldb_core::query::Query::new(), |query, condition| {
+                query.and(condition)
+            });
         guard.query(&q).map_err(KitError::from)
     }
 

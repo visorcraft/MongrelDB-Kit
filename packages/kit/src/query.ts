@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { tableFromIPC, type Table as ArrowTable } from 'apache-arrow';
 import { ConditionKind } from '@visorcraft/mongreldb/native.js';
-import type { Database as NativeDatabase, ConditionSpec, Transaction } from '@visorcraft/mongreldb/native.js';
+import type {
+	Database as NativeDatabase,
+	ConditionSpec,
+	Transaction,
+	RowJs
+} from '@visorcraft/mongreldb/native.js';
 import { KitDatabase, runSyncTxn } from './db.js';
 import type { TableSpec, ColumnSpec, PkValue } from './types.js';
 import type { Row, Insert, Update } from './types.js';
@@ -580,15 +585,36 @@ function fullScanRows(db: NativeDatabase, table: TableSpec): MatchedRow[] {
 	return queryNativeRows(db, table, []);
 }
 
+const QUERY_PAGE_SIZE = 10_000;
+
+// ponytail: Offset pages rescan prior matches. Add a native cursor only if profiling proves this hot.
+
+function queryNativeRowsPage(
+	db: NativeDatabase,
+	table: TableSpec,
+	conditions: ConditionSpec[],
+	limit: number,
+	offset: number
+): MatchedRow[] {
+	const nativeTable = db.table(table.name) as unknown as {
+		queryPage(conditions: ConditionSpec[], limit: number, offset: number): RowJs[];
+	};
+	return nativeTable
+		.queryPage(conditions, limit, offset)
+		.map((rowJs) => ({ rowId: rowJs.rowId, row: rowFromRowJs(table, rowJs) }));
+}
+
 function queryNativeRows(
 	db: NativeDatabase,
 	table: TableSpec,
 	conditions: ConditionSpec[]
 ): MatchedRow[] {
-	return db
-		.table(table.name)
-		.query(conditions)
-		.map((rowJs) => ({ rowId: rowJs.rowId, row: rowFromRowJs(table, rowJs) }));
+	const rows: MatchedRow[] = [];
+	for (;;) {
+		const page = queryNativeRowsPage(db, table, conditions, QUERY_PAGE_SIZE, rows.length);
+		rows.push(...page);
+		if (page.length < QUERY_PAGE_SIZE) return rows;
+	}
 }
 
 /**
