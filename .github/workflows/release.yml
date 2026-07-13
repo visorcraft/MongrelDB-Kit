@@ -1,5 +1,6 @@
-# Publishes @visorcraft/mongreldb-kit to npm, and mongreldb-kit-core +
-# mongreldb-kit to crates.io, on a version tag.
+# Publishes @visorcraft/mongreldb-kit to npm, mongreldb-kit-core + mongreldb-kit
+# to crates.io, mongreldb-kit (Python) to PyPI, and the mongreldb-kit-cli
+# binaries to the GitHub release — all on a version tag.
 #
 # Order matters: publish the engine (@visorcraft/mongreldb / mongreldb-core)
 # FIRST, in the MongrelDB repo — the npm job installs it from the registry to
@@ -8,9 +9,11 @@
 # stripped at publish time. Cut a kit release by pushing a tag, e.g.
 # `git tag v0.7.0 && git push --tags`.
 #
-# mongreldb-kit-cli release binaries are attached to the GitHub release.
-# mongreldb-kit-python is a PyO3 cdylib meant for PyPI via maturin, not
-# crates.io.
+# The PyPI publish uses Trusted Publishing (OIDC) — no API token. Requires
+# registering this repo as a trusted publisher at
+# https://pypi.org/manage/account/publishing/ (PyPI → Add a pending publisher:
+# PyPI project name = mongreldb-kit, owner = visorcraft, repo = mongreldb-kit,
+# workflow = release.yml, environment = pypi).
 #
 # Requires repo secrets:
 #   NPM_TOKEN            — granular npm access token, write access to @visorcraft
@@ -185,3 +188,81 @@ jobs:
           files: |
             dist/mongreldb-kit-darwin-arm64
             dist/mongreldb-kit-darwin-universal
+
+  # Build and publish multi-platform wheels to PyPI. Uses Trusted Publishing
+  # (OIDC) — no API token required, but the repo must be registered as a
+  # trusted publisher at https://pypi.org/manage/account/publishing/.
+  publish-python:
+    needs: [publish-crates]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: auto
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: auto
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            manylinux: ''
+          - runner: macos-15
+            target: x86_64-apple-darwin
+            manylinux: ''
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            manylinux: ''
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release
+          manylinux: ${{ matrix.manylinux }}
+          working-directory: python/mongreldb_kit
+          # The PyO3 module pulls mongreldb-kit + mongreldb-kit-core from
+          # crates.io (path deps stripped at publish), so wait for the
+          # publish-crates job first.
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.target }}
+          path: python/mongreldb_kit/target/wheels/*.whl
+          if-no-files-found: error
+
+  publish-python-to-pypi:
+    needs: [publish-python]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Trusted Publishing (OIDC) — no API token. Requires registering this
+      # repo as a trusted publisher on PyPI.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # skip-existing prevents re-publishing identical wheels (e.g. on a
+          # re-run after a partial failure).
+          skip-existing: true

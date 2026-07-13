@@ -1,8 +1,39 @@
 [project]
 name = "mongreldb-kit"
 version = "0.50.0"
+description = "Python bindings for MongrelDB Kit — the application-facing persistence layer (schema model, migrations, relational constraints, query APIs, embedded SQL, storage tuning) for MongrelDB. Runs the columnar engine in-process via PyO3."
+readme = "../../README.md"
 requires-python = ">=3.10"
+license = { text = "MIT OR Apache-2.0" }
+authors = [
+  { name = "Visorcraft", email = "support@visorcraft.com" },
+]
+keywords = ["mongreldb", "database", "storage", "embedded-database", "columnar", "ffi"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Rust",
+  "Topic :: Database",
+  "Topic :: Database :: Database Engines/Servers",
+  "Typing :: Typed",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://www.mongreldb.com"
+Documentation = "https://github.com/visorcraft/mongreldb-kit"
+Repository = "https://github.com/visorcraft/mongreldb-kit"
+Issues = "https://github.com/visorcraft/mongreldb-kit/issues"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
