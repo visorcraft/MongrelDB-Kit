@@ -135,8 +135,10 @@ if __name__ == "__main__":
 
 Both the embedded `Database` and the daemon client `RemoteDatabase` expose
 history-retention controls. Set retention **before** writing data you want to
-read back in time; the engine default keeps only the latest epoch, and raising
-the window later cannot restore history that has already been pruned.
+read back in time. Embedded databases initially keep only the latest epoch;
+the daemon defaults to 1024 epochs unless
+`MONGRELDB_HISTORY_RETENTION_EPOCHS` overrides it. Raising the window later
+cannot restore history that has already been pruned.
 
 ```python
 from mongreldb_kit import Database, RemoteDatabase

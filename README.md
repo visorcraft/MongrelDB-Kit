@@ -5,7 +5,7 @@
 <h1 align="center">MongrelDB Kit</h1>
 
 <p align="center">
-  <b>The application-facing persistence layer for MongrelDB - schema-aware query builder, migrations, relational constraints, and stable semantics across TypeScript, Rust, Python, and PHP.</b>
+  <b>The application-facing persistence layer for MongrelDB - schema-aware query builder, migrations, relational constraints, and stable semantics across TypeScript, Rust, Python, and CLI surfaces.</b>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 
 ## What It Provides
 
-- Schema helpers for typed tables, stable table/column ids, defaults, indexes, checks, unique constraints, and foreign keys. Full type set: int64, float64, bool, text, bytes (BLOB), JSON, timestamp, date, date64, time64, interval, decimal128, UUID, JSON (native), and array columns.
+- Schema helpers for typed tables, stable table/column ids, defaults, indexes, checks, unique constraints, and foreign keys. Full type set: int64, float64, bool, text, bytes (BLOB), timestamp, date, date64, time64, interval, decimal128, UUID, JSON, and array columns.
 - Synchronous TypeScript CRUD/query builder with predicates, ordering, projections, aggregates, joins, subqueries, CTEs, batch inserts, updates, and deletes.
 - Rust and Python APIs backed by the same Rust core and verified with cross-language conformance fixtures.
 - Migration runner with content-addressed checksums, stored schema catalog, table renames, and SQL views.
@@ -86,10 +86,11 @@ print(remote.history_retention_epochs())
 print(remote.earliest_retained_epoch())
 ```
 
-Set retention **before** writing the data you want to time-travel back to. The
-engine default keeps only the latest epoch, so older snapshots are pruned
-unless retention is raised first. Increasing retention later cannot restore
-history that has already been removed. Read past snapshots with
+Set retention **before** writing the data you want to time-travel back to.
+Embedded databases initially keep only the latest epoch. The daemon defaults
+to 1024 epochs unless `MONGRELDB_HISTORY_RETENTION_EPOCHS` overrides it.
+Increasing retention later cannot restore history that has already been
+removed. Read past snapshots with
 `db.rowsAtEpoch('table', epoch)` (embedded) or `SELECT ... AS OF EPOCH <epoch>`
 (embedded SQL and the daemon).
 

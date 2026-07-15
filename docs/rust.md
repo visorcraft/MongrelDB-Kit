@@ -6,7 +6,7 @@ This guide shows how to define a schema, run migrations, and perform CRUD with t
 
 ```toml
 [dependencies]
-mongreldb-kit = "0.1"
+mongreldb-kit = "0.55.0"
 serde_json = "1"
 ```
 
@@ -570,7 +570,9 @@ cargo run
 ## History retention and time-travel reads
 
 MongrelDB retains a configurable window of committed epochs for MVCC
-time-travel reads. The default window is 1024 epochs.
+time-travel reads. Embedded databases initially keep only the latest epoch.
+The daemon defaults to 1024 epochs unless
+`MONGRELDB_HISTORY_RETENTION_EPOCHS` overrides it.
 
 ### Embedded mode
 

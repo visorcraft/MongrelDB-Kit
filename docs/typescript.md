@@ -255,8 +255,10 @@ same builder - see the [Query builder](./query-builder.md) guide for the full su
 
 The embedded `KitDatabase` and the daemon client `RemoteDatabase` both expose
 history-retention controls. Set retention **before** writing data you want to
-read back at an older snapshot; the engine default keeps only the latest epoch,
-and raising retention later cannot recover pruned history.
+read back at an older snapshot. Embedded databases initially keep only the
+latest epoch; the daemon defaults to 1024 epochs unless
+`MONGRELDB_HISTORY_RETENTION_EPOCHS` overrides it. Raising retention later
+cannot recover pruned history.
 
 Embedded:
 
