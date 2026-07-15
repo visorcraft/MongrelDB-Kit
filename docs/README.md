@@ -95,6 +95,7 @@ Start here, then dive into the topic that fits your task.
 | [Query builder](./query-builder.md) | Select, insert (single and batch), update, delete, predicates, ordering, pagination, projections, aggregates, distinct, joins, group/having, subqueries, exists, CTEs, and the raw escape hatch. |
 | [Constraints](./constraints.md) | Not-null, checks, unique / composite-unique, foreign keys, and delete actions (cascade / set-null / restrict). |
 | [Transactions](./transactions.md) | `begin`/`commit`/`rollback`, the retrying `transaction()` helper, conflicts, and the concurrency model. |
+| [SQL cancellation and timeouts](./sql-cancellation.md) | Embedded and remote query handles, deadlines, transport timeouts, transaction safety, capability negotiation, and CLI cancellation. |
 | [Migrations](./migrations.md) | Migration files, the runner, checksums, supported operations, idempotent column adds, table renames, and SQL views. |
 | [Stored procedures](./stored-procedures.md) | Declarative routines callable from embedded, remote, and CLI Kit clients. |
 | [Triggers](./triggers.md) | Engine-side declarative triggers, migration helpers, remote APIs, and trigger validation errors. |

@@ -54,6 +54,7 @@
 - [Extended SQL & virtual tables](docs/extended-sql-and-virtual-tables.md)
 - [Constraints](docs/constraints.md)
 - [Transactions](docs/transactions.md)
+- [SQL cancellation and timeouts](docs/sql-cancellation.md)
 - [Errors](docs/errors.md)
 - [Internal tables](docs/internal-tables.md)
 - [Testing](docs/testing.md)
