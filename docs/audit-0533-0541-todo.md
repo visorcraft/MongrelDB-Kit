@@ -111,16 +111,71 @@ Checkboxes cover implementation, tests, documentation, and qualification.
   query count and registry cleanup.
 - [x] Document compatibility, errors, transaction semantics, migration/DDL
   timeout guidance, and AI-agent use.
-- [ ] Pin MongrelDB Kit patches to the final exact MongrelDB SHA.
-- [ ] Run final Rust, server, NAPI/TypeScript, C FFI, Python, remote
+- [x] Pin MongrelDB Kit patches to the final exact MongrelDB SHA.
+- [x] Run final Rust, server, NAPI/TypeScript, C FFI, Python, remote
   cross-repository, formatting, and lint gates on clean trees.
-- [ ] Record final exact SHAs and benchmark artifact in the qualification
+- [x] Record final exact SHAs and benchmark artifact in the qualification
   documents.
 
 ## Final re-audit
 
-- [ ] Re-read every point in both audit documents against source and tests.
-- [ ] Search for old uncontrolled SQL entry points and raw catalog reads under
+- [x] Re-read every point in both audit documents against source and tests.
+- [x] Search for old uncontrolled SQL entry points and raw catalog reads under
   WAL lock.
-- [ ] Confirm no raw SQL/parameters leak through query status, logs, or errors.
-- [ ] Confirm both repositories are clean and all commits are pushed.
+- [x] Confirm no raw SQL/parameters leak through query status, logs, or errors.
+- [x] Confirm both repositories are clean and all commits are pushed.
+
+## Final qualification evidence
+
+Implementation and qualification source:
+
+- MongrelDB: `ab67f9a042671fed57c1e7e9f350641b0aa32b2c`.
+- MongrelDB Kit: `b15370f0a3cd97af67bbfc976eadd2f99372d98e`.
+- Root Kit patches and `crates/kit-perf/Cargo.toml` all pin the exact MongrelDB
+  revision above.
+- Both implementation trees were clean and pushed before this evidence-only
+  ledger update.
+
+Final gates:
+
+- MongrelDB formatting, workspace clippy with all targets/features, and
+  workspace tests passed. Workspace result: 1,061 passed, 1 ignored.
+- MongrelDB server, client, Node Rust, C FFI, Kit FFI, and JNI suites passed.
+- MongrelDB release NAPI build and test passed.
+- Final focused cursor, cancellation, security, scored-query, and transaction
+  suites passed.
+- MongrelDB Kit formatting, workspace clippy with all targets/features, and
+  workspace tests passed. Workspace result: 179 passed.
+- TypeScript release-addon build, check, and tests passed: 308 tests.
+- Python build, tests, and conformance passed: 159 tests.
+- TypeScript used the local release-built addon from the exact sibling source
+  because the `0.54.1` npm peer was not published during qualification.
+
+Benchmark and characterization evidence:
+
+- Strict clean 100k AI qualification passed.
+- Strict clean 1M AI structural qualification passed with 1,000,000 rows and
+  10 measured queries.
+- AI concurrency, 1M read-generation, and ANN candidate-cap validators passed.
+- Authenticated 10,000-row batch committed all rows in 15 ms with zero catalog
+  disk reads.
+- Controlled point query: 2.1795 to 2.2743 microseconds.
+- Controlled 100k scan: 27.314 to 27.662 milliseconds.
+- Accepted cancellation to scan completion: 85.665 to 93.687 microseconds.
+- Accepted cancellation to queued completion: 3.9783 to 4.0002 microseconds.
+- Criterion reported no statistically significant regression for all four
+  cancellation measurements.
+
+Final source re-audit confirmed:
+
+- security catalog refresh occurs before the security gate, commit lock, and
+  shared WAL critical section;
+- final UPDATE authorization uses `changed_columns`, while constraints, RLS,
+  triggers, WAL, and post-images retain the complete row;
+- SQL registration precedes queue waits and one control reaches planning,
+  execution, native/scored/external paths, serialization, and commit fencing;
+- status and slow-query logs expose query IDs, fingerprints, phases, and safe
+  operation names, never raw SQL or parameters;
+- cursor continuation is bound to its manifest, principal, security/schema/
+  index generations, query time, expiry, canonical request hash, and MAC;
+- no audit-specific `todo!` or `unimplemented!` remains.
