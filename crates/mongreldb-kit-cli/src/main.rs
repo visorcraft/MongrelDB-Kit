@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use mongreldb_kit::{
     migrate as run_migrations, AggFunc, Aggregate, AggregateQuery, Column, ColumnType, Database,
     Direction, Expr, Literal, Migration, MigrationOp, OnConflict, OrderBy, Permission, Query,
-    Schema, Select, Table,
+    QueryId, Schema, Select, SqlOptions, Table,
 };
 use mongreldb_kit_core::migrations::plan_migrations;
 use mongreldb_kit_core::{ProcedureSpec, TriggerSpec, ViewSpec, VirtualTableSpec};
@@ -329,7 +331,16 @@ enum Command {
         to: String,
     },
     /// Run a SQL statement (read returns rows as JSON; DDL/DML returns []).
-    Sql { path: PathBuf, statement: String },
+    Sql {
+        path: PathBuf,
+        statement: String,
+        /// Server-side SQL deadline in milliseconds.
+        #[arg(long)]
+        timeout_ms: Option<u64>,
+        /// Optional 32-hex-character query ID for logs and cancellation.
+        #[arg(long)]
+        query_id: Option<String>,
+    },
     /// SQL view commands.
     #[command(subcommand)]
     View(ViewCmd),
@@ -670,7 +681,18 @@ fn main() -> Result<()> {
         Command::RenameTable { path, from, to } => {
             cmd_rename_table(&path, &from, &to, creds.as_ref())
         }
-        Command::Sql { path, statement } => cmd_sql(&path, &statement, creds.as_ref()),
+        Command::Sql {
+            path,
+            statement,
+            timeout_ms,
+            query_id,
+        } => cmd_sql(
+            &path,
+            &statement,
+            timeout_ms,
+            query_id.as_deref(),
+            creds.as_ref(),
+        ),
         Command::View(cmd) => match cmd {
             ViewCmd::Create { path, view } => cmd_view_create(&path, &view, creds.as_ref()),
             ViewCmd::Drop { path, name } => cmd_view_drop(&path, &name, creds.as_ref()),
@@ -813,9 +835,39 @@ fn cmd_rename_table(path: &Path, from: &str, to: &str, creds: Option<&Credential
     Ok(())
 }
 
-fn cmd_sql(path: &Path, statement: &str, creds: Option<&Credentials>) -> Result<()> {
-    let db = open_db(path, creds)?;
-    let rows = db.sql_rows(statement).context("failed to execute SQL")?;
+fn cmd_sql(
+    path: &Path,
+    statement: &str,
+    timeout_ms: Option<u64>,
+    query_id: Option<&str>,
+    creds: Option<&Credentials>,
+) -> Result<()> {
+    if timeout_ms == Some(0) {
+        bail!("--timeout-ms must be positive");
+    }
+    let query_id = query_id
+        .map(str::parse::<QueryId>)
+        .transpose()
+        .context("invalid --query-id")?;
+    let db = Arc::new(open_db(path, creds)?);
+    let handle = db
+        .start_sql(
+            statement,
+            SqlOptions {
+                query_id,
+                timeout: timeout_ms.map(Duration::from_millis),
+            },
+        )
+        .context("failed to start SQL")?;
+    let active_id = handle.id();
+    let cancel_db = Arc::clone(&db);
+    ctrlc::set_handler(move || {
+        cancel_db.cancel_sql(active_id);
+    })
+    .context("failed to install Ctrl-C SQL cancellation handler")?;
+    let batches = handle.wait().context("failed to execute SQL")?;
+    let rows = mongreldb_kit::arrow_util::batches_to_rows(&batches)
+        .context("failed to decode SQL rows")?;
     let values: Vec<Value> = rows.into_iter().map(Value::Object).collect();
     println!("{}", serde_json::to_string_pretty(&Value::Array(values))?);
     Ok(())

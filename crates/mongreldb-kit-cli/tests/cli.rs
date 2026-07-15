@@ -32,6 +32,39 @@ fn check_returns_ok_after_init() {
 }
 
 #[test]
+fn sql_accepts_timeout_and_query_id() {
+    let path = temp_db_path();
+    bin().arg("init").arg(&path).assert().success();
+    bin()
+        .arg("sql")
+        .arg(&path)
+        .arg("SELECT 1 AS value")
+        .args([
+            "--timeout-ms",
+            "1000",
+            "--query-id",
+            "11112222333344445555666677778888",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("\"value\": 1"));
+}
+
+#[test]
+fn sql_rejects_zero_timeout() {
+    let path = temp_db_path();
+    bin().arg("init").arg(&path).assert().success();
+    bin()
+        .arg("sql")
+        .arg(&path)
+        .arg("SELECT 1")
+        .args(["--timeout-ms", "0"])
+        .assert()
+        .failure()
+        .stderr(contains("--timeout-ms must be positive"));
+}
+
+#[test]
 fn schema_validate_accepts_valid_schema() {
     let dir = tempfile::tempdir().unwrap();
     let schema_path = dir.path().join("schema.json");
