@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import mongreldb from '@visorcraft/mongreldb';
 import { tableFromIPC, type Table as ArrowTable } from 'apache-arrow';
 import type {
@@ -36,7 +36,34 @@ import {
 } from './external.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
 import { isReferencedTable, deleteGuardsForTable, toCells, type ConstraintKit } from './constraints.js';
-import { KitError, isRetryableConflict } from './errors.js';
+import { KitError, QueryCancelledError, isRetryableConflict, mapSqlError } from './errors.js';
+
+export interface SqlOptions {
+	timeoutMs?: number;
+	signal?: AbortSignal;
+	queryId?: string;
+}
+
+export interface SqlQuery<T> {
+	readonly id: string;
+	readonly result: Promise<T>;
+	cancel(): Promise<void> | void;
+}
+
+type NativeSqlOptions = {
+	queryId?: string;
+	timeoutMs?: number;
+};
+
+type NativeSqlQuery = {
+	readonly id: string;
+	cancel(): boolean;
+	result(): Promise<Buffer>;
+};
+
+function sqlQueryId(): string {
+	return randomBytes(16).toString('hex');
+}
 
 /** Members of a set-valued cell: a JSON array, or a JSON string of one. */
 function parseStringSet(value: unknown): Set<string> {
@@ -102,6 +129,9 @@ type MongrelDatabase = NativeDatabase & {
 	triggers(): { json: string }[];
 	trigger(name: string): { json: string } | null;
 	sql(sql: string): Promise<Buffer>;
+	sqlWithOptions(sql: string, options?: NativeSqlOptions): Promise<Buffer>;
+	startSql(sql: string, options?: NativeSqlOptions): NativeSqlQuery;
+	cancelSql(queryId: string): boolean;
 	// User/role/credentials (NAPI addon methods)
 	createUser(username: string, password: string): void;
 	dropUser(username: string): void;
@@ -663,12 +693,44 @@ export class KitDatabase {
 		return trigger ? (JSON.parse(trigger.json) as TriggerSpec) : null;
 	}
 
-	async sql(sql: string): Promise<ArrowTable> {
-		return tableFromIPC(await this.db.sql(sql));
+	startSql(sql: string, options: SqlOptions = {}): SqlQuery<ArrowTable> {
+		const queryId = options.queryId ?? sqlQueryId();
+		if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)) {
+			throw new RangeError('timeoutMs must be a positive safe integer');
+		}
+		if (options.signal?.aborted) {
+			return {
+				id: queryId,
+				result: Promise.reject(new QueryCancelledError(queryId)),
+				cancel() {}
+			};
+		}
+
+		const native = this.db.startSql(sql, {
+			queryId,
+			timeoutMs: options.timeoutMs
+		});
+		const cancel = () => {
+			native.cancel();
+		};
+		const onAbort = () => cancel();
+		options.signal?.addEventListener('abort', onAbort, { once: true });
+		const result = native
+			.result()
+			.then((bytes) => tableFromIPC(bytes))
+			.catch((error: unknown) => {
+				throw mapSqlError(error, queryId);
+			})
+			.finally(() => options.signal?.removeEventListener('abort', onAbort));
+		return { id: native.id, result, cancel };
 	}
 
-	async sqlRows(sql: string): Promise<Record<string, unknown>[]> {
-		return [...(await this.sql(sql))].map((row) => ({ ...row }));
+	async sql(sql: string, options?: SqlOptions): Promise<ArrowTable> {
+		return this.startSql(sql, options).result;
+	}
+
+	async sqlRows(sql: string, options?: SqlOptions): Promise<Record<string, unknown>[]> {
+		return [...(await this.sql(sql, options))].map((row) => ({ ...row }));
 	}
 
 	async createVirtualTable(spec: VirtualTableSpec): Promise<ArrowTable> {

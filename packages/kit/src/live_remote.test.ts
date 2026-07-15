@@ -153,7 +153,7 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 		// Create a table via SQL
-		remote.sql('CREATE TABLE test_items (id BIGINT PRIMARY KEY, name VARCHAR(50))');
+		await remote.sql('CREATE TABLE test_items (id BIGINT PRIMARY KEY, name VARCHAR(50))');
 		const names = remote.tableNames();
 		expect(names).toContain('test_items');
 	});
@@ -161,15 +161,15 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 	test('sql INSERT + count', async () => {
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
-		remote.sql("INSERT INTO test_items (id, name) VALUES (1, 'widget')");
-		remote.sql("INSERT INTO test_items (id, name) VALUES (2, 'gadget')");
+		await remote.sql("INSERT INTO test_items (id, name) VALUES (1, 'widget')");
+		await remote.sql("INSERT INTO test_items (id, name) VALUES (2, 'gadget')");
 		expect(remote.count('test_items')).toBe(2n);
 	});
 
 	test('sqlRows returns decoded rows', async () => {
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
-		const rows = remote.sqlRows('SELECT * FROM test_items ORDER BY id');
+		const rows = await remote.sqlRows('SELECT * FROM test_items ORDER BY id');
 		expect(rows.length).toBe(2);
 		expect(rows[0].name).toBe('widget');
 		expect(rows[1].name).toBe('gadget');
@@ -178,15 +178,15 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 	test('sql UPDATE + verify', async () => {
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
-		remote.sql("UPDATE test_items SET name = 'updated' WHERE id = 1");
-		const rows = remote.sqlRows('SELECT name FROM test_items WHERE id = 1');
+		await remote.sql("UPDATE test_items SET name = 'updated' WHERE id = 1");
+		const rows = await remote.sqlRows('SELECT name FROM test_items WHERE id = 1');
 		expect(rows[0].name).toBe('updated');
 	});
 
 	test('sql DELETE + verify count drops', async () => {
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
-		remote.sql('DELETE FROM test_items WHERE id = 2');
+		await remote.sql('DELETE FROM test_items WHERE id = 2');
 		expect(remote.count('test_items')).toBe(1n);
 	});
 
@@ -213,15 +213,15 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		expect(remote.historyRetentionEpochs()).toBe(100n);
 		expect(remote.earliestRetainedEpoch()).toBeGreaterThanOrEqual(0n);
 
-		remote.sql(
+		await remote.sql(
 			'CREATE TABLE time_travel (id BIGINT PRIMARY KEY, name VARCHAR(50))'
 		);
-		remote.sql("INSERT INTO time_travel (id, name) VALUES (1, 'orig')");
+		await remote.sql("INSERT INTO time_travel (id, name) VALUES (1, 'orig')");
 		const e1 = remote.commit('time_travel');
 
-		remote.sql("UPDATE time_travel SET name = 'updated' WHERE id = 1");
+		await remote.sql("UPDATE time_travel SET name = 'updated' WHERE id = 1");
 
-		const past = remote.sqlRows(
+		const past = await remote.sqlRows(
 			`SELECT name FROM time_travel AS OF EPOCH ${e1} WHERE id = 1`
 		);
 		expect(past).toHaveLength(1);
@@ -231,7 +231,7 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 	test('sql DROP TABLE', async () => {
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
-		remote.sql('DROP TABLE test_items');
+		await remote.sql('DROP TABLE test_items');
 		expect(remote.tableNames()).not.toContain('test_items');
 	});
 });

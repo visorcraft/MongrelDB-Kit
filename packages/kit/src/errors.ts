@@ -15,7 +15,11 @@ export type KitErrorCode =
 	| 'AUTH_REQUIRED'
 	| 'AUTH_NOT_REQUIRED'
 	| 'INVALID_CREDENTIALS'
-	| 'PERMISSION_DENIED';
+	| 'PERMISSION_DENIED'
+	| 'QUERY_CANCELLED'
+	| 'DEADLINE_EXCEEDED'
+	| 'QUERY_ID_CONFLICT'
+	| 'TRANSACTION_ABORTED';
 
 export class KitError extends Error {
 	readonly code: KitErrorCode;
@@ -129,6 +133,64 @@ export class KitUnsupportedError extends KitError {
 		super(message, 'UNSUPPORTED');
 		this.name = 'KitUnsupportedError';
 	}
+}
+
+export class QueryCancelledError extends KitError {
+	readonly queryId: string;
+
+	constructor(queryId: string, message = 'SQL query cancelled') {
+		super(message, 'QUERY_CANCELLED');
+		this.name = 'QueryCancelledError';
+		this.queryId = queryId;
+	}
+}
+
+export class QueryTimeoutError extends KitError {
+	readonly queryId: string;
+
+	constructor(queryId: string, message = 'SQL query deadline exceeded') {
+		super(message, 'DEADLINE_EXCEEDED');
+		this.name = 'QueryTimeoutError';
+		this.queryId = queryId;
+	}
+}
+
+export class QueryIdConflictError extends KitError {
+	readonly queryId: string;
+
+	constructor(queryId: string, message = 'SQL query ID is already active') {
+		super(message, 'QUERY_ID_CONFLICT');
+		this.name = 'QueryIdConflictError';
+		this.queryId = queryId;
+	}
+}
+
+export class TransactionAbortedError extends KitError {
+	constructor(message = 'SQL transaction is aborted; only ROLLBACK is allowed') {
+		super(message, 'TRANSACTION_ABORTED');
+		this.name = 'TransactionAbortedError';
+	}
+}
+
+export function mapSqlError(error: unknown, fallbackQueryId: string): Error {
+	if (error instanceof QueryCancelledError || error instanceof QueryTimeoutError || error instanceof QueryIdConflictError || error instanceof TransactionAbortedError) {
+		return error;
+	}
+	const message = error instanceof Error ? error.message : String(error);
+	const parts = message.split(':');
+	if (message.includes('__QUERY_CANCELLED__:')) {
+		return new QueryCancelledError(parts.at(-2) ?? fallbackQueryId, message);
+	}
+	if (message.includes('__DEADLINE_EXCEEDED__:')) {
+		return new QueryTimeoutError(parts.at(-2) ?? fallbackQueryId, message);
+	}
+	if (message.includes('__QUERY_ID_CONFLICT__:')) {
+		return new QueryIdConflictError(parts.at(-1) ?? fallbackQueryId, message);
+	}
+	if (message.includes('__TRANSACTION_ABORTED__:')) {
+		return new TransactionAbortedError(message);
+	}
+	return error instanceof Error ? error : new KitError(message);
 }
 
 /** Thrown when a `require_auth` database is opened without credentials, or an

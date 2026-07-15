@@ -11,6 +11,10 @@ import {
 	KitSchemaDriftError,
 	KitTimeoutError,
 	KitUnsupportedError,
+	QueryCancelledError,
+	QueryTimeoutError,
+	QueryIdConflictError,
+	TransactionAbortedError,
 	isRetryableConflict
 } from './errors.js';
 
@@ -27,7 +31,11 @@ describe('error taxonomy', () => {
 			[new KitMigrationError('boom'), 'MIGRATION'],
 			[new KitSchemaDriftError('mismatch'), 'SCHEMA_DRIFT'],
 			[new KitTimeoutError(), 'TIMEOUT'],
-			[new KitUnsupportedError('nope'), 'UNSUPPORTED']
+			[new KitUnsupportedError('nope'), 'UNSUPPORTED'],
+			[new QueryCancelledError('a'), 'QUERY_CANCELLED'],
+			[new QueryTimeoutError('b'), 'DEADLINE_EXCEEDED'],
+			[new QueryIdConflictError('c'), 'QUERY_ID_CONFLICT'],
+			[new TransactionAbortedError(), 'TRANSACTION_ABORTED']
 		];
 
 		for (const [err, expectedCode] of cases) {
