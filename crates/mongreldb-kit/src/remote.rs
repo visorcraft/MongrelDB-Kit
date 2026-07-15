@@ -1183,4 +1183,57 @@ mod tests {
         let requests = server.join().unwrap();
         assert!(requests[2].starts_with("POST /queries/aaaabbbbccccddddeeeeffff00001111/cancel "));
     }
+
+    #[test]
+    fn transport_timeout_requests_best_effort_cancel() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let capabilities = r#"{"sql_cancellation":{"version":1,"client_query_ids":true,"cancel_endpoint":true,"query_status":true,"stream_disconnect_cancels":true}}"#;
+            let mut requests = Vec::new();
+            for body in [capabilities, r#"{"tables":{}}"#] {
+                let (mut stream, _) = listener.accept().unwrap();
+                requests.push(read_request(&stream));
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            let (mut sql_stream, _) = listener.accept().unwrap();
+            requests.push(read_request(&sql_stream));
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = write!(
+                sql_stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]"
+            );
+            let (mut cancel_stream, _) = listener.accept().unwrap();
+            requests.push(read_request(&cancel_stream));
+            let body = r#"{"state":"cancellation_requested"}"#;
+            write!(
+                cancel_stream,
+                "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            requests
+        });
+        let database = RemoteDatabase::connect(&format!("http://{address}")).unwrap();
+        let query_id = "3333444455556666777788889999aaaa".parse().unwrap();
+        let error = database
+            .sql_rows_with_options(
+                "SELECT 1",
+                RemoteSqlOptions {
+                    query_id: Some(query_id),
+                    transport_timeout: Some(Duration::from_millis(10)),
+                    ..RemoteSqlOptions::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, KitError::Transport { .. }));
+        let requests = server.join().unwrap();
+        assert!(requests[2].starts_with("POST /sql "));
+        assert!(requests[3].starts_with("POST /queries/3333444455556666777788889999aaaa/cancel "));
+    }
 }

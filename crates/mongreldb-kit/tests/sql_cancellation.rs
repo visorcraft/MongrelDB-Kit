@@ -87,6 +87,16 @@ fn query_handle_supports_queue_cancel_deadline_conflict_and_reuse() {
         timed_out.wait(),
         Err(KitError::DeadlineExceeded { .. })
     ));
+    assert!(matches!(
+        db.sql_arrow_with_options(
+            "SELECT 3",
+            SqlOptions {
+                query_id: None,
+                timeout: Some(Duration::from_millis(10)),
+            },
+        ),
+        Err(KitError::DeadlineExceeded { .. })
+    ));
 
     barrier.wait();
     assert_eq!(first.wait().unwrap()[0].num_rows(), 1);
