@@ -48,6 +48,10 @@ pub enum KitError {
     QueryConflict(String),
     #[error("transaction aborted: {0}")]
     TransactionAborted(String),
+    #[error("unsupported feature: {0}")]
+    Unsupported(String),
+    #[error("transport error for query {query_id}: {message}")]
+    Transport { query_id: String, message: String },
 }
 
 impl From<std::io::Error> for KitError {

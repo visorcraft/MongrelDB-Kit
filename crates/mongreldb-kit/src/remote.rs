@@ -24,6 +24,7 @@
 #![cfg(feature = "remote")]
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -40,10 +41,106 @@ const EC_BAD: &str = "BAD_REQUEST";
 const EC_TRIGGER_VALIDATION: &str = "TRIGGER_VALIDATION";
 
 /// A typed remote client bound to a `mongreldb-server` URL.
+#[derive(Clone)]
 pub struct RemoteDatabase {
     base_url: String,
     client: reqwest::blocking::Client,
     schemas: HashMap<String, RemoteTable>,
+    sql_cancellation: Option<SqlCancellationCapabilities>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteSqlFormat {
+    Arrow,
+    Json,
+}
+
+impl RemoteSqlFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Arrow => "arrow",
+            Self::Json => "json",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteSqlOptions {
+    pub query_id: Option<mongreldb_query::QueryId>,
+    pub timeout: Option<Duration>,
+    pub transport_timeout: Option<Duration>,
+    pub format: RemoteSqlFormat,
+}
+
+impl Default for RemoteSqlOptions {
+    fn default() -> Self {
+        Self {
+            query_id: None,
+            timeout: None,
+            transport_timeout: None,
+            format: RemoteSqlFormat::Arrow,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SqlCancellationCapabilities {
+    pub version: u8,
+    pub client_query_ids: bool,
+    pub cancel_endpoint: bool,
+    pub query_status: bool,
+    pub stream_disconnect_cancels: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CapabilitiesResponse {
+    sql_cancellation: SqlCancellationCapabilities,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoteQueryStatus {
+    pub query_id: String,
+    pub state: String,
+    pub operation: String,
+    pub committed: bool,
+    pub completed_statements: usize,
+    pub statement_index: usize,
+}
+
+pub struct RemoteSqlQueryHandle {
+    query_id: mongreldb_query::QueryId,
+    database: RemoteDatabase,
+    worker: Option<RemoteSqlWorker>,
+}
+
+type RemoteSqlWorker = std::thread::JoinHandle<Result<Vec<Map<String, Value>>>>;
+
+impl RemoteSqlQueryHandle {
+    pub fn id(&self) -> mongreldb_query::QueryId {
+        self.query_id
+    }
+
+    pub fn cancel(&self) -> Result<mongreldb_query::CancelOutcome> {
+        self.database.cancel_sql(self.query_id)
+    }
+
+    pub fn wait(mut self) -> Result<Vec<Map<String, Value>>> {
+        let worker = self
+            .worker
+            .take()
+            .ok_or_else(|| KitError::Storage("remote SQL query already awaited".into()))?;
+        worker
+            .join()
+            .map_err(|_| KitError::Storage("remote SQL query worker panicked".into()))?
+    }
+}
+
+impl Drop for RemoteSqlQueryHandle {
+    fn drop(&mut self) {
+        if self.worker.is_some() {
+            let _ = self.database.cancel_sql(self.query_id);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -102,9 +199,45 @@ impl RemoteDatabase {
             base_url: url.trim_end_matches('/').to_string(),
             client: reqwest::blocking::Client::new(),
             schemas: HashMap::new(),
+            sql_cancellation: None,
         };
+        db.sql_cancellation = db.fetch_sql_cancellation_capabilities()?;
         db.refresh()?;
         Ok(db)
+    }
+
+    fn fetch_sql_cancellation_capabilities(&self) -> Result<Option<SqlCancellationCapabilities>> {
+        let response = self
+            .client
+            .get(self.url("/capabilities"))
+            .send()
+            .map_err(ioe)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let capabilities: CapabilitiesResponse = decode(response)?;
+        Ok(Some(capabilities.sql_cancellation))
+    }
+
+    pub fn sql_cancellation_capabilities(&self) -> Option<&SqlCancellationCapabilities> {
+        self.sql_cancellation.as_ref()
+    }
+
+    fn require_sql_cancellation(&self) -> Result<&SqlCancellationCapabilities> {
+        let capabilities = self.sql_cancellation.as_ref().ok_or_else(|| {
+            KitError::Unsupported(
+                "server does not advertise SQL cancellation capability version 1".into(),
+            )
+        })?;
+        if capabilities.version != 1
+            || !capabilities.client_query_ids
+            || !capabilities.cancel_endpoint
+        {
+            return Err(KitError::Unsupported(
+                "server SQL cancellation capability is incompatible".into(),
+            ));
+        }
+        Ok(capabilities)
     }
 
     /// Re-fetch schema metadata (call after DDL on the server).
@@ -360,28 +493,159 @@ impl RemoteDatabase {
     /// Run a SQL read and decode the Arrow response into JSON row maps keyed by
     /// column name. Covers the common fixed-width types + UTF-8 + null.
     pub fn sql_rows(&self, sql: &str) -> Result<Vec<Map<String, Value>>> {
-        let resp = self
-            .client
-            .post(self.url("/sql"))
-            .json(&serde_json::json!({ "sql": sql }))
-            .send()
-            .map_err(ioe)?;
-        if !resp.status().is_success() {
-            return Err(KitError::Storage(format!(
-                "sql http {}: {}",
-                resp.status(),
-                resp.text().unwrap_or_default()
-            )));
+        self.sql_rows_with_options(sql, RemoteSqlOptions::default())
+    }
+
+    pub fn sql_rows_with_options(
+        &self,
+        sql: &str,
+        options: RemoteSqlOptions,
+    ) -> Result<Vec<Map<String, Value>>> {
+        let format = options.format;
+        let bytes = self.sql_bytes_with_options(sql, options)?;
+        if format == RemoteSqlFormat::Json {
+            return serde_json::from_slice(&bytes).map_err(KitError::from);
         }
-        let bytes = resp.bytes().map_err(ioe)?;
         let batches = read_arrow_ipc(&bytes)?;
         let mut rows = Vec::new();
-        for b in &batches {
-            for row in batch_to_rows(b)? {
-                rows.push(row);
-            }
+        for batch in &batches {
+            rows.extend(batch_to_rows(batch)?);
         }
         Ok(rows)
+    }
+
+    pub fn sql_arrow_with_options(
+        &self,
+        sql: &str,
+        mut options: RemoteSqlOptions,
+    ) -> Result<Vec<u8>> {
+        options.format = RemoteSqlFormat::Arrow;
+        self.sql_bytes_with_options(sql, options)
+    }
+
+    fn sql_bytes_with_options(&self, sql: &str, options: RemoteSqlOptions) -> Result<Vec<u8>> {
+        let controlled = options.query_id.is_some()
+            || options.timeout.is_some()
+            || options.transport_timeout.is_some();
+        if controlled {
+            self.require_sql_cancellation()?;
+        }
+        let query_id = if controlled {
+            Some(match options.query_id {
+                Some(query_id) => query_id,
+                None => mongreldb_query::QueryId::random().map_err(KitError::from)?,
+            })
+        } else {
+            None
+        };
+        let timeout_ms = options.timeout.map(duration_millis);
+        let body = json!({
+            "sql": sql,
+            "format": options.format.as_str(),
+            "query_id": query_id.map(|value| value.to_string()),
+            "timeout_ms": timeout_ms,
+        });
+        let mut request = self.client.post(self.url("/sql")).json(&body);
+        if let Some(timeout) = options.transport_timeout {
+            request = request.timeout(timeout);
+        }
+        let response = match request.send() {
+            Ok(response) => response,
+            Err(error) => {
+                if let Some(query_id) = query_id {
+                    self.best_effort_cancel(query_id);
+                    return Err(KitError::Transport {
+                        query_id: query_id.to_string(),
+                        message: format!(
+                            "{error}; server cancellation was requested but is not confirmed"
+                        ),
+                    });
+                }
+                return Err(ioe(error));
+            }
+        };
+        if !response.status().is_success() {
+            return Err(map_error(response));
+        }
+        response.bytes().map(|bytes| bytes.to_vec()).map_err(ioe)
+    }
+
+    pub fn start_sql_rows(
+        &self,
+        sql: String,
+        mut options: RemoteSqlOptions,
+    ) -> Result<RemoteSqlQueryHandle> {
+        self.require_sql_cancellation()?;
+        let query_id = match options.query_id {
+            Some(query_id) => query_id,
+            None => mongreldb_query::QueryId::random().map_err(KitError::from)?,
+        };
+        options.query_id = Some(query_id);
+        let database = self.clone();
+        let worker_database = database.clone();
+        let worker = std::thread::Builder::new()
+            .name(format!("mongreldb-kit-remote-sql-{query_id}"))
+            .spawn(move || worker_database.sql_rows_with_options(&sql, options))
+            .map_err(|error| KitError::Storage(error.to_string()))?;
+        Ok(RemoteSqlQueryHandle {
+            query_id,
+            database,
+            worker: Some(worker),
+        })
+    }
+
+    pub fn cancel_sql(
+        &self,
+        query_id: mongreldb_query::QueryId,
+    ) -> Result<mongreldb_query::CancelOutcome> {
+        self.require_sql_cancellation()?;
+        let response = self
+            .client
+            .post(self.url(&format!("/queries/{query_id}/cancel")))
+            .send()
+            .map_err(ioe)?;
+        match response.status() {
+            reqwest::StatusCode::ACCEPTED => Ok(mongreldb_query::CancelOutcome::Accepted),
+            reqwest::StatusCode::OK => {
+                let body: Value = response.json().map_err(ioe)?;
+                match body.get("state").and_then(Value::as_str) {
+                    Some("cancelling") => Ok(mongreldb_query::CancelOutcome::AlreadyCancelling),
+                    Some("finished") => Ok(mongreldb_query::CancelOutcome::AlreadyFinished),
+                    _ => Ok(mongreldb_query::CancelOutcome::Accepted),
+                }
+            }
+            reqwest::StatusCode::CONFLICT => Ok(mongreldb_query::CancelOutcome::TooLate),
+            reqwest::StatusCode::NOT_FOUND => Ok(mongreldb_query::CancelOutcome::NotFound),
+            _ => Err(map_error(response)),
+        }
+    }
+
+    pub fn sql_query_status(
+        &self,
+        query_id: mongreldb_query::QueryId,
+    ) -> Result<Option<RemoteQueryStatus>> {
+        let capabilities = self.require_sql_cancellation()?;
+        if !capabilities.query_status {
+            return Err(KitError::Unsupported(
+                "server does not advertise SQL query status".into(),
+            ));
+        }
+        let response = self
+            .client
+            .get(self.url(&format!("/queries/{query_id}")))
+            .send()
+            .map_err(ioe)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        decode(response).map(Some)
+    }
+
+    fn best_effort_cancel(&self, query_id: mongreldb_query::QueryId) {
+        let _ = reqwest::blocking::Client::new()
+            .post(self.url(&format!("/queries/{query_id}/cancel")))
+            .timeout(Duration::from_secs(5))
+            .send();
     }
 
     /// Run a native typed query (`POST /kit/query`) returning rows with their
@@ -717,10 +981,38 @@ fn map_error(resp: reqwest::blocking::Response) -> KitError {
             EC_CHECK | EC_BAD => return KitError::Validation(msg),
             EC_CONFLICT => return KitError::Conflict(msg),
             EC_TRIGGER_VALIDATION => return KitError::TriggerValidation(msg),
+            "QUERY_CANCELLED" => {
+                return KitError::Cancelled {
+                    query_id: v["error"]["query_id"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    reason: msg,
+                }
+            }
+            "DEADLINE_EXCEEDED" => {
+                return KitError::DeadlineExceeded {
+                    query_id: v["error"]["query_id"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    timeout_ms: None,
+                }
+            }
+            "QUERY_ID_CONFLICT" => {
+                return KitError::QueryConflict(
+                    v["error"]["query_id"].as_str().unwrap_or(&msg).to_string(),
+                )
+            }
+            "TRANSACTION_ABORTED" => return KitError::TransactionAborted(msg),
             _ => {}
         }
     }
     KitError::Storage(format!("http {status}: {body}"))
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 fn ioe(e: reqwest::Error) -> KitError {
@@ -738,6 +1030,61 @@ fn decode<T: for<'de> Deserialize<'de>>(resp: reqwest::blocking::Response) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+
+    fn read_request(mut stream: &TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 4096];
+        let header_end = loop {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            bytes.extend_from_slice(&buffer[..read]);
+            if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap_or(0);
+        while bytes.len() < header_end + content_length {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        String::from_utf8(bytes).unwrap()
+    }
+
+    fn mock_server(
+        responses: Vec<(&'static str, &'static str)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                requests.push(read_request(&stream));
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            requests
+        });
+        (format!("http://{address}"), worker)
+    }
 
     #[test]
     fn cells_flat_encode() {
@@ -760,11 +1107,80 @@ mod tests {
             base_url: "http://x".into(),
             client: reqwest::blocking::Client::new(),
             schemas,
+            sql_cancellation: None,
         };
         let mut row = Map::new();
         row.insert("id".into(), json!(5));
         row.insert("name".into(), json!("a"));
         let cells = db.cells("t", &row).unwrap();
         assert_eq!(cells, vec![json!(1), json!(5), json!(2), json!("a")]);
+    }
+
+    #[test]
+    fn controlled_sql_requires_advertised_capability() {
+        let (url, server) =
+            mock_server(vec![("404 Not Found", ""), ("200 OK", r#"{"tables":{}}"#)]);
+        let database = RemoteDatabase::connect(&url).unwrap();
+        let error = database
+            .sql_rows_with_options(
+                "SELECT 1",
+                RemoteSqlOptions {
+                    timeout: Some(Duration::from_secs(1)),
+                    ..RemoteSqlOptions::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, KitError::Unsupported(_)));
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn controlled_sql_sends_client_id_and_server_timeout() {
+        let capabilities = r#"{"sql_cancellation":{"version":1,"client_query_ids":true,"cancel_endpoint":true,"query_status":true,"stream_disconnect_cancels":true}}"#;
+        let timeout = r#"{"error":{"code":"DEADLINE_EXCEEDED","message":"timed out","query_id":"11112222333344445555666677778888"}}"#;
+        let (url, server) = mock_server(vec![
+            ("200 OK", capabilities),
+            ("200 OK", r#"{"tables":{}}"#),
+            ("504 Gateway Timeout", timeout),
+        ]);
+        let database = RemoteDatabase::connect(&url).unwrap();
+        let query_id = "11112222333344445555666677778888".parse().unwrap();
+        let error = database
+            .sql_rows_with_options(
+                "SELECT 1",
+                RemoteSqlOptions {
+                    query_id: Some(query_id),
+                    timeout: Some(Duration::from_millis(250)),
+                    ..RemoteSqlOptions::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, KitError::DeadlineExceeded { .. }));
+        let requests = server.join().unwrap();
+        assert!(requests[2].starts_with("POST /sql "));
+        assert!(requests[2].contains(r#""query_id":"11112222333344445555666677778888""#));
+        assert!(requests[2].contains(r#""timeout_ms":250"#));
+        assert!(requests[2].contains(r#""format":"arrow""#));
+    }
+
+    #[test]
+    fn cancel_maps_accepted_response() {
+        let capabilities = r#"{"sql_cancellation":{"version":1,"client_query_ids":true,"cancel_endpoint":true,"query_status":true,"stream_disconnect_cancels":true}}"#;
+        let (url, server) = mock_server(vec![
+            ("200 OK", capabilities),
+            ("200 OK", r#"{"tables":{}}"#),
+            (
+                "202 Accepted",
+                r#"{"query_id":"aaaabbbbccccddddeeeeffff00001111","state":"cancellation_requested"}"#,
+            ),
+        ]);
+        let database = RemoteDatabase::connect(&url).unwrap();
+        let query_id = "aaaabbbbccccddddeeeeffff00001111".parse().unwrap();
+        assert_eq!(
+            database.cancel_sql(query_id).unwrap(),
+            mongreldb_query::CancelOutcome::Accepted
+        );
+        let requests = server.join().unwrap();
+        assert!(requests[2].starts_with("POST /queries/aaaabbbbccccddddeeeeffff00001111/cancel "));
     }
 }

@@ -29,5 +29,5 @@ ureq = "2"
 [workspace]
 
 [patch.crates-io]
-mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "0989f27588d797ac12e208ebfaba505732776463" }
-mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "0989f27588d797ac12e208ebfaba505732776463" }
+mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "33adb2e9e00ffc73ab1214e11964a32858d1247a" }
+mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "33adb2e9e00ffc73ab1214e11964a32858d1247a" }

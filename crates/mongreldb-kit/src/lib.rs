@@ -32,7 +32,11 @@ pub use mongreldb_core::{IndexBuildPolicy, TriggerConfig};
 pub use mongreldb_query::{CancelOutcome, QueryId};
 pub use query::JoinRow;
 #[cfg(feature = "remote")]
-pub use remote::{RemoteBatch, RemoteDatabase, RemoteOpResult, RemoteQueryRow, RemoteTransaction};
+pub use remote::{
+    RemoteBatch, RemoteDatabase, RemoteOpResult, RemoteQueryRow, RemoteQueryStatus,
+    RemoteSqlFormat, RemoteSqlOptions, RemoteSqlQueryHandle, RemoteTransaction,
+    SqlCancellationCapabilities,
+};
 pub use schema::Row;
 pub use txn::Transaction;
 
