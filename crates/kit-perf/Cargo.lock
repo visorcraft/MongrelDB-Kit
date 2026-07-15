@@ -2252,7 +2252,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "arrow",
  "bincode",
@@ -2270,7 +2270,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.54.0"
+version = "0.55.0"
 dependencies = [
  "hex",
  "regex",
