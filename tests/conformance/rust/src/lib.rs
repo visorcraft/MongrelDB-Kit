@@ -69,6 +69,8 @@ fn error_code(e: &KitError) -> String {
         KitError::DeadlineExceeded { .. } => "DEADLINE_EXCEEDED",
         KitError::QueryConflict(_) => "QUERY_ID_CONFLICT",
         KitError::TransactionAborted(_) => "TRANSACTION_ABORTED",
+        KitError::Unsupported(_) => "UNSUPPORTED",
+        KitError::Transport { .. } => "TRANSPORT",
     }
     .to_string()
 }
