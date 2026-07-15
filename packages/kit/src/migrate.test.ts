@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -72,6 +72,39 @@ function withDbSync(fn: (db: KitDatabase) => void): void {
 }
 
 describe('migrate', () => {
+	it('forwards default and per-statement SQL controls', async () => {
+		await withDb(async (db) => {
+			const startSql = vi.spyOn(db, 'startSql');
+			await migrate(
+				db,
+				new Schema([]),
+				[
+					{
+						version: 1,
+						name: 'controlled SQL',
+						up: async (ctx) => {
+							await ctx.sql('SELECT 1');
+							await ctx.sql('SELECT 2', {
+								timeoutMs: 2000,
+								queryId: '22222222222222222222222222222222'
+							});
+						}
+					}
+				],
+				{ sql: { timeoutMs: 1000, queryId: '11111111111111111111111111111111' } }
+			);
+
+			expect(startSql).toHaveBeenNthCalledWith(1, 'SELECT 1', {
+				timeoutMs: 1000,
+				queryId: '11111111111111111111111111111111'
+			});
+			expect(startSql).toHaveBeenNthCalledWith(2, 'SELECT 2', {
+				timeoutMs: 2000,
+				queryId: '22222222222222222222222222222222'
+			});
+		});
+	});
+
 	it('creates internal tables and records an applied migration', async () => {
 		await withDb(async (db) => {
 			const migrations: Migration[] = [

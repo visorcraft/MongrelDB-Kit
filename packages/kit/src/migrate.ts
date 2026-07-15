@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Database as NativeDatabase, Cell, RowJs } from '@visorcraft/mongreldb/native.js';
 import { ColumnType, IndexKindSpec, ConditionKind } from '@visorcraft/mongreldb/native.js';
-import { tableFromIPC } from 'apache-arrow';
-import { KitDatabase } from './db.js';
+import { KitDatabase, type SqlOptions } from './db.js';
 import type { Schema } from './schema.js';
 import { rowFromRowJs } from './rows.js';
 import type { TableSpec, ColumnSpec, IndexSpec, UniqueSpec, ForeignKeySpec, ColumnStorageType, PkValue } from './types.js';
@@ -99,7 +98,11 @@ export interface MigrationContext {
 	createView: (view: ViewSpec) => Promise<void> | void;
 	replaceView: (view: ViewSpec) => Promise<void> | void;
 	dropView: (name: string) => Promise<void> | void;
-	sql: (sql: string) => Promise<unknown[]> | unknown[];
+	sql: (sql: string, options?: SqlOptions) => Promise<unknown[]> | unknown[];
+}
+
+export interface MigrationOptions {
+	sql?: SqlOptions;
 }
 
 type MongrelSchemaSpec = {
@@ -389,10 +392,8 @@ function schemaCatalogJson(schema: Schema): string {
 	);
 }
 
-async function runSql(db: NativeDatabase, sql: string): Promise<unknown[]> {
-	const ipc = await db.sql(sql);
-	const arrowTable = tableFromIPC(ipc);
-	return [...arrowTable].map((row) => ({ ...row }));
+async function runSql(kit: KitDatabase, sql: string, options?: SqlOptions): Promise<unknown[]> {
+	return kit.sqlRows(sql, options);
 }
 
 async function acquireLock(kit: KitDatabase): Promise<void> {
@@ -493,7 +494,7 @@ function kitVersion(): string {
 	return '0.53.3';
 }
 
-function makeContext(kit: KitDatabase): MigrationContext {
+function makeContext(kit: KitDatabase, sqlOptions?: SqlOptions): MigrationContext {
 	return {
 		kit,
 		db: kit.nativeDb,
@@ -513,12 +514,12 @@ function makeContext(kit: KitDatabase): MigrationContext {
 		dropTrigger: (name: string) => {
 			kit.dropTriggerSync(name);
 		},
-		createVirtualTable: (table: VirtualTableSpec) => createVirtualTable(kit, table),
-		dropVirtualTable: (name: string) => dropVirtualTable(kit, name),
-		createView: (v: ViewSpec) => createView(kit, v),
-		replaceView: (v: ViewSpec) => replaceView(kit, v),
-		dropView: (name: string) => dropView(kit, name),
-		sql: (sql: string) => runSql(kit.nativeDb, sql)
+		createVirtualTable: (table: VirtualTableSpec) => createVirtualTable(kit, table, sqlOptions),
+		dropVirtualTable: (name: string) => dropVirtualTable(kit, name, sqlOptions),
+		createView: (v: ViewSpec) => createView(kit, v, sqlOptions),
+		replaceView: (v: ViewSpec) => replaceView(kit, v, sqlOptions),
+		dropView: (name: string) => dropView(kit, name, sqlOptions),
+		sql: (sql: string, options?: SqlOptions) => runSql(kit, sql, { ...sqlOptions, ...options })
 	};
 }
 
@@ -709,7 +710,12 @@ export function migrateSync(kit: KitDatabase, schema: Schema, migrations: Migrat
 	}
 }
 
-export async function migrate(kit: KitDatabase, schema: Schema, migrations: Migration[]): Promise<void> {
+export async function migrate(
+	kit: KitDatabase,
+	schema: Schema,
+	migrations: Migration[],
+	options: MigrationOptions = {}
+): Promise<void> {
 	await acquireLock(kit);
 
 	try {
@@ -726,7 +732,7 @@ export async function migrate(kit: KitDatabase, schema: Schema, migrations: Migr
 
 			try {
 				await kit.nativeDb.transaction(async () => {
-					await migration.up(makeContext(kit));
+					await migration.up(makeContext(kit, options.sql));
 				});
 				await updateMigrationStatus(kit, migration.version, 'applied');
 			} catch (cause) {
@@ -785,29 +791,30 @@ export async function createTable(kit: KitDatabase, table: TableSpec): Promise<v
 
 export async function createVirtualTable(
 	kit: KitDatabase,
-	table: VirtualTableSpec
+	table: VirtualTableSpec,
+	options?: SqlOptions
 ): Promise<void> {
-	await runSql(kit.nativeDb, createVirtualTableSql(table));
+	await runSql(kit, createVirtualTableSql(table), options);
 }
 
-export async function dropVirtualTable(kit: KitDatabase, name: string): Promise<void> {
-	await runSql(kit.nativeDb, dropVirtualTableSql(name));
+export async function dropVirtualTable(kit: KitDatabase, name: string, options?: SqlOptions): Promise<void> {
+	await runSql(kit, dropVirtualTableSql(name), options);
 }
 
 /** Create (or replace — the engine overwrites) a SQL view. Async-only: runs
  * `CREATE VIEW` through the kit's SQL surface. */
-export async function createView(kit: KitDatabase, v: ViewSpec): Promise<void> {
-	await runSql(kit.nativeDb, createViewSql(v));
+export async function createView(kit: KitDatabase, v: ViewSpec, options?: SqlOptions): Promise<void> {
+	await runSql(kit, createViewSql(v), options);
 }
 
 /** Replace a SQL view (re-issues `CREATE VIEW`; the engine overwrites). */
-export async function replaceView(kit: KitDatabase, v: ViewSpec): Promise<void> {
-	await runSql(kit.nativeDb, createViewSql(v));
+export async function replaceView(kit: KitDatabase, v: ViewSpec, options?: SqlOptions): Promise<void> {
+	await runSql(kit, createViewSql(v), options);
 }
 
 /** Drop a SQL view by name. Idempotent (`DROP VIEW IF EXISTS`). */
-export async function dropView(kit: KitDatabase, name: string): Promise<void> {
-	await runSql(kit.nativeDb, dropViewSql(name));
+export async function dropView(kit: KitDatabase, name: string, options?: SqlOptions): Promise<void> {
+	await runSql(kit, dropViewSql(name), options);
 }
 
 /**
