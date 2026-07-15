@@ -7,8 +7,3 @@ members = [
     "tests/conformance/rust",
 ]
 resolver = "2"
-
-[patch.crates-io]
-mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "ab67f9a042671fed57c1e7e9f350641b0aa32b2c" }
-mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "ab67f9a042671fed57c1e7e9f350641b0aa32b2c" }
-mongreldb-server = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "ab67f9a042671fed57c1e7e9f350641b0aa32b2c" }

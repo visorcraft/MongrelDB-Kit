@@ -26,7 +26,7 @@ if [[ "$NEW" == "$OLD" ]]; then
 fi
 echo "Pointing Kit at MongrelDB $OLD -> $NEW"
 
-sed -i '/^\[patch.crates-io\]/,/^mongreldb-query = /d' Cargo.toml
+sed -i '/^\[patch.crates-io\]/,/^mongreldb-server = /d' Cargo.toml
 sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$NEW\"/" \
   crates/mongreldb-kit/Cargo.toml
 sed -i "s/mongreldb-query = \"$OLD\"/mongreldb-query = \"$NEW\"/" \

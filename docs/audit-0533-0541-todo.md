@@ -131,8 +131,9 @@ Implementation and qualification source:
 
 - MongrelDB: `ab67f9a042671fed57c1e7e9f350641b0aa32b2c`.
 - MongrelDB Kit: `b15370f0a3cd97af67bbfc976eadd2f99372d98e`.
-- Root Kit patches and `crates/kit-perf/Cargo.toml` all pin the exact MongrelDB
-  revision above.
+- At qualification time, root Kit patches and `crates/kit-perf/Cargo.toml`
+  pinned the exact MongrelDB revision above. Release bumps strip those dev-only
+  patches and resolve the published engine version.
 - Both implementation trees were clean and pushed before this evidence-only
   ledger update.
 

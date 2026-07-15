@@ -17,8 +17,8 @@ name = "bench-daemon"
 path = "src/bench_daemon.rs"
 
 [dependencies]
-mongreldb-core = { version = "0.54.1" }
-mongreldb-kit = { path = "../mongreldb-kit", version = "0.53.3" }
+mongreldb-core = { version = "0.55.0" }
+mongreldb-kit = { path = "../mongreldb-kit", version = "0.54.0" }
 serde_json = { version = "1", features = ["preserve_order"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = "3"
@@ -28,6 +28,3 @@ ureq = "2"
 # workspace member, mirrors mongreldb-perf in the engine repo.
 [workspace]
 
-[patch.crates-io]
-mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "ab67f9a042671fed57c1e7e9f350641b0aa32b2c" }
-mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "ab67f9a042671fed57c1e7e9f350641b0aa32b2c" }
