@@ -37,6 +37,17 @@ pub enum KitError {
     InvalidCredentials(String),
     #[error("permission denied: {0}")]
     PermissionDenied(String),
+    #[error("query {query_id} cancelled: {reason}")]
+    Cancelled { query_id: String, reason: String },
+    #[error("query {query_id} deadline exceeded")]
+    DeadlineExceeded {
+        query_id: String,
+        timeout_ms: Option<u64>,
+    },
+    #[error("query id conflict: {0}")]
+    QueryConflict(String),
+    #[error("transaction aborted: {0}")]
+    TransactionAborted(String),
 }
 
 impl From<std::io::Error> for KitError {
@@ -131,6 +142,26 @@ impl From<mongreldb_query::MongrelQueryError> for KitError {
             MongrelQueryError::Schema(msg) => KitError::Validation(msg),
             MongrelQueryError::Arrow(msg) | MongrelQueryError::DataFusion(msg) => {
                 KitError::Storage(msg)
+            }
+            MongrelQueryError::QueryCancelled {
+                query_id, reason, ..
+            } => KitError::Cancelled {
+                query_id: query_id.to_string(),
+                reason: format!("{reason:?}"),
+            },
+            MongrelQueryError::DeadlineExceeded {
+                query_id,
+                timeout_ms,
+                ..
+            } => KitError::DeadlineExceeded {
+                query_id: query_id.to_string(),
+                timeout_ms,
+            },
+            MongrelQueryError::QueryIdConflict { query_id } => {
+                KitError::QueryConflict(query_id.to_string())
+            }
+            MongrelQueryError::TransactionAborted => {
+                KitError::TransactionAborted("only ROLLBACK is allowed".into())
             }
             _ => KitError::Storage(e.to_string()),
         }

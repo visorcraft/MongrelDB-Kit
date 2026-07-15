@@ -34,6 +34,20 @@ pub fn read_arrow_ipc(bytes: &[u8]) -> Result<Vec<RecordBatch>> {
 /// daemon and the NAPI addon both produce. Mirrors the node addon's
 /// `native_cols_to_ipc_from_batches`.
 pub fn batches_to_ipc(batches: &[RecordBatch]) -> Result<Vec<u8>> {
+    batches_to_ipc_with_checkpoint(batches, || Ok(()))
+}
+
+pub(crate) fn batches_to_ipc_controlled(
+    batches: &[RecordBatch],
+    query: &mongreldb_query::RegisteredSqlQuery,
+) -> Result<Vec<u8>> {
+    batches_to_ipc_with_checkpoint(batches, || query.checkpoint().map_err(KitError::from))
+}
+
+fn batches_to_ipc_with_checkpoint(
+    batches: &[RecordBatch],
+    mut checkpoint: impl FnMut() -> Result<()>,
+) -> Result<Vec<u8>> {
     let schema = batches
         .first()
         .map(|b| b.schema())
@@ -42,9 +56,13 @@ pub fn batches_to_ipc(batches: &[RecordBatch]) -> Result<Vec<u8>> {
     let mut writer =
         FileWriter::try_new(&mut out, &schema).map_err(|e| KitError::Storage(e.to_string()))?;
     for batch in batches {
-        writer
-            .write(batch)
-            .map_err(|e| KitError::Storage(format!("arrow ipc encode: {e}")))?;
+        for offset in (0..batch.num_rows()).step_by(256) {
+            checkpoint()?;
+            let length = 256.min(batch.num_rows() - offset);
+            writer
+                .write(&batch.slice(offset, length))
+                .map_err(|e| KitError::Storage(format!("arrow ipc encode: {e}")))?;
+        }
     }
     writer
         .finish()
@@ -70,9 +88,36 @@ pub fn batch_to_rows(b: &RecordBatch) -> Result<Vec<Map<String, Value>>> {
 
 /// Flatten a slice of batches into a single list of JSON-row maps.
 pub fn batches_to_rows(batches: &[RecordBatch]) -> Result<Vec<Map<String, Value>>> {
+    batches_to_rows_with_checkpoint(batches, || Ok(()))
+}
+
+pub(crate) fn batches_to_rows_controlled(
+    batches: &[RecordBatch],
+    query: &mongreldb_query::RegisteredSqlQuery,
+) -> Result<Vec<Map<String, Value>>> {
+    batches_to_rows_with_checkpoint(batches, || query.checkpoint().map_err(KitError::from))
+}
+
+fn batches_to_rows_with_checkpoint(
+    batches: &[RecordBatch],
+    mut checkpoint: impl FnMut() -> Result<()>,
+) -> Result<Vec<Map<String, Value>>> {
     let mut rows = Vec::new();
     for batch in batches {
-        rows.extend(batch_to_rows(batch)?);
+        let schema = batch.schema();
+        for row_index in 0..batch.num_rows() {
+            if row_index % 256 == 0 {
+                checkpoint()?;
+            }
+            let mut row = Map::new();
+            for (column_index, field) in schema.fields().iter().enumerate() {
+                row.insert(
+                    field.name().clone(),
+                    cell_value(batch.column(column_index).as_ref(), row_index),
+                );
+            }
+            rows.push(row);
+        }
     }
     Ok(rows)
 }

@@ -65,6 +65,10 @@ fn error_code(e: &KitError) -> String {
         KitError::AuthNotRequired(_) => "AUTH_NOT_REQUIRED",
         KitError::InvalidCredentials(_) => "INVALID_CREDENTIALS",
         KitError::PermissionDenied(_) => "PERMISSION_DENIED",
+        KitError::Cancelled { .. } => "QUERY_CANCELLED",
+        KitError::DeadlineExceeded { .. } => "DEADLINE_EXCEEDED",
+        KitError::QueryConflict(_) => "QUERY_ID_CONFLICT",
+        KitError::TransactionAborted(_) => "TRANSACTION_ABORTED",
     }
     .to_string()
 }

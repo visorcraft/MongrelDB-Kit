@@ -17,7 +17,7 @@ name = "bench-daemon"
 path = "src/bench_daemon.rs"
 
 [dependencies]
-mongreldb-core = { version = "0.53.3" }
+mongreldb-core = { version = "0.54.1" }
 mongreldb-kit = { path = "../mongreldb-kit", version = "0.53.3" }
 serde_json = { version = "1", features = ["preserve_order"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -27,3 +27,7 @@ ureq = "2"
 # Standalone crate (rusqlite's bundled build is a heavy C compile) — not a
 # workspace member, mirrors mongreldb-perf in the engine repo.
 [workspace]
+
+[patch.crates-io]
+mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "0989f27588d797ac12e208ebfaba505732776463" }
+mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "0989f27588d797ac12e208ebfaba505732776463" }

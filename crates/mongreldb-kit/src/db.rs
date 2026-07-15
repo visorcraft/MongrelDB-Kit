@@ -49,6 +49,44 @@ impl OpenOptions {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SqlOptions {
+    pub query_id: Option<mongreldb_query::QueryId>,
+    pub timeout: Option<std::time::Duration>,
+}
+
+pub struct SqlQueryHandle {
+    query_id: mongreldb_query::QueryId,
+    session: Arc<mongreldb_query::MongrelSession>,
+    worker: Option<std::thread::JoinHandle<Result<Vec<arrow::record_batch::RecordBatch>>>>,
+}
+
+impl SqlQueryHandle {
+    pub fn id(&self) -> mongreldb_query::QueryId {
+        self.query_id
+    }
+
+    pub fn cancel(&self) -> mongreldb_query::CancelOutcome {
+        self.session.cancel_query(self.query_id)
+    }
+
+    pub fn wait(mut self) -> Result<Vec<arrow::record_batch::RecordBatch>> {
+        self.worker
+            .take()
+            .expect("SQL worker is present")
+            .join()
+            .map_err(|_| KitError::Storage("SQL worker panicked".into()))?
+    }
+}
+
+impl Drop for SqlQueryHandle {
+    fn drop(&mut self) {
+        if self.worker.is_some() {
+            let _ = self.session.cancel_query(self.query_id);
+        }
+    }
+}
+
 /// A named default-value provider registered by the application.
 pub type DefaultProvider = Box<dyn Fn() -> Value + Send + Sync>;
 
@@ -243,7 +281,7 @@ pub struct Database {
     /// than opening one per `sql()` call — mirroring how the daemon and any
     /// long-lived application use MongrelDB. Built on first use so tables
     /// created in `Database::create` are visible to it.
-    pub(crate) session: parking_lot::Mutex<Option<mongreldb_query::MongrelSession>>,
+    pub(crate) session: parking_lot::RwLock<Option<Arc<mongreldb_query::MongrelSession>>>,
 }
 
 impl Database {
@@ -259,7 +297,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -282,7 +320,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -297,7 +335,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -320,7 +358,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -340,7 +378,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -367,7 +405,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -392,7 +430,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -416,7 +454,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -447,7 +485,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -470,7 +508,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -495,7 +533,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -526,7 +564,7 @@ impl Database {
             schema,
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
-            session: parking_lot::Mutex::new(None),
+            session: parking_lot::RwLock::new(None),
         })
     }
 
@@ -558,7 +596,7 @@ impl Database {
         self.inner.refresh_principal().map_err(KitError::from)?;
         // Clear the SQL session so cached query results (which bypass the
         // permission check) don't serve stale data after a permission change.
-        *self.session.lock() = None;
+        *self.session.write() = None;
         Ok(())
     }
 
@@ -1561,19 +1599,73 @@ impl Database {
     /// that creates/drops tables, call [`Database::refresh_sql_session`] so the
     /// session sees the new table set.
     pub fn sql(&self, statement: &str) -> Result<Vec<arrow::record_batch::RecordBatch>> {
-        let session = match self.session.lock().take() {
-            Some(s) => s,
-            None => {
-                mongreldb_query::MongrelSession::open(self.core_arc()).map_err(KitError::from)?
-            }
-        };
-        let runtime = sql_runtime();
-        let result = runtime
-            .block_on(session.run(statement))
-            .map_err(KitError::from);
-        // Preserve the session (and any views/state created during the call).
-        *self.session.lock() = Some(session);
-        result
+        self.sql_with_options(statement, SqlOptions::default())
+    }
+
+    fn sql_session(&self) -> Result<Arc<mongreldb_query::MongrelSession>> {
+        if let Some(session) = self.session.read().as_ref() {
+            return Ok(Arc::clone(session));
+        }
+        let session = Arc::new(
+            mongreldb_query::MongrelSession::open(self.core_arc()).map_err(KitError::from)?,
+        );
+        let mut cached = self.session.write();
+        Ok(Arc::clone(cached.get_or_insert(session)))
+    }
+
+    #[doc(hidden)]
+    pub fn set_sql_test_hook(&self, hook: Option<mongreldb_query::SqlTestHook>) -> Result<()> {
+        self.sql_session()?.set_test_hook(hook);
+        Ok(())
+    }
+
+    pub fn start_sql(
+        &self,
+        statement: impl Into<String>,
+        options: SqlOptions,
+    ) -> Result<SqlQueryHandle> {
+        let session = self.sql_session()?;
+        let query = session
+            .register_query(mongreldb_query::SqlQueryOptions {
+                query_id: options.query_id,
+                timeout: options.timeout,
+                ..mongreldb_query::SqlQueryOptions::default()
+            })
+            .map_err(KitError::from)?;
+        let query_id = query.id();
+        let registration = mongreldb_query::RegisteredQueryGuard::new(query);
+        let worker_session = Arc::clone(&session);
+        let statement = statement.into();
+        let worker = std::thread::Builder::new()
+            .name(format!("mongreldb-kit-sql-{query_id}"))
+            .spawn(move || {
+                sql_runtime()
+                    .block_on(worker_session.run_with_query(&statement, registration.into_query()))
+                    .map_err(KitError::from)
+            })
+            .map_err(|error| KitError::Storage(error.to_string()))?;
+        Ok(SqlQueryHandle {
+            query_id,
+            session,
+            worker: Some(worker),
+        })
+    }
+
+    pub fn sql_with_options(
+        &self,
+        statement: &str,
+        options: SqlOptions,
+    ) -> Result<Vec<arrow::record_batch::RecordBatch>> {
+        self.start_sql(statement, options)?.wait()
+    }
+
+    pub fn cancel_sql(&self, query_id: mongreldb_query::QueryId) -> mongreldb_query::CancelOutcome {
+        self.session
+            .read()
+            .as_ref()
+            .map_or(mongreldb_query::CancelOutcome::NotFound, |session| {
+                session.cancel_query(query_id)
+            })
     }
 
     /// (Re)build the cached SQL session so it sees the current table set. The
@@ -1583,7 +1675,7 @@ impl Database {
     pub fn refresh_sql_session(&self) -> Result<()> {
         let session =
             mongreldb_query::MongrelSession::open(self.core_arc()).map_err(KitError::from)?;
-        *self.session.lock() = Some(session);
+        *self.session.write() = Some(Arc::new(session));
         Ok(())
     }
 
@@ -1593,16 +1685,60 @@ impl Database {
     /// `tableFromIPC`, or [`crate::arrow_util::read_arrow_ipc`]. Empty for
     /// DDL/DML.
     pub fn sql_arrow(&self, statement: &str) -> Result<Vec<u8>> {
-        let batches = self.sql(statement)?;
-        crate::arrow_util::batches_to_ipc(&batches)
+        self.sql_arrow_with_options(statement, SqlOptions::default())
+    }
+
+    pub fn sql_arrow_with_options(&self, statement: &str, options: SqlOptions) -> Result<Vec<u8>> {
+        self.sql_serialized_with_options(statement, options, |output| {
+            crate::arrow_util::batches_to_ipc_controlled(output.batches(), output.query())
+        })
     }
 
     /// Like [`Database::sql`], but materializes the result rows into JSON-style
     /// maps (column name → value) for callers that don't want to take a direct
     /// Arrow dependency. Empty for DDL/DML.
     pub fn sql_rows(&self, statement: &str) -> Result<Vec<serde_json::Map<String, Value>>> {
-        let batches = self.sql(statement)?;
-        crate::arrow_util::batches_to_rows(&batches)
+        self.sql_rows_with_options(statement, SqlOptions::default())
+    }
+
+    pub fn sql_rows_with_options(
+        &self,
+        statement: &str,
+        options: SqlOptions,
+    ) -> Result<Vec<serde_json::Map<String, Value>>> {
+        self.sql_serialized_with_options(statement, options, |output| {
+            crate::arrow_util::batches_to_rows_controlled(output.batches(), output.query())
+        })
+    }
+
+    fn sql_serialized_with_options<T>(
+        &self,
+        statement: &str,
+        options: SqlOptions,
+        serialize: impl FnOnce(&mongreldb_query::ManagedQueryBatches) -> Result<T>,
+    ) -> Result<T> {
+        let session = self.sql_session()?;
+        let query = session
+            .register_query(mongreldb_query::SqlQueryOptions {
+                query_id: options.query_id,
+                timeout: options.timeout,
+                ..mongreldb_query::SqlQueryOptions::default()
+            })
+            .map_err(KitError::from)?;
+        let output = sql_runtime()
+            .block_on(session.run_with_query_for_serialization(statement, query))
+            .map_err(KitError::from)?;
+        session.fire_test_hook(mongreldb_query::SqlTestHookPoint::BeforeSerializationBatch);
+        match serialize(&output) {
+            Ok(value) => {
+                output.complete();
+                Ok(value)
+            }
+            Err(error) => {
+                output.fail();
+                Err(error)
+            }
+        }
     }
 
     /// Direct HOT (PK → RowId) lookup via the core engine — no full-row
@@ -1764,15 +1900,15 @@ pub(crate) fn create_core_table(db: &CoreDatabase, name: &str, schema: CoreSchem
     Ok(())
 }
 
-/// A cached single-threaded tokio runtime for driving `MongrelSession::run`
-/// (which is async) from the kit's otherwise-blocking SQL surface. Built once
-/// per process and reused; `CurrentThread` is sufficient since the kit never
-/// runs concurrent SQL statements on the same database from one thread.
+/// A cached tokio runtime for driving `MongrelSession` from the kit's blocking
+/// SQL surface. Multiple workers let independent database sessions progress
+/// when one query is paused inside a synchronous DataFusion hook.
 fn sql_runtime() -> &'static tokio::runtime::Runtime {
     use std::sync::OnceLock;
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RT.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
             .enable_all()
             .build()
             .expect("failed to build kit SQL tokio runtime")

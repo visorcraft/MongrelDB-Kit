@@ -2639,9 +2639,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.53.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e339f899e30c7faceb55dafecbb5169a7872a904ea43dd4d980569ba1db91fe"
+version = "0.54.1"
+source = "git+https://github.com/visorcraft/MongrelDB.git?rev=0989f27588d797ac12e208ebfaba505732776463#0989f27588d797ac12e208ebfaba505732776463"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2731,9 +2730,8 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-query"
-version = "0.53.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b74825b8f5561cfae94bb573c14b382b65bc21b888ea44ebb27a8c7cb85a47a3"
+version = "0.54.1"
+source = "git+https://github.com/visorcraft/MongrelDB.git?rev=0989f27588d797ac12e208ebfaba505732776463#0989f27588d797ac12e208ebfaba505732776463"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2741,11 +2739,13 @@ dependencies = [
  "datafusion",
  "datafusion-datasource",
  "futures",
+ "getrandom 0.2.17",
  "mongreldb-core",
  "parking_lot",
  "regex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlparser",
  "thiserror 1.0.69",
  "tokio",
@@ -2753,19 +2753,20 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-server"
-version = "0.53.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34024ec11a77e8857a15e67a59c39c5ff48cc7371b5aa563bc5e38e79c52029b"
+version = "0.54.1"
+source = "git+https://github.com/visorcraft/MongrelDB.git?rev=0989f27588d797ac12e208ebfaba505732776463#0989f27588d797ac12e208ebfaba505732776463"
 dependencies = [
  "arrow",
  "axum",
  "bincode",
  "futures",
+ "hmac",
  "libc",
  "mongreldb-core",
  "mongreldb-query",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tower",
 ]

@@ -93,6 +93,26 @@ create_exception!(
     PermissionDeniedError,
     pyo3::exceptions::PyException
 );
+create_exception!(
+    mongreldb_kit_py,
+    QueryCancelledError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    QueryTimeoutError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    QueryIdConflictError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    TransactionAbortedError,
+    pyo3::exceptions::PyException
+);
 
 fn map_err(e: KitError) -> PyErr {
     let msg = e.to_string();
@@ -110,6 +130,10 @@ fn map_err(e: KitError) -> PyErr {
         KitError::AuthNotRequired(_) => AuthNotRequiredError::new_err(msg),
         KitError::InvalidCredentials(_) => InvalidCredentialsError::new_err(msg),
         KitError::PermissionDenied(_) => PermissionDeniedError::new_err(msg),
+        KitError::Cancelled { .. } => QueryCancelledError::new_err(msg),
+        KitError::DeadlineExceeded { .. } => QueryTimeoutError::new_err(msg),
+        KitError::QueryConflict(_) => QueryIdConflictError::new_err(msg),
+        KitError::TransactionAborted(_) => TransactionAbortedError::new_err(msg),
     }
 }
 
@@ -1761,6 +1785,16 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "PermissionDeniedError",
         py.get_type::<PermissionDeniedError>(),
     )?;
+    m.add("QueryCancelledError", py.get_type::<QueryCancelledError>())?;
+    m.add("QueryTimeoutError", py.get_type::<QueryTimeoutError>())?;
+    m.add(
+        "QueryIdConflictError",
+        py.get_type::<QueryIdConflictError>(),
+    )?;
+    m.add(
+        "TransactionAbortedError",
+        py.get_type::<TransactionAbortedError>(),
+    )?;
 
     set_code(m, "ValidationError", "VALIDATION")?;
     set_code(m, "DuplicateError", "DUPLICATE")?;
@@ -1775,6 +1809,10 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     set_code(m, "AuthNotRequiredError", "AUTH_NOT_REQUIRED")?;
     set_code(m, "InvalidCredentialsError", "INVALID_CREDENTIALS")?;
     set_code(m, "PermissionDeniedError", "PERMISSION_DENIED")?;
+    set_code(m, "QueryCancelledError", "QUERY_CANCELLED")?;
+    set_code(m, "QueryTimeoutError", "DEADLINE_EXCEEDED")?;
+    set_code(m, "QueryIdConflictError", "QUERY_ID_CONFLICT")?;
+    set_code(m, "TransactionAbortedError", "TRANSACTION_ABORTED")?;
 
     Ok(())
 }
