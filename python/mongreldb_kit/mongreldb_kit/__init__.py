@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from contextlib import contextmanager
 from typing import Any, Iterable, Optional
 
@@ -16,6 +17,12 @@ from .mongreldb_kit_py import (
     StorageError,
     TriggerValidationError,
     ValidationError,
+    QueryCancelledError,
+    QueryTimeoutError,
+    QueryIdConflictError,
+    TransactionAbortedError,
+    UnsupportedError,
+    TransportError,
     migrate as _migrate,
     encode_pk as _encode_pk,
     encode_unique_key as _encode_unique_key,
@@ -25,7 +32,7 @@ from .mongreldb_kit_py import Database as _Database
 from .mongreldb_kit_py import Transaction as _Transaction
 
 from ._schema import Column, ForeignKey, Index, Table, UniqueConstraint
-from .remote import RemoteDatabase, RemoteTransaction
+from .remote import RemoteDatabase, RemoteSqlQueryHandle, RemoteTransaction
 
 __all__ = [
     "Database",
@@ -65,6 +72,12 @@ __all__ = [
     "StorageError",
     "TriggerValidationError",
     "ValidationError",
+    "QueryCancelledError",
+    "QueryTimeoutError",
+    "QueryIdConflictError",
+    "TransactionAbortedError",
+    "UnsupportedError",
+    "TransportError",
     "Column",
     "ForeignKey",
     "Index",
@@ -72,6 +85,7 @@ __all__ = [
     "UniqueConstraint",
     "RemoteDatabase",
     "RemoteTransaction",
+    "RemoteSqlQueryHandle",
 ]
 
 
@@ -304,7 +318,25 @@ class Database:
         """Memtable length (uncommitted staged rows) for a table."""
         return self._handle.table_memtable_len(table)
 
-    def sql_rows(self, sql: str) -> list[dict[str, Any]]:
+    def start_sql(
+        self,
+        sql: str,
+        *,
+        timeout_ms: Optional[int] = None,
+        query_id: Optional[str] = None,
+    ) -> Any:
+        """Start SQL and return a thread-safe handle with ``id``, ``cancel()``,
+        and blocking ``result()`` methods.
+        """
+        return self._handle.start_sql(sql, timeout_ms, query_id)
+
+    def sql_rows(
+        self,
+        sql: str,
+        *,
+        timeout_ms: Optional[int] = None,
+        query_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
         """Run a SQL statement; return the result rows as a list of dicts.
 
         Empty for DDL/DML. Writes through SQL bypass kit-level constraints
@@ -312,15 +344,40 @@ class Database:
         transactional API for constrained writes. The engine's own declarative
         constraints (unique, FK, check) still apply.
         """
-        return self._handle.sql_rows(sql)
+        return self._handle.sql_rows(sql, timeout_ms, query_id)
 
-    def sql_arrow(self, sql: str) -> bytes:
+    def sql_arrow(
+        self,
+        sql: str,
+        *,
+        timeout_ms: Optional[int] = None,
+        query_id: Optional[str] = None,
+    ) -> bytes:
         """Run a SQL statement; return the result as raw Arrow IPC bytes.
 
         Decode with ``pyarrow.ipc.open_file``. Empty for DDL/DML. The same
         bypass caveats as :meth:`sql_rows` apply.
         """
-        return self._handle.sql_arrow(sql)
+        return self._handle.sql_arrow(sql, timeout_ms, query_id)
+
+    async def sql_rows_async(
+        self,
+        sql: str,
+        *,
+        timeout_ms: Optional[int] = None,
+        query_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Run SQL without blocking the asyncio event loop.
+
+        Cancelling this task sends native cancellation before propagating
+        ``asyncio.CancelledError``.
+        """
+        handle = self.start_sql(sql, timeout_ms=timeout_ms, query_id=query_id)
+        try:
+            return await asyncio.to_thread(handle.result)
+        except asyncio.CancelledError:
+            handle.cancel()
+            raise
 
     def snapshot_epoch(self) -> int:
         """The current visible commit epoch (monotonically increasing version)."""

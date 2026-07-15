@@ -3,7 +3,10 @@
 //! Exposes a small Python API over `mongreldb-kit`: database open/create,
 //! transactions with CRUD, migrations, and stable error categories.
 
-use mongreldb_kit::{ApproxAggKind, Database, IncrementalAggKind, KitError, Transaction};
+use mongreldb_kit::{
+    ApproxAggKind, CancelOutcome, Database, IncrementalAggKind, KitError, QueryId, SqlOptions,
+    SqlQueryHandle, Transaction,
+};
 use mongreldb_kit_core::keys::{
     encode_pk as core_encode_pk, encode_row_guard_key as core_encode_row_guard_key,
     encode_unique_key as core_encode_unique_key, KeyComponent,
@@ -20,7 +23,8 @@ use pyo3::types::{PyDict, PyList, PyTuple};
 use pyo3::IntoPyObjectExt;
 use serde_json::{Map, Number, Value};
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Python-visible exception hierarchy. Each class gets a stable `code` attribute
@@ -113,6 +117,16 @@ create_exception!(
     TransactionAbortedError,
     pyo3::exceptions::PyException
 );
+create_exception!(
+    mongreldb_kit_py,
+    UnsupportedError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    TransportError,
+    pyo3::exceptions::PyException
+);
 
 fn map_err(e: KitError) -> PyErr {
     let msg = e.to_string();
@@ -134,6 +148,8 @@ fn map_err(e: KitError) -> PyErr {
         KitError::DeadlineExceeded { .. } => QueryTimeoutError::new_err(msg),
         KitError::QueryConflict(_) => QueryIdConflictError::new_err(msg),
         KitError::TransactionAborted(_) => TransactionAbortedError::new_err(msg),
+        KitError::Unsupported(_) => UnsupportedError::new_err(msg),
+        KitError::Transport { .. } => TransportError::new_err(msg),
     }
 }
 
@@ -147,17 +163,71 @@ fn set_code(m: &Bound<'_, PyModule>, name: &str, code: &str) -> PyResult<()> {
     Ok(())
 }
 
+fn sql_options(timeout_ms: Option<u64>, query_id: Option<&str>) -> PyResult<SqlOptions> {
+    if timeout_ms == Some(0) {
+        return Err(ValidationError::new_err("timeout_ms must be positive"));
+    }
+    let query_id = query_id
+        .map(str::parse::<QueryId>)
+        .transpose()
+        .map_err(|error| map_err(KitError::from(error)))?;
+    Ok(SqlOptions {
+        query_id,
+        timeout: timeout_ms.map(Duration::from_millis),
+    })
+}
+
+#[pyclass(name = "SqlQueryHandle")]
+pub struct PySqlQueryHandle {
+    query_id: QueryId,
+    database: Arc<Database>,
+    handle: Mutex<Option<SqlQueryHandle>>,
+}
+
+#[pymethods]
+impl PySqlQueryHandle {
+    #[getter]
+    fn id(&self) -> String {
+        self.query_id.to_string()
+    }
+
+    fn cancel(&self) -> bool {
+        matches!(
+            self.database.cancel_sql(self.query_id),
+            CancelOutcome::Accepted | CancelOutcome::AlreadyCancelling
+        )
+    }
+
+    fn result(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let handle = self
+            .handle
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("SQL query handle lock poisoned"))?
+            .take()
+            .ok_or_else(|| PyRuntimeError::new_err("SQL query result already consumed"))?;
+        let rows = py
+            .detach(move || {
+                let batches = handle.wait()?;
+                mongreldb_kit::arrow_util::batches_to_rows(&batches)
+            })
+            .map_err(map_err)?;
+        rows.into_iter()
+            .map(|row| json_map_to_pydict(py, &row))
+            .collect()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Database", unsendable)]
+#[pyclass(name = "Database")]
 pub struct PyDatabase {
-    // Held behind `Rc` so an open transaction can pin the engine alive: a
-    // `PyTransaction` keeps a clone of this `Rc`, so closing the handle (or
+    // Held behind `Arc` so transactions and SQL query handles can pin the
+    // engine alive and cancellation can run from another Python thread.
     // finalizing it during interpreter shutdown) never frees the `Database`
     // out from under a live transaction that still borrows it.
-    db: Option<Rc<Database>>,
+    db: Option<Arc<Database>>,
 }
 
 impl PyDatabase {
@@ -172,7 +242,7 @@ impl PyDatabase {
             .db
             .as_mut()
             .ok_or_else(|| PyRuntimeError::new_err("database already closed"))?;
-        Rc::get_mut(db).ok_or_else(|| {
+        Arc::get_mut(db).ok_or_else(|| {
             PyRuntimeError::new_err("cannot mutate the database while a transaction is open")
         })
     }
@@ -184,7 +254,7 @@ impl PyDatabase {
     fn open(path: &str) -> PyResult<Self> {
         let db = Database::open(Path::new(path)).map_err(map_err)?;
         Ok(Self {
-            db: Some(Rc::new(db)),
+            db: Some(Arc::new(db)),
         })
     }
 
@@ -192,7 +262,7 @@ impl PyDatabase {
     fn open_encrypted(path: &str, passphrase: &str) -> PyResult<Self> {
         let db = Database::open_encrypted(Path::new(path), passphrase).map_err(map_err)?;
         Ok(Self {
-            db: Some(Rc::new(db)),
+            db: Some(Arc::new(db)),
         })
     }
 
@@ -202,7 +272,7 @@ impl PyDatabase {
         let db =
             Database::create_encrypted(Path::new(path), schema, passphrase).map_err(map_err)?;
         Ok(Self {
-            db: Some(Rc::new(db)),
+            db: Some(Arc::new(db)),
         })
     }
 
@@ -211,7 +281,7 @@ impl PyDatabase {
         let schema: KitSchema = serde_json::from_str(schema_json).map_err(py_json_err)?;
         let db = Database::create(Path::new(path), schema).map_err(map_err)?;
         Ok(Self {
-            db: Some(Rc::new(db)),
+            db: Some(Arc::new(db)),
         })
     }
 
@@ -223,7 +293,7 @@ impl PyDatabase {
         let db = Database::open_with_credentials(Path::new(path), username, password)
             .map_err(map_err)?;
         Ok(Self {
-            db: Some(Rc::new(db)),
+            db: Some(Arc::new(db)),
         })
     }
 
@@ -245,7 +315,7 @@ impl PyDatabase {
         )
         .map_err(map_err)?;
         Ok(Self {
-            db: Some(Rc::new(db)),
+            db: Some(Arc::new(db)),
         })
     }
 
@@ -265,7 +335,7 @@ impl PyDatabase {
         )
         .map_err(map_err)?;
         Ok(Self {
-            db: Some(Rc::new(db)),
+            db: Some(Arc::new(db)),
         })
     }
 
@@ -289,7 +359,7 @@ impl PyDatabase {
         )
         .map_err(map_err)?;
         Ok(Self {
-            db: Some(Rc::new(db)),
+            db: Some(Arc::new(db)),
         })
     }
 
@@ -326,7 +396,7 @@ impl PyDatabase {
                 .ok_or_else(|| PyRuntimeError::new_err("database already closed"))?
         };
         let txn = db.begin().map_err(map_err)?;
-        // Safety: `txn` borrows the `Database` inside `db`. `db` (an `Rc` clone)
+        // Safety: `txn` borrows the `Database` inside `db`. `db` (an `Arc` clone)
         // is moved into the `PyTransaction` as `_db_owner`, which is declared
         // *after* `txn` and so drops *after* it — the borrow can never outlive
         // the allocation, even if the owning handle is closed first.
@@ -809,8 +879,24 @@ impl PyDatabase {
     /// Run a SQL read/DDL/DML statement and return the result rows as a list
     /// of dicts (column name → value). Empty for DDL/DML. Writes through SQL
     /// bypass kit-level constraints — use the transactional API for those.
-    fn sql_rows(&self, py: Python<'_>, sql: &str) -> PyResult<Vec<Py<PyAny>>> {
-        let rows = self.require_db()?.sql_rows(sql).map_err(map_err)?;
+    #[pyo3(signature = (sql, timeout_ms=None, query_id=None))]
+    fn sql_rows(
+        &self,
+        py: Python<'_>,
+        sql: &str,
+        timeout_ms: Option<u64>,
+        query_id: Option<&str>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let database = Arc::clone(
+            self.db
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("database already closed"))?,
+        );
+        let sql = sql.to_string();
+        let options = sql_options(timeout_ms, query_id)?;
+        let rows = py
+            .detach(move || database.sql_rows_with_options(&sql, options))
+            .map_err(map_err)?;
         rows.into_iter()
             .map(|row| json_map_to_pydict(py, &row))
             .collect()
@@ -818,8 +904,45 @@ impl PyDatabase {
 
     /// Run a SQL statement and return the result as raw Arrow IPC *file* bytes
     /// (decode with `pyarrow.ipc.open_file`). Empty for DDL/DML.
-    fn sql_arrow(&self, sql: &str) -> PyResult<Vec<u8>> {
-        self.require_db()?.sql_arrow(sql).map_err(map_err)
+    #[pyo3(signature = (sql, timeout_ms=None, query_id=None))]
+    fn sql_arrow(
+        &self,
+        py: Python<'_>,
+        sql: &str,
+        timeout_ms: Option<u64>,
+        query_id: Option<&str>,
+    ) -> PyResult<Vec<u8>> {
+        let database = Arc::clone(
+            self.db
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("database already closed"))?,
+        );
+        let sql = sql.to_string();
+        let options = sql_options(timeout_ms, query_id)?;
+        py.detach(move || database.sql_arrow_with_options(&sql, options))
+            .map_err(map_err)
+    }
+
+    #[pyo3(signature = (sql, timeout_ms=None, query_id=None))]
+    fn start_sql(
+        &self,
+        sql: &str,
+        timeout_ms: Option<u64>,
+        query_id: Option<&str>,
+    ) -> PyResult<PySqlQueryHandle> {
+        let database = Arc::clone(
+            self.db
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("database already closed"))?,
+        );
+        let handle = database
+            .start_sql(sql, sql_options(timeout_ms, query_id)?)
+            .map_err(map_err)?;
+        Ok(PySqlQueryHandle {
+            query_id: handle.id(),
+            database,
+            handle: Mutex::new(Some(handle)),
+        })
     }
 
     /// Incrementally-maintained aggregate (`count`/`sum`/`min`/`max`/`avg`) over
@@ -901,13 +1024,13 @@ impl PyDatabase {
 #[pyclass(name = "Transaction", unsendable)]
 pub struct PyTransaction {
     // Field order is load-bearing: `txn` borrows the `Database` and MUST drop
-    // before `_db_owner` (the `Rc` that keeps that `Database` alive). Rust drops
+    // before `_db_owner` (the `Arc` that keeps that `Database` alive). Rust drops
     // fields top-to-bottom, so this ordering guarantees the borrow is released
     // before the allocation can be freed. `_db_owner` is cleared eagerly once the
     // transaction commits/rolls back, so a finished (but not-yet-collected) txn
     // object no longer pins the engine.
     txn: Option<Transaction<'static>>,
-    _db_owner: Option<Rc<Database>>,
+    _db_owner: Option<Arc<Database>>,
     // Keep the owning Python Database object alive while the transaction exists.
     _db: Py<PyDatabase>,
 }
@@ -1753,6 +1876,7 @@ fn encode_row_guard_key(table: &str, components_json: &str) -> PyResult<String> 
 #[pymodule]
 fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDatabase>()?;
+    m.add_class::<PySqlQueryHandle>()?;
     m.add_class::<PyTransaction>()?;
     m.add_wrapped(wrap_pyfunction!(migrate))?;
     m.add_wrapped(wrap_pyfunction!(encode_pk))?;
@@ -1795,6 +1919,8 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "TransactionAbortedError",
         py.get_type::<TransactionAbortedError>(),
     )?;
+    m.add("UnsupportedError", py.get_type::<UnsupportedError>())?;
+    m.add("TransportError", py.get_type::<TransportError>())?;
 
     set_code(m, "ValidationError", "VALIDATION")?;
     set_code(m, "DuplicateError", "DUPLICATE")?;
@@ -1813,6 +1939,8 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     set_code(m, "QueryTimeoutError", "DEADLINE_EXCEEDED")?;
     set_code(m, "QueryIdConflictError", "QUERY_ID_CONFLICT")?;
     set_code(m, "TransactionAbortedError", "TRANSACTION_ABORTED")?;
+    set_code(m, "UnsupportedError", "UNSUPPORTED")?;
+    set_code(m, "TransportError", "TRANSPORT")?;
 
     Ok(())
 }

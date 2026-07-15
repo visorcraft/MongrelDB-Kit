@@ -7,6 +7,7 @@ facade raises the shared exception classes.
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -18,6 +19,8 @@ from mongreldb_kit import (
     RemoteDatabase,
     StorageError,
     ValidationError,
+    QueryTimeoutError,
+    TransportError,
 )
 
 SCHEMA = {
@@ -65,6 +68,21 @@ class Stub:
                     return
                 if self.path == "/kit/schema":
                     self._send(200, json.dumps(SCHEMA).encode())
+                elif self.path == "/capabilities":
+                    self._send(
+                        200,
+                        json.dumps(
+                            {
+                                "sql_cancellation": {
+                                    "version": 1,
+                                    "client_query_ids": True,
+                                    "cancel_endpoint": True,
+                                    "query_status": True,
+                                    "stream_disconnect_cancels": True,
+                                }
+                            }
+                        ).encode(),
+                    )
                 elif self.path == "/history/retention":
                     self._send(200, json.dumps(outer.history).encode())
                 else:
@@ -96,6 +114,30 @@ class Stub:
                     else:
                         status, resp = 200, {"status": "committed", "epoch": 7, "results": []}
                     self._send(status, json.dumps(resp).encode())
+                elif self.path == "/sql":
+                    if body.get("sql") == "SLOW_TRANSPORT":
+                        time.sleep(0.2)
+                        try:
+                            self._send(200, b"", "application/octet-stream")
+                        except BrokenPipeError:
+                            pass
+                    elif body.get("sql") == "TIMEOUT":
+                        self._send(
+                            504,
+                            json.dumps(
+                                {
+                                    "error": {
+                                        "code": "DEADLINE_EXCEEDED",
+                                        "message": "timed out",
+                                        "query_id": body.get("query_id"),
+                                    }
+                                }
+                            ).encode(),
+                        )
+                    else:
+                        self._send(200, b"", "application/octet-stream")
+                elif self.path.endswith("/cancel"):
+                    self._send(202, json.dumps({"state": "cancellation_requested"}).encode())
                 elif self.path in outer.canned:
                     queue = outer.canned[self.path]
                     status, resp = queue.pop(0) if queue else (200, {})
@@ -127,6 +169,50 @@ def test_connect_loads_schema(stub):
     db = RemoteDatabase(stub.url())
     assert "users" in db.table_names()
     assert db.table("users")["primary_key"] == 0
+
+
+def test_sql_control_body_timeout_mapping_and_cancel(stub):
+    db = RemoteDatabase(stub.url())
+    query_id = "11112222333344445555666677778888"
+    with pytest.raises(QueryTimeoutError):
+        db.sql_arrow("TIMEOUT", timeout_ms=250, query_id=query_id, transport_timeout=2.0)
+    request = next(r for r in stub.requests if r[0] == "POST" and r[1] == "/sql")
+    assert request[2] == {
+        "sql": "TIMEOUT",
+        "format": "arrow",
+        "query_id": query_id,
+        "timeout_ms": 250,
+    }
+    assert db.cancel_sql(query_id)["state"] == "cancellation_requested"
+
+
+def test_transport_timeout_is_separate_and_requests_best_effort_cancel(stub):
+    db = RemoteDatabase(stub.url())
+    query_id = "aaaabbbbccccddddeeeeffff00001111"
+    with pytest.raises(TransportError, match=query_id):
+        db.sql_arrow(
+            "SLOW_TRANSPORT",
+            timeout_ms=5_000,
+            query_id=query_id,
+            transport_timeout=0.01,
+        )
+    deadline = time.time() + 1
+    while time.time() < deadline and not any(
+        request[1] == f"/queries/{query_id}/cancel" for request in stub.requests
+    ):
+        time.sleep(0.01)
+    assert any(request[1] == f"/queries/{query_id}/cancel" for request in stub.requests)
+
+
+def test_remote_background_handle_returns_query_id_and_result(stub):
+    db = RemoteDatabase(stub.url())
+    handle = db.start_sql_arrow(
+        "SELECT 1",
+        query_id="99990000111122223333444455556666",
+        timeout_ms=1_000,
+    )
+    assert handle.id == "99990000111122223333444455556666"
+    assert handle.result() == b""
 
 
 def test_history_retention_round_trip(stub):

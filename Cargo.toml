@@ -9,6 +9,6 @@ members = [
 resolver = "2"
 
 [patch.crates-io]
-mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "33adb2e9e00ffc73ab1214e11964a32858d1247a" }
-mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "33adb2e9e00ffc73ab1214e11964a32858d1247a" }
-mongreldb-server = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "33adb2e9e00ffc73ab1214e11964a32858d1247a" }
+mongreldb-core = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "3b39b978639aa14fab9387a2757a9b5a1934fed7" }
+mongreldb-query = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "3b39b978639aa14fab9387a2757a9b5a1934fed7" }
+mongreldb-server = { git = "https://github.com/visorcraft/MongrelDB.git", rev = "3b39b978639aa14fab9387a2757a9b5a1934fed7" }

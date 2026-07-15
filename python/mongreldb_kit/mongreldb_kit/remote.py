@@ -16,6 +16,8 @@ SQL reads return raw Arrow IPC bytes — decode with ``pyarrow.ipc.open_file``.
 from __future__ import annotations
 
 import json
+import secrets
+import threading
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
@@ -27,9 +29,15 @@ from .mongreldb_kit_py import (
     StorageError,
     TriggerValidationError,
     ValidationError,
+    QueryCancelledError,
+    QueryTimeoutError,
+    QueryIdConflictError,
+    TransactionAbortedError,
+    UnsupportedError,
+    TransportError,
 )
 
-__all__ = ["RemoteDatabase", "RemoteTransaction"]
+__all__ = ["RemoteDatabase", "RemoteTransaction", "RemoteSqlQueryHandle"]
 
 
 def _map_error(status: int, body: str) -> Exception:
@@ -49,6 +57,15 @@ def _map_error(status: int, body: str) -> Exception:
         return TriggerValidationError(msg)
     if code == "CONFLICT":
         return ConflictError(msg)
+    query_id = env.get("error", {}).get("query_id", "unknown")
+    if code == "QUERY_CANCELLED":
+        return QueryCancelledError(f"query {query_id} cancelled: {msg}")
+    if code == "DEADLINE_EXCEEDED":
+        return QueryTimeoutError(f"query {query_id} deadline exceeded: {msg}")
+    if code == "QUERY_ID_CONFLICT":
+        return QueryIdConflictError(f"query id conflict: {query_id}")
+    if code == "TRANSACTION_ABORTED":
+        return TransactionAbortedError(msg)
     return StorageError(f"http {status} ({code}): {msg}")
 
 
@@ -62,6 +79,7 @@ class RemoteDatabase:
     def __init__(self, url: str) -> None:
         self._base = url.rstrip("/")
         self._schemas: Dict[str, Dict[str, Any]] = {}
+        self._sql_cancellation = self._load_sql_cancellation_capability()
         self.refresh()
 
     # ── schema ────────────────────────────────────────────────────────────
@@ -97,9 +115,75 @@ class RemoteDatabase:
 
     # ── reads ─────────────────────────────────────────────────────────────
 
-    def sql_arrow(self, sql: str) -> bytes:
+    def sql_arrow(
+        self,
+        sql: str,
+        *,
+        timeout_ms: Optional[int] = None,
+        query_id: Optional[str] = None,
+        transport_timeout: Optional[float] = None,
+    ) -> bytes:
         """Run a SQL read; return raw Arrow IPC bytes (decode with pyarrow)."""
-        return self._post_bytes("/sql", {"sql": sql})
+        if timeout_ms is not None and timeout_ms <= 0:
+            raise ValueError("timeout_ms must be positive")
+        if transport_timeout is not None and transport_timeout <= 0:
+            raise ValueError("transport_timeout must be positive")
+        controlled = query_id is not None or timeout_ms is not None or transport_timeout is not None
+        if controlled:
+            self._require_sql_cancellation()
+            query_id = query_id or secrets.token_hex(16)
+        payload = {
+            "sql": sql,
+            "format": "arrow",
+            "query_id": query_id,
+            "timeout_ms": timeout_ms,
+        }
+        try:
+            return self._post_bytes("/sql", payload, timeout=transport_timeout)
+        except TransportError as error:
+            if query_id is not None:
+                try:
+                    self.cancel_sql(query_id)
+                except Exception:
+                    pass
+                raise TransportError(
+                    f"query {query_id}: {error}; server cancellation was requested but is not confirmed"
+                ) from None
+            raise
+
+    def start_sql_arrow(
+        self,
+        sql: str,
+        *,
+        timeout_ms: Optional[int] = None,
+        query_id: Optional[str] = None,
+        transport_timeout: Optional[float] = None,
+    ) -> "RemoteSqlQueryHandle":
+        self._require_sql_cancellation()
+        return RemoteSqlQueryHandle(
+            self,
+            sql,
+            timeout_ms=timeout_ms,
+            query_id=query_id or secrets.token_hex(16),
+            transport_timeout=transport_timeout,
+        )
+
+    def cancel_sql(self, query_id: str) -> Dict[str, Any]:
+        self._require_sql_cancellation()
+        path = f"/queries/{query_id}/cancel"
+        request = urllib.request.Request(self._base + path, data=b"", method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=5.0) as response:
+                raw = response.read()
+                return json.loads(raw.decode("utf-8")) if raw else {"state": "accepted"}
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return {"query_id": query_id, "state": "not_found"}
+            if error.code == 409:
+                return {"query_id": query_id, "state": "commit_critical"}
+            raise _map_error(error.code, error.read().decode("utf-8", "replace")) from None
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise TransportError(f"query {query_id}: cancellation transport error: {error}") from None
 
     def query(
         self,
@@ -202,22 +286,96 @@ class RemoteDatabase:
             raw = resp.read()
             return json.loads(raw.decode("utf-8")) if raw else {}
 
-    def _post_bytes(self, path: str, payload: Any) -> bytes:
+    def _post_bytes(self, path: str, payload: Any, timeout: Optional[float] = None) -> bytes:
         data = json.dumps(payload).encode("utf-8")
-        with self._open("POST", path, body=data) as resp:
+        with self._open("POST", path, body=data, timeout=timeout) as resp:
             return resp.read()
 
-    def _open(self, method: str, path: str, body: Optional[bytes]):
+    def _open(
+        self,
+        method: str,
+        path: str,
+        body: Optional[bytes],
+        timeout: Optional[float] = None,
+    ):
         url = self._base + path
         req = urllib.request.Request(url, data=body, method=method)
         if body is not None:
             req.add_header("Content-Type", "application/json")
         try:
-            return urllib.request.urlopen(req)
+            return urllib.request.urlopen(req, timeout=timeout)
         except urllib.error.HTTPError as e:
             raise _map_error(e.code, e.read().decode("utf-8", "replace")) from None
-        except urllib.error.URLError as e:
-            raise StorageError(f"transport error: {e}") from None
+        except (urllib.error.URLError, TimeoutError) as e:
+            raise TransportError(f"transport error: {e}") from None
+
+    def _load_sql_cancellation_capability(self) -> Optional[Dict[str, Any]]:
+        request = urllib.request.Request(self._base + "/capabilities", method="GET")
+        try:
+            with urllib.request.urlopen(request) as response:
+                body = json.loads(response.read().decode("utf-8"))
+                capability = body.get("sql_cancellation")
+                return capability if isinstance(capability, dict) else None
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise _map_error(error.code, error.read().decode("utf-8", "replace")) from None
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise TransportError(f"capability transport error: {error}") from None
+
+    def _require_sql_cancellation(self) -> Dict[str, Any]:
+        capability = self._sql_cancellation
+        if (
+            capability is None
+            or capability.get("version") != 1
+            or capability.get("client_query_ids") is not True
+            or capability.get("cancel_endpoint") is not True
+        ):
+            raise UnsupportedError(
+                "server does not support SQL cancellation capability version 1"
+            )
+        return capability
+
+
+class RemoteSqlQueryHandle:
+    """Background remote SQL request cancellable from another thread."""
+
+    def __init__(
+        self,
+        database: RemoteDatabase,
+        sql: str,
+        *,
+        timeout_ms: Optional[int],
+        query_id: str,
+        transport_timeout: Optional[float],
+    ) -> None:
+        self.id = query_id
+        self._database = database
+        self._result: Optional[bytes] = None
+        self._error: Optional[BaseException] = None
+
+        def run() -> None:
+            try:
+                self._result = database.sql_arrow(
+                    sql,
+                    timeout_ms=timeout_ms,
+                    query_id=query_id,
+                    transport_timeout=transport_timeout,
+                )
+            except BaseException as error:
+                self._error = error
+
+        self._thread = threading.Thread(target=run, name=f"mongreldb-sql-{query_id}", daemon=True)
+        self._thread.start()
+
+    def cancel(self) -> Dict[str, Any]:
+        return self._database.cancel_sql(self.id)
+
+    def result(self) -> bytes:
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        return self._result or b""
 
 
 def _build_table(info: Dict[str, Any]) -> Dict[str, Any]:
