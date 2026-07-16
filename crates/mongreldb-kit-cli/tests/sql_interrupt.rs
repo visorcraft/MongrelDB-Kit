@@ -2,7 +2,9 @@
 
 use mongreldb_kit::{Column, ColumnType, Database, Schema, Table};
 use serde_json::json;
+use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -52,9 +54,18 @@ fn ctrl_c_during_stdout_write_exits_130() {
         .spawn()
         .unwrap();
 
-    // The unread pipe fills after conversion, leaving the process inside the
-    // final stdout write where the first SIGINT must restore normal CLI exit.
-    thread::sleep(Duration::from_secs(1));
+    // Wait for output to start, then stop draining the pipe. This proves the
+    // process has finished conversion and entered the final stdout write.
+    let mut stdout = child.stdout.take().unwrap();
+    let (started_tx, started_rx) = mpsc::sync_channel(0);
+    let (release_tx, release_rx) = mpsc::sync_channel(0);
+    let reader = thread::spawn(move || {
+        let mut byte = [0];
+        stdout.read_exact(&mut byte).unwrap();
+        started_tx.send(()).unwrap();
+        let _ = release_rx.recv();
+    });
+    started_rx.recv_timeout(Duration::from_secs(15)).unwrap();
     assert!(child.try_wait().unwrap().is_none());
     let signal = Command::new("kill")
         .args(["-INT", &child.id().to_string()])
@@ -66,6 +77,8 @@ fn ctrl_c_during_stdout_write_exits_130() {
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             assert_eq!(status.code(), Some(130));
+            let _ = release_tx.send(());
+            reader.join().unwrap();
             break;
         }
         if Instant::now() >= deadline {
