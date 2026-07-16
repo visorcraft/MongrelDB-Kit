@@ -48,7 +48,7 @@ describe('KitDatabase', () => {
 		}
 	});
 
-	it('reopens an enum table and filters by integer equality', () => {
+	it('reopens an encrypted enum table and filters by integer equality', () => {
 		const users = table('users', {
 			columns: [
 				int('id', { primaryKey: true }),
@@ -57,10 +57,10 @@ describe('KitDatabase', () => {
 			primaryKey: 'id'
 		});
 		const dir = makeTempDir();
-		const first = KitDatabase.openSync(dir, new Schema([users]));
+		const first = KitDatabase.createEncryptedSync(dir, new Schema([users]), 'secret');
 		first.insertInto(users).values({ id: 1n, role: 'admin' }).executeSync();
 		first.close();
-		const reopened = KitDatabase.openSync(dir, new Schema([users]));
+		const reopened = KitDatabase.openEncryptedSync(dir, new Schema([users]), 'secret');
 		try {
 			expect(reopened.selectFrom(users).where(eq(users.id, 1n)).executeSync()).toHaveLength(1);
 		} finally {
