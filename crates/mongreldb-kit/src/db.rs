@@ -414,6 +414,7 @@ pub struct Database {
     /// long-lived application use MongrelDB. Built on first use so tables
     /// created in `Database::create` are visible to it.
     pub(crate) session: parking_lot::RwLock<Option<Arc<mongreldb_query::MongrelSession>>>,
+    sequence_lock: parking_lot::Mutex<()>,
 }
 
 impl Database {
@@ -430,6 +431,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -453,6 +455,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -468,6 +471,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -491,6 +495,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -511,6 +516,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -538,6 +544,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -563,6 +570,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -587,6 +595,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -618,6 +627,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -641,6 +651,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -666,6 +677,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -697,6 +709,7 @@ impl Database {
             root: path.to_path_buf(),
             default_providers: HashMap::new(),
             session: parking_lot::RwLock::new(None),
+            sequence_lock: parking_lot::Mutex::new(()),
         })
     }
 
@@ -829,6 +842,7 @@ impl Database {
     /// conflicts.
     pub fn allocate_sequence(&self, name: &str, count: i64) -> Result<i64> {
         use crate::internal::cols;
+        let _guard = self.sequence_lock.lock();
         let mut attempt = 0;
         loop {
             let mut txn = self.inner.begin();
