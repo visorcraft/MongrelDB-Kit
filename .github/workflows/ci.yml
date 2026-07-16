@@ -133,13 +133,13 @@ jobs:
       - name: Link engine addon for the kit
         working-directory: MongrelDB-Kit/packages/kit
         run: |
+          npm install --no-save --ignore-scripts --legacy-peer-deps
           mkdir -p node_modules/@visorcraft
           ln -sfn "$GITHUB_WORKSPACE/mongreldb/crates/mongreldb-node" node_modules/@visorcraft/mongreldb
 
       - name: TypeScript build + tests
         working-directory: MongrelDB-Kit/packages/kit
         run: |
-          npm install --no-save
           npm run build
           npm test
 
