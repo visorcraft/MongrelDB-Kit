@@ -48,6 +48,27 @@ describe('KitDatabase', () => {
 		}
 	});
 
+	it('reopens an enum table and filters by integer equality', () => {
+		const users = table('users', {
+			columns: [
+				int('id', { primaryKey: true }),
+				text('role', { enumValues: ['user', 'admin'] })
+			],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const first = KitDatabase.openSync(dir, new Schema([users]));
+		first.insertInto(users).values({ id: 1n, role: 'admin' }).executeSync();
+		first.close();
+		const reopened = KitDatabase.openSync(dir, new Schema([users]));
+		try {
+			expect(reopened.selectFrom(users).where(eq(users.id, 1n)).executeSync()).toHaveLength(1);
+		} finally {
+			reopened.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('static-default matrix is reflected in native column specs and applied on insert', () => {
 		const t = table('defaults', {
 			columns: [

@@ -117,7 +117,11 @@ class Database:
 
     @staticmethod
     def open(path: str) -> "Database":
-        """Open a database. Same-process handles may share the canonical path."""
+        """Open a database.
+
+        Raises ``DatabaseLockedError`` if this process already has a live handle for
+        the same canonical path. Close that handle before reopening.
+        """
         return Database(_Database.open(path))
 
     @staticmethod
@@ -141,7 +145,8 @@ class Database:
     def open_with_credentials(path: str, username: str, password: str) -> "Database":
         """Open an existing database that has ``require_auth = true``,
         verifying credentials. Every subsequent operation is checked against
-        the authenticated principal's permissions.
+        the authenticated principal's permissions. Raises ``DatabaseLockedError`` if
+        this process already has a live handle for the same canonical path.
         """
         return Database(_Database.open_with_credentials(path, username, password))
 
