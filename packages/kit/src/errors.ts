@@ -19,7 +19,38 @@ export type KitErrorCode =
 	| 'QUERY_CANCELLED'
 	| 'DEADLINE_EXCEEDED'
 	| 'QUERY_ID_CONFLICT'
-	| 'TRANSACTION_ABORTED';
+	| 'QUERY_REGISTRY_FULL'
+	| 'QUERY_FAILED'
+	| 'REMOTE_PROTOCOL'
+	| 'CANCEL_TOO_LATE'
+	| 'QUERY_ALREADY_FINISHED'
+	| 'QUERY_NOT_FOUND'
+	| 'TRANSACTION_ABORTED'
+	| 'COMMIT_OUTCOME'
+	| 'QUERY_CANCELLED_AFTER_COMMIT'
+	| 'DEADLINE_AFTER_COMMIT'
+	| 'RESULT_LIMIT_EXCEEDED'
+	| 'SERIALIZATION_FAILED'
+	| 'SERIALIZATION_FAILED_AFTER_COMMIT'
+	| 'CAPABILITY_UNSUPPORTED'
+	| 'QUERY_OUTCOME_UNKNOWN';
+
+export interface DurableQueryOutcome {
+	committed: boolean | null;
+	committedStatements?: number;
+	lastCommitEpoch?: bigint;
+	firstCommitStatementIndex?: number;
+	lastCommitStatementIndex?: number;
+	completedStatements?: number;
+	statementIndex?: number;
+}
+
+export interface SqlErrorMetadata {
+	cancelOutcome?: string;
+	cancellationReason?: string;
+	retryable?: boolean;
+	serverState?: string;
+}
 
 export class KitError extends Error {
 	readonly code: KitErrorCode;
@@ -129,29 +160,253 @@ export class KitTimeoutError extends KitError {
 }
 
 export class KitUnsupportedError extends KitError {
-	constructor(message: string) {
-		super(message, 'UNSUPPORTED');
+	constructor(message: string, code: 'UNSUPPORTED' | 'CAPABILITY_UNSUPPORTED' = 'UNSUPPORTED') {
+		super(message, code);
 		this.name = 'KitUnsupportedError';
+	}
+}
+
+export class CapabilityUnsupportedError extends KitUnsupportedError {
+	constructor(message: string) {
+		super(message, 'CAPABILITY_UNSUPPORTED');
+		this.name = 'CapabilityUnsupportedError';
 	}
 }
 
 export class QueryCancelledError extends KitError {
 	readonly queryId: string;
+	readonly committed: boolean | null;
+	readonly committedStatements?: number;
+	readonly lastCommitEpoch?: bigint;
+	readonly firstCommitStatementIndex?: number;
+	readonly lastCommitStatementIndex?: number;
+	readonly completedStatements?: number;
+	readonly statementIndex?: number;
+	readonly cancelOutcome?: string;
+	readonly cancellationReason?: string;
+	readonly retryable?: boolean;
+	readonly serverState?: string;
 
-	constructor(queryId: string, message = 'SQL query cancelled') {
-		super(message, 'QUERY_CANCELLED');
+	constructor(queryId: string, message = 'SQL query cancelled', outcome: DurableQueryOutcome = { committed: false }, metadata: SqlErrorMetadata = {}) {
+		super(message, outcome.committed ? 'QUERY_CANCELLED_AFTER_COMMIT' : 'QUERY_CANCELLED');
 		this.name = 'QueryCancelledError';
 		this.queryId = queryId;
+		this.committed = outcome.committed;
+		this.committedStatements = outcome.committedStatements;
+		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
+		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
+		this.completedStatements = outcome.completedStatements;
+		this.statementIndex = outcome.statementIndex;
+		this.cancelOutcome = metadata.cancelOutcome;
+		this.cancellationReason = metadata.cancellationReason;
+		this.retryable = metadata.retryable;
+		this.serverState = metadata.serverState;
 	}
 }
 
 export class QueryTimeoutError extends KitError {
 	readonly queryId: string;
+	readonly committed: boolean | null;
+	readonly committedStatements?: number;
+	readonly lastCommitEpoch?: bigint;
+	readonly firstCommitStatementIndex?: number;
+	readonly lastCommitStatementIndex?: number;
+	readonly completedStatements?: number;
+	readonly statementIndex?: number;
+	readonly cancelOutcome?: string;
+	readonly cancellationReason?: string;
+	readonly retryable?: boolean;
+	readonly serverState?: string;
 
-	constructor(queryId: string, message = 'SQL query deadline exceeded') {
-		super(message, 'DEADLINE_EXCEEDED');
+	constructor(queryId: string, message = 'SQL query deadline exceeded', outcome: DurableQueryOutcome = { committed: false }, metadata: SqlErrorMetadata = {}) {
+		super(message, outcome.committed ? 'DEADLINE_AFTER_COMMIT' : 'DEADLINE_EXCEEDED');
 		this.name = 'QueryTimeoutError';
 		this.queryId = queryId;
+		this.committed = outcome.committed;
+		this.committedStatements = outcome.committedStatements;
+		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
+		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
+		this.completedStatements = outcome.completedStatements;
+		this.statementIndex = outcome.statementIndex;
+		this.cancelOutcome = metadata.cancelOutcome;
+		this.cancellationReason = metadata.cancellationReason;
+		this.retryable = metadata.retryable;
+		this.serverState = metadata.serverState;
+	}
+}
+
+export class CommitOutcomeError extends KitError {
+	readonly queryId: string;
+	readonly committed: boolean | null;
+	readonly committedStatements?: number;
+	readonly lastCommitEpoch?: bigint;
+	readonly firstCommitStatementIndex?: number;
+	readonly lastCommitStatementIndex?: number;
+	readonly completedStatements?: number;
+	readonly statementIndex?: number;
+	readonly cancelOutcome?: string;
+	readonly cancellationReason?: string;
+	readonly retryable?: boolean;
+	readonly serverState?: string;
+
+	constructor(queryId: string, message: string, outcome: DurableQueryOutcome, metadata: SqlErrorMetadata = {}) {
+		super(message, 'COMMIT_OUTCOME');
+		this.name = 'CommitOutcomeError';
+		this.queryId = queryId;
+		this.committed = outcome.committed;
+		this.committedStatements = outcome.committedStatements;
+		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
+		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
+		this.completedStatements = outcome.completedStatements;
+		this.statementIndex = outcome.statementIndex;
+		this.cancelOutcome = metadata.cancelOutcome;
+		this.cancellationReason = metadata.cancellationReason;
+		this.retryable = metadata.retryable;
+		this.serverState = metadata.serverState;
+	}
+}
+
+export class QueryExecutionError extends KitError {
+	readonly queryId: string;
+	readonly terminalCode: string;
+	readonly committed: boolean | null;
+	readonly committedStatements?: number;
+	readonly lastCommitEpoch?: bigint;
+	readonly firstCommitStatementIndex?: number;
+	readonly lastCommitStatementIndex?: number;
+	readonly completedStatements?: number;
+	readonly statementIndex?: number;
+	readonly cancelOutcome?: string;
+	readonly cancellationReason?: string;
+	readonly retryable?: boolean;
+	readonly serverState?: string;
+
+	constructor(queryId: string, terminalCode: string, message: string, outcome: DurableQueryOutcome, metadata: SqlErrorMetadata = {}) {
+		super(message, 'QUERY_FAILED');
+		this.name = 'QueryExecutionError';
+		this.queryId = queryId;
+		this.terminalCode = terminalCode;
+		this.committed = outcome.committed;
+		this.committedStatements = outcome.committedStatements;
+		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
+		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
+		this.completedStatements = outcome.completedStatements;
+		this.statementIndex = outcome.statementIndex;
+		this.cancelOutcome = metadata.cancelOutcome;
+		this.cancellationReason = metadata.cancellationReason;
+		this.retryable = metadata.retryable;
+		this.serverState = metadata.serverState;
+	}
+}
+
+export class RemoteProtocolError extends KitError {
+	readonly serverCode: string;
+	readonly httpStatus: number;
+	readonly queryId?: string;
+	readonly durableOutcome: DurableQueryOutcome;
+	readonly metadata: SqlErrorMetadata;
+
+	constructor(serverCode: string, httpStatus: number, message: string, queryId: string | undefined, outcome: DurableQueryOutcome, metadata: SqlErrorMetadata = {}) {
+		super(message, 'REMOTE_PROTOCOL');
+		this.name = 'RemoteProtocolError';
+		this.serverCode = serverCode;
+		this.httpStatus = httpStatus;
+		this.queryId = queryId;
+		this.durableOutcome = outcome;
+		this.metadata = metadata;
+	}
+}
+
+export class ResultLimitExceededError extends KitError {
+	readonly queryId: string;
+	readonly committed: boolean | null;
+	readonly committedStatements?: number;
+	readonly lastCommitEpoch?: bigint;
+	readonly firstCommitStatementIndex?: number;
+	readonly lastCommitStatementIndex?: number;
+	readonly completedStatements?: number;
+	readonly statementIndex?: number;
+	readonly cancelOutcome?: string;
+	readonly cancellationReason?: string;
+	readonly retryable?: boolean;
+	readonly serverState?: string;
+
+	constructor(queryId: string, message: string, outcome: DurableQueryOutcome, metadata: SqlErrorMetadata = {}) {
+		super(message, 'RESULT_LIMIT_EXCEEDED');
+		this.name = 'ResultLimitExceededError';
+		this.queryId = queryId;
+		this.committed = outcome.committed;
+		this.committedStatements = outcome.committedStatements;
+		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
+		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
+		this.completedStatements = outcome.completedStatements;
+		this.statementIndex = outcome.statementIndex;
+		this.cancelOutcome = metadata.cancelOutcome;
+		this.cancellationReason = metadata.cancellationReason;
+		this.retryable = metadata.retryable;
+		this.serverState = metadata.serverState;
+	}
+}
+
+export class SerializationError extends KitError {
+	readonly queryId: string;
+	readonly committed: boolean | null;
+	readonly committedStatements?: number;
+	readonly lastCommitEpoch?: bigint;
+	readonly firstCommitStatementIndex?: number;
+	readonly lastCommitStatementIndex?: number;
+	readonly completedStatements?: number;
+	readonly statementIndex?: number;
+	readonly cancelOutcome?: string;
+	readonly cancellationReason?: string;
+	readonly retryable?: boolean;
+	readonly serverState?: string;
+
+	constructor(queryId: string, message: string, outcome: DurableQueryOutcome, metadata: SqlErrorMetadata = {}) {
+		super(message, outcome.committed ? 'SERIALIZATION_FAILED_AFTER_COMMIT' : 'SERIALIZATION_FAILED');
+		this.name = 'SerializationError';
+		this.queryId = queryId;
+		this.committed = outcome.committed;
+		this.committedStatements = outcome.committedStatements;
+		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
+		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
+		this.completedStatements = outcome.completedStatements;
+		this.statementIndex = outcome.statementIndex;
+		this.cancelOutcome = metadata.cancelOutcome;
+		this.cancellationReason = metadata.cancellationReason;
+		this.retryable = metadata.retryable;
+		this.serverState = metadata.serverState;
+	}
+}
+
+export class QueryOutcomeUnknownError extends KitError {
+	readonly queryId: string;
+	readonly committed = null;
+	readonly committedStatements = null;
+	readonly lastCommitEpoch = null;
+	readonly firstCommitStatementIndex = null;
+	readonly lastCommitStatementIndex = null;
+	readonly completedStatements = null;
+	readonly statementIndex = null;
+	readonly cancelOutcome?: string;
+	readonly cancellationReason?: string;
+	readonly retryable?: boolean;
+	readonly serverState?: string;
+
+	constructor(queryId: string, message = 'SQL query outcome is unknown', metadata: SqlErrorMetadata = {}) {
+		super(message, 'QUERY_OUTCOME_UNKNOWN');
+		this.name = 'QueryOutcomeUnknownError';
+		this.queryId = queryId;
+		this.cancelOutcome = metadata.cancelOutcome;
+		this.cancellationReason = metadata.cancellationReason;
+		this.retryable = metadata.retryable;
+		this.serverState = metadata.serverState;
 	}
 }
 
@@ -170,27 +425,6 @@ export class TransactionAbortedError extends KitError {
 		super(message, 'TRANSACTION_ABORTED');
 		this.name = 'TransactionAbortedError';
 	}
-}
-
-export function mapSqlError(error: unknown, fallbackQueryId: string): Error {
-	if (error instanceof QueryCancelledError || error instanceof QueryTimeoutError || error instanceof QueryIdConflictError || error instanceof TransactionAbortedError) {
-		return error;
-	}
-	const message = error instanceof Error ? error.message : String(error);
-	const parts = message.split(':');
-	if (message.includes('__QUERY_CANCELLED__:')) {
-		return new QueryCancelledError(parts.at(-2) ?? fallbackQueryId, message);
-	}
-	if (message.includes('__DEADLINE_EXCEEDED__:')) {
-		return new QueryTimeoutError(parts.at(-2) ?? fallbackQueryId, message);
-	}
-	if (message.includes('__QUERY_ID_CONFLICT__:')) {
-		return new QueryIdConflictError(parts.at(-1) ?? fallbackQueryId, message);
-	}
-	if (message.includes('__TRANSACTION_ABORTED__:')) {
-		return new TransactionAbortedError(message);
-	}
-	return error instanceof Error ? error : new KitError(message);
 }
 
 /** Thrown when a `require_auth` database is opened without credentials, or an

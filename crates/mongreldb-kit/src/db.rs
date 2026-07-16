@@ -55,10 +55,27 @@ pub struct SqlOptions {
     pub timeout: Option<std::time::Duration>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SqlOutputLimits {
+    pub max_rows: usize,
+    pub max_bytes: usize,
+}
+
+impl Default for SqlOutputLimits {
+    fn default() -> Self {
+        Self {
+            max_rows: 1_000_000,
+            max_bytes: 64 * 1024 * 1024,
+        }
+    }
+}
+
 pub struct SqlQueryHandle {
     query_id: mongreldb_query::QueryId,
     session: Arc<mongreldb_query::MongrelSession>,
-    worker: Option<std::thread::JoinHandle<Result<Vec<arrow::record_batch::RecordBatch>>>>,
+    worker: Option<
+        std::thread::JoinHandle<mongreldb_query::Result<mongreldb_query::ManagedQueryBatches>>,
+    >,
 }
 
 impl SqlQueryHandle {
@@ -70,12 +87,133 @@ impl SqlQueryHandle {
         self.session.cancel_query(self.query_id)
     }
 
-    pub fn wait(mut self) -> Result<Vec<arrow::record_batch::RecordBatch>> {
-        self.worker
+    pub fn status(&self) -> Option<mongreldb_query::QueryStatus> {
+        self.session.query_registry().status(self.query_id)
+    }
+
+    pub fn wait(self) -> Result<Vec<arrow::record_batch::RecordBatch>> {
+        let output = self.wait_for_serialization()?;
+        let batches = output.batches().to_vec();
+        complete_sql_output(output)?;
+        Ok(batches)
+    }
+
+    pub fn wait_arrow(self) -> Result<Vec<u8>> {
+        self.wait_arrow_with_limits(SqlOutputLimits::default())
+    }
+
+    pub fn wait_arrow_with_limits(self, limits: SqlOutputLimits) -> Result<Vec<u8>> {
+        let output = self.wait_for_serialization()?;
+        let result = crate::arrow_util::batches_to_ipc_controlled_with_limits(
+            output.batches(),
+            output.query(),
+            limits,
+        );
+        match result {
+            Ok(bytes) => {
+                complete_sql_output(output)?;
+                Ok(bytes)
+            }
+            Err(error) => {
+                fail_sql_output(output, &error);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn wait_rows(self) -> Result<Vec<serde_json::Map<String, Value>>> {
+        self.wait_rows_with_limits(SqlOutputLimits::default())
+    }
+
+    pub fn wait_rows_with_limits(
+        self,
+        limits: SqlOutputLimits,
+    ) -> Result<Vec<serde_json::Map<String, Value>>> {
+        let output = self.wait_for_serialization()?;
+        let result = crate::arrow_util::batches_to_rows_controlled_with_limits(
+            output.batches(),
+            output.query(),
+            limits,
+        );
+        match result {
+            Ok(rows) => {
+                complete_sql_output(output)?;
+                Ok(rows)
+            }
+            Err(error) => {
+                fail_sql_output(output, &error);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn wait_for_serialization(mut self) -> Result<mongreldb_query::ManagedQueryBatches> {
+        let result = self
+            .worker
             .take()
             .expect("SQL worker is present")
             .join()
-            .map_err(|_| KitError::Storage("SQL worker panicked".into()))?
+            .map_err(|_| KitError::Storage("SQL worker panicked".into()))?;
+        let output = result.map_err(|error| {
+            let status = self.session.query_registry().status(self.query_id);
+            crate::error::query_error_with_status(error, status.as_ref())
+        })?;
+        self.session
+            .fire_test_hook(mongreldb_query::SqlTestHookPoint::BeforeSerializationBatch);
+        Ok(output)
+    }
+}
+
+/// Finish controlled SQL conversion after one last cancellation checkpoint.
+#[doc(hidden)]
+pub fn complete_sql_output(output: mongreldb_query::ManagedQueryBatches) -> Result<()> {
+    let query = output.query().clone();
+    loop {
+        if let Err(error) = query.checkpoint() {
+            let status = query.status();
+            output.fail();
+            return Err(crate::error::query_error_with_status(error, Some(&status)));
+        }
+        let phase = query.phase();
+        match phase {
+            mongreldb_query::SqlQueryPhase::Serializing
+            | mongreldb_query::SqlQueryPhase::CommitCritical => {
+                if query
+                    .transition(phase, mongreldb_query::SqlQueryPhase::Completed)
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+            mongreldb_query::SqlQueryPhase::Completed => break,
+            mongreldb_query::SqlQueryPhase::Cancelling => std::thread::yield_now(),
+            phase => {
+                let error = mongreldb_query::MongrelQueryError::InvalidQueryState(format!(
+                    "query {} cannot complete output conversion from {phase:?}",
+                    query.id()
+                ));
+                let status = query.status();
+                output.fail_with_error(
+                    error.code(),
+                    mongreldb_query::QueryTerminalErrorCategory::Execution,
+                );
+                return Err(crate::error::query_error_with_status(error, Some(&status)));
+            }
+        }
+    }
+    output.complete().map_err(|error| {
+        let status = query.status();
+        crate::error::query_error_with_status(error, Some(&status))
+    })
+}
+
+/// Record the exact terminal conversion category before consuming SQL output.
+#[doc(hidden)]
+pub fn fail_sql_output(output: mongreldb_query::ManagedQueryBatches, error: &KitError) {
+    match error {
+        KitError::ResultLimitExceeded { .. } => output.fail_result_limit(),
+        KitError::SerializationFailed { .. } => output.fail_serialization(),
+        _ => output.fail(),
     }
 }
 
@@ -242,9 +380,7 @@ fn open_core_with_retry<T>(
             Err(err) if is_lock_contention(&err) => {
                 let now = std::time::Instant::now();
                 if now >= deadline {
-                    return Err(mongreldb_core::MongrelError::Io(std::io::Error::other(
-                        format!("database lock timeout after {timeout_ms}ms: {err}"),
-                    )));
+                    return Err(err);
                 }
                 let sleep = next_sleep.min(deadline - now);
                 std::thread::sleep(sleep);
@@ -258,11 +394,7 @@ fn open_core_with_retry<T>(
 }
 
 fn is_lock_contention(err: &mongreldb_core::MongrelError) -> bool {
-    matches!(
-        err,
-        mongreldb_core::MongrelError::Io(io)
-            if io.to_string().contains("locked by another process")
-    )
+    matches!(err, mongreldb_core::MongrelError::DatabaseLocked { .. })
 }
 
 /// A kit database handle.
@@ -1639,9 +1771,10 @@ impl Database {
         let worker = std::thread::Builder::new()
             .name(format!("mongreldb-kit-sql-{query_id}"))
             .spawn(move || {
-                sql_runtime()
-                    .block_on(worker_session.run_with_query(&statement, registration.into_query()))
-                    .map_err(KitError::from)
+                sql_runtime().block_on(
+                    worker_session
+                        .run_with_query_for_serialization(&statement, registration.into_query()),
+                )
             })
             .map_err(|error| KitError::Storage(error.to_string()))?;
         Ok(SqlQueryHandle {
@@ -1666,6 +1799,13 @@ impl Database {
             .map_or(mongreldb_query::CancelOutcome::NotFound, |session| {
                 session.cancel_query(query_id)
             })
+    }
+
+    pub fn sql_query_status(
+        &self,
+        query_id: mongreldb_query::QueryId,
+    ) -> Result<Option<mongreldb_query::QueryStatus>> {
+        Ok(self.sql_session()?.query_registry().status(query_id))
     }
 
     /// (Re)build the cached SQL session so it sees the current table set. The
@@ -1725,17 +1865,21 @@ impl Database {
                 ..mongreldb_query::SqlQueryOptions::default()
             })
             .map_err(KitError::from)?;
+        let query_id = query.id();
         let output = sql_runtime()
             .block_on(session.run_with_query_for_serialization(statement, query))
-            .map_err(KitError::from)?;
+            .map_err(|error| {
+                let status = session.query_registry().status(query_id);
+                crate::error::query_error_with_status(error, status.as_ref())
+            })?;
         session.fire_test_hook(mongreldb_query::SqlTestHookPoint::BeforeSerializationBatch);
         match serialize(&output) {
             Ok(value) => {
-                output.complete();
+                complete_sql_output(output)?;
                 Ok(value)
             }
             Err(error) => {
-                output.fail();
+                fail_sql_output(output, &error);
                 Err(error)
             }
         }
@@ -2012,9 +2156,10 @@ mod tests {
     use super::open_core_with_retry;
 
     fn lock_error() -> mongreldb_core::MongrelError {
-        mongreldb_core::MongrelError::Io(std::io::Error::other(
-            "database at /tmp/db is locked by another process: would block",
-        ))
+        mongreldb_core::MongrelError::DatabaseLocked {
+            path: "/tmp/db".into(),
+            message: "would block".into(),
+        }
     }
 
     #[test]

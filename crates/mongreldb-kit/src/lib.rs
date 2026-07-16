@@ -2,7 +2,6 @@
 //!
 //! This crate wraps MongrelDB core with the kit schema model, transaction
 //! semantics, query execution, and migration runner.
-
 pub mod arrow_util;
 pub mod db;
 pub mod error;
@@ -18,24 +17,30 @@ pub mod txn;
 
 pub use db::{
     ApproxAggKind, ApproxAggregate, Database, ExplainPlan, IncrementalAggKind,
-    IncrementalAggregate, OpenOptions, SimilarRow, SqlOptions, SqlQueryHandle,
+    IncrementalAggregate, OpenOptions, SimilarRow, SqlOptions, SqlOutputLimits, SqlQueryHandle,
 };
 // Re-export the engine tuning/config types so kit consumers (and the Python
 // binding, which depends only on this crate) can reach them without a direct
 // `mongreldb-core` dependency.
-pub use error::{KitError, Result};
+pub use error::{KitError, QueryErrorMetadata, QueryExecutionOutcome, Result};
 pub use migrate::migrate;
 pub use mongreldb_core::auth::{Permission, RoleEntry, UserEntry};
 pub use mongreldb_core::auth_state::{AuthState, RequiredPermission, TableAuthChecker};
 pub use mongreldb_core::cache::CacheStats;
-pub use mongreldb_core::{IndexBuildPolicy, TriggerConfig};
-pub use mongreldb_query::{CancelOutcome, QueryId};
+pub use mongreldb_core::{CancellationReason, IndexBuildPolicy, TriggerConfig};
+pub use mongreldb_query::{
+    CancelOutcome, QueryId, QueryTerminalErrorCategory, QueryTerminalState, SerializationOutcome,
+    SqlQueryPhase,
+};
 pub use query::JoinRow;
 #[cfg(feature = "remote")]
 pub use remote::{
-    RemoteBatch, RemoteDatabase, RemoteOpResult, RemoteQueryRow, RemoteQueryStatus,
-    RemoteSqlFormat, RemoteSqlOptions, RemoteSqlQueryHandle, RemoteTransaction,
-    SqlCancellationCapabilities,
+    RemoteAuth, RemoteBatch, RemoteCancelOutcome, RemoteDatabase, RemoteIdempotentSqlOptions,
+    RemoteOpResult, RemoteOptions, RemoteQueryRow, RemoteQueryStatus, RemoteSqlFormat,
+    RemoteSqlOptions, RemoteSqlPage, RemoteSqlPageInfo, RemoteSqlPageLimits,
+    RemoteSqlPaginationOptions, RemoteSqlQueryHandle, RemoteSqlReceiptError, RemoteSqlWriteReceipt,
+    RemoteTransaction, SecretString, SqlCancellationCapabilities, SqlIdempotencyCapabilities,
+    SqlPaginationCapabilities,
 };
 pub use schema::Row;
 pub use txn::Transaction;

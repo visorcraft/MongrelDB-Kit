@@ -108,7 +108,7 @@ class TestAuthEdge:
         finally:
             pass
 
-    def test_refresh_after_role_revoke(self):
+    def test_role_revoke_applies_to_next_principal_session(self):
         d = tempfile.mkdtemp()
         path = os.path.join(d, "sec")
         try:
@@ -118,15 +118,19 @@ class TestAuthEdge:
             db.grant_permission("r", "select:players")
             db.grant_role("alice", "r")
 
+            db.close()
             db2 = Database.open_with_credentials(path, "alice", "apw")
             # Alice can select initially.
             db2.sql_rows("SELECT id FROM players LIMIT 1")
+            db2.close()
 
-            # Admin revokes.
+            # Switch back to an explicit admin session to revoke the role.
+            db = Database.open_with_credentials(path, "admin", "pw")
             db.revoke_role("alice", "r")
-            db2.refresh_principal()
+            db.close()
 
-            # Alice should now be denied.
+            # A fresh Alice session observes the updated catalog.
+            db2 = Database.open_with_credentials(path, "alice", "apw")
             with pytest.raises(Exception):
                 db2.sql_rows("SELECT id FROM players LIMIT 1")
         finally:

@@ -68,6 +68,7 @@ const schema = new Schema([users, posts]);
 // ---------------------------------------------------------------------------
 
 const db = KitDatabase.openSync('./app-data', schema);
+// A second live open of this path throws with code MONGRELDB_DATABASE_LOCKED.
 
 db.migrateSync(schema, [
   {
@@ -251,6 +252,55 @@ same builder - see the [Query builder](./query-builder.md) guide for the full su
 > VIEW`) created via `db.sql()` persist across subsequent `sql()` / `sqlRows()`
 > calls. See [Migrations → SQL views](./migrations.md#sql-views).
 
+### Remote SQL control, pagination, and retry-safe writes
+
+Remote SQL requires daemon cancellation capability version 2. Every call gets
+a client query ID, including calls without explicit timeout options. If the
+response is lost or cannot be decoded, the client resolves the durable status
+and throws `CommitOutcomeError`, `SerializationError`, or
+`QueryOutcomeUnknownError` instead of guessing.
+
+For unknown outcomes, status `committed` and durable counters are `null`, and
+`QueryOutcomeUnknownError.committed` is `null`. Only `committed === false`
+proves that no statement committed.
+
+```ts
+const page = await remote.sqlPage(
+  "SELECT id, title FROM documents ORDER BY id",
+  {
+    projection: ["id", "title"],
+    pageSizeRows: 500,
+    maxPageBytes: 1_000_000,
+    maxPageTokens: 100_000,
+  },
+);
+
+const next = page.nextCursor
+  ? await remote.continueSqlPage(page.nextCursor)
+  : undefined;
+
+const receipt = await remote.executeIdempotentSql(
+  "UPDATE jobs SET claimed = true WHERE id = 42",
+  { idempotencyKey: "claim-job-42-attempt-1" },
+);
+console.log(
+  receipt.committed,
+  receipt.lastCommitEpoch, // bigint, exact
+  receipt.firstCommitStatementIndex,
+  receipt.lastCommitStatementIndex,
+);
+```
+
+Pagination accepts a read-only `SELECT`, requires an explicit projection, and
+returns an opaque owner-bound cursor. Idempotent SQL accepts one write statement.
+Reuse the same key after transport loss. Never retry automatically when the
+receipt proves a commit or reports an unknown outcome.
+
+Remote procedure and trigger writes use the same typed contract.
+`CommitOutcomeError` preserves `committed`, exact `lastCommitEpoch` as a
+`bigint`, and `retryable`; `QueryOutcomeUnknownError.committed` remains `null`.
+Never replay either response automatically.
+
 ### History retention and time-travel reads
 
 The embedded `KitDatabase` and the daemon client `RemoteDatabase` both expose
@@ -329,6 +379,10 @@ await db.sqlRows("INSERT INTO logs VALUES (2, 'world')");
 await db.sqlRows("ROLLBACK TO sp1"); // discards 'world'
 await db.sqlRows("COMMIT");
 ```
+
+Savepoints require an explicit transaction. `ROLLBACK TO name` keeps the target
+active, removes savepoints created after it, and can recover an aborted
+transaction so work can continue.
 
 ## Triggers and SQL helpers
 

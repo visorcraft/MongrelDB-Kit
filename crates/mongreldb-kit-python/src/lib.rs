@@ -4,8 +4,10 @@
 //! transactions with CRUD, migrations, and stable error categories.
 
 use mongreldb_kit::{
-    ApproxAggKind, CancelOutcome, Database, IncrementalAggKind, KitError, QueryId, SqlOptions,
-    SqlQueryHandle, Transaction,
+    ApproxAggKind, CancelOutcome, CancellationReason, Database, IncrementalAggKind, KitError,
+    QueryErrorMetadata, QueryExecutionOutcome, QueryId, QueryTerminalErrorCategory,
+    QueryTerminalState, SerializationOutcome, SqlOptions, SqlOutputLimits, SqlQueryHandle,
+    SqlQueryPhase, Transaction,
 };
 use mongreldb_kit_core::keys::{
     encode_pk as core_encode_pk, encode_row_guard_key as core_encode_row_guard_key,
@@ -74,6 +76,11 @@ create_exception!(
 );
 create_exception!(
     mongreldb_kit_py,
+    DatabaseLockedError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
     IntegrityError,
     pyo3::exceptions::PyException
 );
@@ -127,6 +134,118 @@ create_exception!(
     TransportError,
     pyo3::exceptions::PyException
 );
+create_exception!(
+    mongreldb_kit_py,
+    QueryRegistryFullError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    CommitOutcomeError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    ResultLimitExceededError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    SerializationError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    QueryOutcomeUnknownError,
+    pyo3::exceptions::PyException
+);
+create_exception!(
+    mongreldb_kit_py,
+    CapabilityUnsupportedError,
+    pyo3::exceptions::PyException
+);
+
+struct PyQueryErrorDetails<'a> {
+    query_id: Option<&'a str>,
+    committed: Option<bool>,
+    outcome: Option<&'a QueryExecutionOutcome>,
+    code: &'a str,
+    metadata: &'a QueryErrorMetadata,
+}
+
+impl<'a> PyQueryErrorDetails<'a> {
+    fn from_outcome(
+        query_id: Option<&'a str>,
+        outcome: &'a QueryExecutionOutcome,
+        code: &'a str,
+        metadata: &'a QueryErrorMetadata,
+    ) -> Self {
+        Self {
+            query_id,
+            committed: Some(outcome.committed),
+            outcome: Some(outcome),
+            code,
+            metadata,
+        }
+    }
+
+    fn without_outcome(
+        query_id: Option<&'a str>,
+        committed: Option<bool>,
+        code: &'a str,
+        metadata: &'a QueryErrorMetadata,
+    ) -> Self {
+        Self {
+            query_id,
+            committed,
+            outcome: None,
+            code,
+            metadata,
+        }
+    }
+}
+
+fn query_py_err(error: PyErr, details: PyQueryErrorDetails<'_>) -> PyErr {
+    Python::attach(|py| {
+        let value = error.value(py);
+        let outcome = details.outcome;
+        let _ = value.setattr("query_id", details.query_id);
+        let _ = value.setattr("committed", details.committed);
+        let _ = value.setattr(
+            "committed_statements",
+            outcome.and_then(|outcome| outcome.committed_statements),
+        );
+        let _ = value.setattr(
+            "last_commit_epoch",
+            outcome.and_then(|outcome| outcome.last_commit_epoch),
+        );
+        let _ = value.setattr(
+            "first_commit_statement_index",
+            outcome.and_then(|outcome| outcome.first_commit_statement_index),
+        );
+        let _ = value.setattr(
+            "last_commit_statement_index",
+            outcome.and_then(|outcome| outcome.last_commit_statement_index),
+        );
+        let _ = value.setattr(
+            "completed_statements",
+            outcome.map(|outcome| outcome.completed_statements),
+        );
+        let _ = value.setattr(
+            "statement_index",
+            outcome.map(|outcome| outcome.statement_index),
+        );
+        let _ = value.setattr("retryable", details.metadata.retryable);
+        let _ = value.setattr("code", details.code);
+        let _ = value.setattr("cancel_outcome", details.metadata.cancel_outcome.as_deref());
+        let _ = value.setattr(
+            "cancellation_reason",
+            details.metadata.cancellation_reason.as_deref(),
+        );
+        let _ = value.setattr("server_state", details.metadata.server_state.as_deref());
+    });
+    error
+}
 
 fn map_err(e: KitError) -> PyErr {
     let msg = e.to_string();
@@ -139,17 +258,163 @@ fn map_err(e: KitError) -> PyErr {
         KitError::Conflict(_) => ConflictError::new_err(msg),
         KitError::TriggerValidation(_) => TriggerValidationError::new_err(msg),
         KitError::Storage(_) => StorageError::new_err(msg),
+        KitError::DatabaseLocked(_) => DatabaseLockedError::new_err(msg),
         KitError::Integrity(_) => IntegrityError::new_err(msg),
         KitError::AuthRequired(_) => AuthRequiredError::new_err(msg),
         KitError::AuthNotRequired(_) => AuthNotRequiredError::new_err(msg),
         KitError::InvalidCredentials(_) => InvalidCredentialsError::new_err(msg),
         KitError::PermissionDenied(_) => PermissionDeniedError::new_err(msg),
-        KitError::Cancelled { .. } => QueryCancelledError::new_err(msg),
-        KitError::DeadlineExceeded { .. } => QueryTimeoutError::new_err(msg),
-        KitError::QueryConflict(_) => QueryIdConflictError::new_err(msg),
-        KitError::TransactionAborted(_) => TransactionAbortedError::new_err(msg),
+        KitError::Cancelled {
+            query_id,
+            outcome,
+            metadata,
+            ..
+        } => query_py_err(
+            QueryCancelledError::new_err(msg),
+            PyQueryErrorDetails::from_outcome(
+                Some(&query_id),
+                &outcome,
+                if outcome.committed {
+                    "QUERY_CANCELLED_AFTER_COMMIT"
+                } else {
+                    "QUERY_CANCELLED"
+                },
+                &metadata,
+            ),
+        ),
+        KitError::DeadlineExceeded {
+            query_id,
+            outcome,
+            metadata,
+            ..
+        } => query_py_err(
+            QueryTimeoutError::new_err(msg),
+            PyQueryErrorDetails::from_outcome(
+                Some(&query_id),
+                &outcome,
+                if outcome.committed {
+                    "DEADLINE_AFTER_COMMIT"
+                } else {
+                    "DEADLINE_EXCEEDED"
+                },
+                &metadata,
+            ),
+        ),
+        KitError::QueryConflict { query_id, metadata } => query_py_err(
+            QueryIdConflictError::new_err(msg),
+            PyQueryErrorDetails::without_outcome(
+                Some(&query_id),
+                Some(false),
+                "QUERY_ID_CONFLICT",
+                &metadata,
+            ),
+        ),
+        KitError::QueryRegistryFull {
+            query_id, metadata, ..
+        } => query_py_err(
+            QueryRegistryFullError::new_err(msg),
+            PyQueryErrorDetails::without_outcome(
+                query_id.as_deref(),
+                Some(false),
+                "QUERY_REGISTRY_FULL",
+                &metadata,
+            ),
+        ),
+        KitError::CommitOutcome {
+            query_id,
+            outcome,
+            metadata,
+            ..
+        } => query_py_err(
+            CommitOutcomeError::new_err(msg),
+            PyQueryErrorDetails::from_outcome(
+                Some(&query_id),
+                &outcome,
+                "COMMIT_OUTCOME",
+                &metadata,
+            ),
+        ),
+        KitError::QueryFailed {
+            query_id,
+            code,
+            outcome,
+            metadata,
+            ..
+        } => query_py_err(
+            StorageError::new_err(msg),
+            PyQueryErrorDetails::from_outcome(Some(&query_id), &outcome, &code, &metadata),
+        ),
+        KitError::RemoteProtocol {
+            query_id,
+            code,
+            metadata,
+            ..
+        } => query_py_err(
+            StorageError::new_err(msg),
+            PyQueryErrorDetails::without_outcome(query_id.as_deref(), None, &code, &metadata),
+        ),
+        KitError::ResultLimitExceeded {
+            query_id,
+            outcome,
+            metadata,
+            ..
+        } => query_py_err(
+            ResultLimitExceededError::new_err(msg),
+            PyQueryErrorDetails::from_outcome(
+                query_id.as_deref(),
+                &outcome,
+                "RESULT_LIMIT_EXCEEDED",
+                &metadata,
+            ),
+        ),
+        KitError::SerializationFailed {
+            query_id,
+            outcome,
+            metadata,
+            ..
+        } => query_py_err(
+            SerializationError::new_err(msg),
+            PyQueryErrorDetails::from_outcome(
+                query_id.as_deref(),
+                &outcome,
+                if outcome.committed {
+                    "SERIALIZATION_FAILED_AFTER_COMMIT"
+                } else {
+                    "SERIALIZATION_FAILED"
+                },
+                &metadata,
+            ),
+        ),
+        KitError::OutcomeUnknown {
+            query_id, metadata, ..
+        } => query_py_err(
+            QueryOutcomeUnknownError::new_err(msg),
+            PyQueryErrorDetails::without_outcome(
+                Some(&query_id),
+                None,
+                "QUERY_OUTCOME_UNKNOWN",
+                &metadata,
+            ),
+        ),
+        KitError::TransactionAborted {
+            query_id, metadata, ..
+        } => query_py_err(
+            TransactionAbortedError::new_err(msg),
+            PyQueryErrorDetails::without_outcome(
+                query_id.as_deref(),
+                Some(false),
+                "TRANSACTION_ABORTED",
+                &metadata,
+            ),
+        ),
         KitError::Unsupported(_) => UnsupportedError::new_err(msg),
-        KitError::Transport { .. } => TransportError::new_err(msg),
+        KitError::CapabilityUnsupported(_) => CapabilityUnsupportedError::new_err(msg),
+        KitError::Transport {
+            query_id, metadata, ..
+        } => query_py_err(
+            TransportError::new_err(msg),
+            PyQueryErrorDetails::without_outcome(Some(&query_id), None, "TRANSPORT", &metadata),
+        ),
     }
 }
 
@@ -177,11 +442,142 @@ fn sql_options(timeout_ms: Option<u64>, query_id: Option<&str>) -> PyResult<SqlO
     })
 }
 
+fn output_limits(
+    max_output_rows: Option<usize>,
+    max_output_bytes: Option<usize>,
+) -> PyResult<SqlOutputLimits> {
+    if max_output_rows == Some(0) || max_output_bytes == Some(0) {
+        return Err(ValidationError::new_err(
+            "max_output_rows and max_output_bytes must be positive",
+        ));
+    }
+    let defaults = SqlOutputLimits::default();
+    Ok(SqlOutputLimits {
+        max_rows: max_output_rows.unwrap_or(defaults.max_rows),
+        max_bytes: max_output_bytes.unwrap_or(defaults.max_bytes),
+    })
+}
+
+fn cancel_outcome_name(outcome: CancelOutcome) -> &'static str {
+    match outcome {
+        CancelOutcome::Accepted => "accepted",
+        CancelOutcome::AlreadyCancelling => "already_cancelling",
+        CancelOutcome::TooLate => "too_late",
+        CancelOutcome::AlreadyFinished => "already_finished",
+        CancelOutcome::NotFound => "not_found",
+    }
+}
+
+fn query_phase_name(phase: SqlQueryPhase) -> &'static str {
+    match phase {
+        SqlQueryPhase::Queued => "queued",
+        SqlQueryPhase::Planning => "planning",
+        SqlQueryPhase::Executing => "executing",
+        SqlQueryPhase::Streaming => "streaming",
+        SqlQueryPhase::Serializing => "serializing",
+        SqlQueryPhase::CommitCritical => "commit_critical",
+        SqlQueryPhase::Cancelling => "cancelling",
+        SqlQueryPhase::Completed => "completed",
+        SqlQueryPhase::Failed => "failed",
+        SqlQueryPhase::Cancelled => "cancelled",
+    }
+}
+
+fn cancellation_reason_name(reason: CancellationReason) -> &'static str {
+    match reason {
+        CancellationReason::None => "none",
+        CancellationReason::ClientRequest => "client_request",
+        CancellationReason::Deadline => "deadline",
+        CancellationReason::ClientDisconnected => "client_disconnected",
+        CancellationReason::SessionClosed => "session_closed",
+        CancellationReason::ServerShutdown => "server_shutdown",
+    }
+}
+
+fn terminal_state_name(state: QueryTerminalState) -> &'static str {
+    match state {
+        QueryTerminalState::OutcomeUnknown => "outcome_unknown",
+        QueryTerminalState::Completed => "completed",
+        QueryTerminalState::FailedBeforeCommit => "failed_before_commit",
+        QueryTerminalState::CancelledBeforeCommit => "cancelled_before_commit",
+        QueryTerminalState::DeadlineBeforeCommit => "deadline_before_commit",
+        QueryTerminalState::Committed => "committed",
+        QueryTerminalState::CommittedWithError => "committed_with_error",
+        QueryTerminalState::PartiallyCommitted => "partially_committed",
+        QueryTerminalState::CancelledAfterCommit => "cancelled_after_commit",
+        QueryTerminalState::DeadlineAfterCommit => "deadline_after_commit",
+    }
+}
+
+fn terminal_error_category_name(category: QueryTerminalErrorCategory) -> &'static str {
+    match category {
+        QueryTerminalErrorCategory::Cancellation => "cancellation",
+        QueryTerminalErrorCategory::Deadline => "deadline",
+        QueryTerminalErrorCategory::ResultLimit => "result_limit",
+        QueryTerminalErrorCategory::Serialization => "serialization",
+        QueryTerminalErrorCategory::Execution => "execution",
+    }
+}
+
+fn serialization_outcome_name(outcome: SerializationOutcome) -> &'static str {
+    match outcome {
+        SerializationOutcome::NotStarted => "not_started",
+        SerializationOutcome::InProgress => "in_progress",
+        SerializationOutcome::Succeeded => "succeeded",
+        SerializationOutcome::Failed => "failed",
+    }
+}
+
+fn sql_handle_rows(
+    py: Python<'_>,
+    handle: SqlQueryHandle,
+    limits: SqlOutputLimits,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let output = py
+        .detach(move || handle.wait_for_serialization())
+        .map_err(map_err)?;
+    let (output, rows) = py.detach(move || {
+        let rows = mongreldb_kit::arrow_util::batches_to_rows_controlled_with_limits(
+            output.batches(),
+            output.query(),
+            limits,
+        );
+        (output, rows)
+    });
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(error) => {
+            mongreldb_kit::db::fail_sql_output(output, &error);
+            return Err(map_err(error));
+        }
+    };
+    let mut values = Vec::with_capacity(rows.len());
+    for (index, row) in rows.into_iter().enumerate() {
+        if index % 256 == 0 {
+            py.detach(std::thread::yield_now);
+            if let Err(error) = output.query().checkpoint() {
+                output.fail();
+                return Err(map_err(KitError::from(error)));
+            }
+        }
+        match json_map_to_pydict(py, &row) {
+            Ok(value) => values.push(value),
+            Err(error) => {
+                output.fail_serialization();
+                return Err(error);
+            }
+        }
+    }
+    mongreldb_kit::db::complete_sql_output(output).map_err(map_err)?;
+    Ok(values)
+}
+
 #[pyclass(name = "SqlQueryHandle")]
 pub struct PySqlQueryHandle {
     query_id: QueryId,
     database: Arc<Database>,
     handle: Mutex<Option<SqlQueryHandle>>,
+    limits: SqlOutputLimits,
 }
 
 #[pymethods]
@@ -191,11 +587,95 @@ impl PySqlQueryHandle {
         self.query_id.to_string()
     }
 
-    fn cancel(&self) -> bool {
-        matches!(
-            self.database.cancel_sql(self.query_id),
-            CancelOutcome::Accepted | CancelOutcome::AlreadyCancelling
-        )
+    fn cancel(&self) -> &'static str {
+        cancel_outcome_name(self.database.cancel_sql(self.query_id))
+    }
+
+    fn status(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let status = self
+            .database
+            .sql_query_status(self.query_id)
+            .map_err(map_err)?
+            .ok_or_else(|| PyRuntimeError::new_err("SQL query status is not retained"))?;
+        let state = query_phase_name(status.phase);
+        let cancellation_reason = cancellation_reason_name(status.cancellation_reason);
+        let terminal_state = status.terminal_state().map(terminal_state_name);
+        let top_status = terminal_state.unwrap_or(if status.durable_outcome.committed {
+            "committed"
+        } else {
+            "running"
+        });
+        let terminal_error_code = status
+            .terminal_error
+            .as_ref()
+            .map(|error| error.code.as_str());
+        let terminal_error_category = status
+            .terminal_error
+            .as_ref()
+            .map(|error| terminal_error_category_name(error.category));
+        let cancel_outcome = match status.phase {
+            SqlQueryPhase::CommitCritical => Some("too_late"),
+            SqlQueryPhase::Completed | SqlQueryPhase::Failed | SqlQueryPhase::Cancelled => {
+                Some("already_finished")
+            }
+            SqlQueryPhase::Cancelling => Some("accepted"),
+            _ => None,
+        };
+        let retryable = status.terminal_error.as_ref().is_some_and(|error| {
+            matches!(
+                error.code.as_str(),
+                "IDEMPOTENCY_STORE_FULL" | "IDEMPOTENCY_STORE_UNAVAILABLE"
+            )
+        });
+        let durable = &status.durable_outcome;
+        let durable_outcome = PyDict::new(py);
+        durable_outcome.set_item("committed", durable.committed)?;
+        durable_outcome.set_item("committed_statements", durable.committed_statements)?;
+        durable_outcome.set_item("last_commit_epoch", durable.last_commit_epoch)?;
+        durable_outcome.set_item(
+            "first_commit_statement_index",
+            durable.first_commit_statement_index,
+        )?;
+        durable_outcome.set_item(
+            "last_commit_statement_index",
+            durable.last_commit_statement_index,
+        )?;
+        durable_outcome.set_item(
+            "serialization",
+            serialization_outcome_name(status.serialization_outcome),
+        )?;
+        durable_outcome.set_item("completed_statements", status.completed_statements)?;
+        durable_outcome.set_item("statement_index", status.statement_index)?;
+        durable_outcome.set_item("outcome_known", !status.outcome_unknown)?;
+        let dict = PyDict::new(py);
+        dict.set_item("query_id", status.query_id.to_string())?;
+        dict.set_item("status", top_status)?;
+        dict.set_item("state", state)?;
+        dict.set_item("server_state", state)?;
+        dict.set_item("terminal_state", terminal_state)?;
+        dict.set_item("operation", status.operation)?;
+        dict.set_item("committed", durable.committed)?;
+        dict.set_item("committed_statements", durable.committed_statements)?;
+        dict.set_item("last_commit_epoch", durable.last_commit_epoch)?;
+        dict.set_item(
+            "first_commit_statement_index",
+            durable.first_commit_statement_index,
+        )?;
+        dict.set_item(
+            "last_commit_statement_index",
+            durable.last_commit_statement_index,
+        )?;
+        dict.set_item("durable_outcome", durable_outcome)?;
+        dict.set_item("terminal_error_code", terminal_error_code)?;
+        dict.set_item("terminal_error_category", terminal_error_category)?;
+        dict.set_item("completed_statements", status.completed_statements)?;
+        dict.set_item("statement_index", status.statement_index)?;
+        dict.set_item("cancel_outcome", cancel_outcome)?;
+        dict.set_item("cancellation_reason", cancellation_reason)?;
+        dict.set_item("outcome_unknown", status.outcome_unknown)?;
+        dict.set_item("outcome_known", !status.outcome_unknown)?;
+        dict.set_item("retryable", retryable)?;
+        dict.into_py_any(py)
     }
 
     fn result(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
@@ -205,15 +685,7 @@ impl PySqlQueryHandle {
             .map_err(|_| PyRuntimeError::new_err("SQL query handle lock poisoned"))?
             .take()
             .ok_or_else(|| PyRuntimeError::new_err("SQL query result already consumed"))?;
-        let rows = py
-            .detach(move || {
-                let batches = handle.wait()?;
-                mongreldb_kit::arrow_util::batches_to_rows(&batches)
-            })
-            .map_err(map_err)?;
-        rows.into_iter()
-            .map(|row| json_map_to_pydict(py, &row))
-            .collect()
+        sql_handle_rows(py, handle, self.limits)
     }
 }
 
@@ -879,13 +1351,15 @@ impl PyDatabase {
     /// Run a SQL read/DDL/DML statement and return the result rows as a list
     /// of dicts (column name → value). Empty for DDL/DML. Writes through SQL
     /// bypass kit-level constraints — use the transactional API for those.
-    #[pyo3(signature = (sql, timeout_ms=None, query_id=None))]
+    #[pyo3(signature = (sql, timeout_ms=None, query_id=None, max_output_rows=None, max_output_bytes=None))]
     fn sql_rows(
         &self,
         py: Python<'_>,
         sql: &str,
         timeout_ms: Option<u64>,
         query_id: Option<&str>,
+        max_output_rows: Option<usize>,
+        max_output_bytes: Option<usize>,
     ) -> PyResult<Vec<Py<PyAny>>> {
         let database = Arc::clone(
             self.db
@@ -894,23 +1368,25 @@ impl PyDatabase {
         );
         let sql = sql.to_string();
         let options = sql_options(timeout_ms, query_id)?;
-        let rows = py
-            .detach(move || database.sql_rows_with_options(&sql, options))
-            .map_err(map_err)?;
-        rows.into_iter()
-            .map(|row| json_map_to_pydict(py, &row))
-            .collect()
+        let handle = database.start_sql(sql, options).map_err(map_err)?;
+        sql_handle_rows(
+            py,
+            handle,
+            output_limits(max_output_rows, max_output_bytes)?,
+        )
     }
 
     /// Run a SQL statement and return the result as raw Arrow IPC *file* bytes
     /// (decode with `pyarrow.ipc.open_file`). Empty for DDL/DML.
-    #[pyo3(signature = (sql, timeout_ms=None, query_id=None))]
+    #[pyo3(signature = (sql, timeout_ms=None, query_id=None, max_output_rows=None, max_output_bytes=None))]
     fn sql_arrow(
         &self,
         py: Python<'_>,
         sql: &str,
         timeout_ms: Option<u64>,
         query_id: Option<&str>,
+        max_output_rows: Option<usize>,
+        max_output_bytes: Option<usize>,
     ) -> PyResult<Vec<u8>> {
         let database = Arc::clone(
             self.db
@@ -919,16 +1395,20 @@ impl PyDatabase {
         );
         let sql = sql.to_string();
         let options = sql_options(timeout_ms, query_id)?;
-        py.detach(move || database.sql_arrow_with_options(&sql, options))
+        let limits = output_limits(max_output_rows, max_output_bytes)?;
+        let handle = database.start_sql(sql, options).map_err(map_err)?;
+        py.detach(move || handle.wait_arrow_with_limits(limits))
             .map_err(map_err)
     }
 
-    #[pyo3(signature = (sql, timeout_ms=None, query_id=None))]
+    #[pyo3(signature = (sql, timeout_ms=None, query_id=None, max_output_rows=None, max_output_bytes=None))]
     fn start_sql(
         &self,
         sql: &str,
         timeout_ms: Option<u64>,
         query_id: Option<&str>,
+        max_output_rows: Option<usize>,
+        max_output_bytes: Option<usize>,
     ) -> PyResult<PySqlQueryHandle> {
         let database = Arc::clone(
             self.db
@@ -942,6 +1422,7 @@ impl PyDatabase {
             query_id: handle.id(),
             database,
             handle: Mutex::new(Some(handle)),
+            limits: output_limits(max_output_rows, max_output_bytes)?,
         })
     }
 
@@ -1895,6 +2376,7 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
         py.get_type::<TriggerValidationError>(),
     )?;
     m.add("StorageError", py.get_type::<StorageError>())?;
+    m.add("DatabaseLockedError", py.get_type::<DatabaseLockedError>())?;
     m.add("IntegrityError", py.get_type::<IntegrityError>())?;
     m.add("AuthRequiredError", py.get_type::<AuthRequiredError>())?;
     m.add(
@@ -1921,6 +2403,24 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("UnsupportedError", py.get_type::<UnsupportedError>())?;
     m.add("TransportError", py.get_type::<TransportError>())?;
+    m.add(
+        "QueryRegistryFullError",
+        py.get_type::<QueryRegistryFullError>(),
+    )?;
+    m.add("CommitOutcomeError", py.get_type::<CommitOutcomeError>())?;
+    m.add(
+        "ResultLimitExceededError",
+        py.get_type::<ResultLimitExceededError>(),
+    )?;
+    m.add("SerializationError", py.get_type::<SerializationError>())?;
+    m.add(
+        "QueryOutcomeUnknownError",
+        py.get_type::<QueryOutcomeUnknownError>(),
+    )?;
+    m.add(
+        "CapabilityUnsupportedError",
+        py.get_type::<CapabilityUnsupportedError>(),
+    )?;
 
     set_code(m, "ValidationError", "VALIDATION")?;
     set_code(m, "DuplicateError", "DUPLICATE")?;
@@ -1930,6 +2430,7 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     set_code(m, "ConflictError", "CONFLICT")?;
     set_code(m, "TriggerValidationError", "TRIGGER_VALIDATION")?;
     set_code(m, "StorageError", "STORAGE")?;
+    set_code(m, "DatabaseLockedError", "DATABASE_LOCKED")?;
     set_code(m, "IntegrityError", "INTEGRITY")?;
     set_code(m, "AuthRequiredError", "AUTH_REQUIRED")?;
     set_code(m, "AuthNotRequiredError", "AUTH_NOT_REQUIRED")?;
@@ -1941,6 +2442,12 @@ fn mongreldb_kit_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     set_code(m, "TransactionAbortedError", "TRANSACTION_ABORTED")?;
     set_code(m, "UnsupportedError", "UNSUPPORTED")?;
     set_code(m, "TransportError", "TRANSPORT")?;
+    set_code(m, "QueryRegistryFullError", "QUERY_REGISTRY_FULL")?;
+    set_code(m, "CommitOutcomeError", "COMMIT_OUTCOME")?;
+    set_code(m, "ResultLimitExceededError", "RESULT_LIMIT_EXCEEDED")?;
+    set_code(m, "SerializationError", "SERIALIZATION_FAILED")?;
+    set_code(m, "QueryOutcomeUnknownError", "QUERY_OUTCOME_UNKNOWN")?;
+    set_code(m, "CapabilityUnsupportedError", "CAPABILITY_UNSUPPORTED")?;
 
     Ok(())
 }

@@ -1,3 +1,4 @@
+use mongreldb_kit::db::complete_sql_output;
 use mongreldb_kit::{
     CancelOutcome, Column, ColumnType, Database, KitError, QueryId, Schema, SqlOptions, Table,
 };
@@ -59,7 +60,7 @@ fn query_handle_supports_queue_cancel_deadline_conflict_and_reuse() {
             timeout: None,
         },
     );
-    assert!(matches!(duplicate, Err(KitError::QueryConflict(_))));
+    assert!(matches!(duplicate, Err(KitError::QueryConflict { .. })));
 
     let cancel_id: QueryId = "aaaabbbbccccddddeeeeffff00001111".parse().unwrap();
     let cancelled = db
@@ -72,7 +73,28 @@ fn query_handle_supports_queue_cancel_deadline_conflict_and_reuse() {
         )
         .unwrap();
     assert_eq!(cancelled.cancel(), CancelOutcome::Accepted);
-    assert!(matches!(cancelled.wait(), Err(KitError::Cancelled { .. })));
+    let cancelled_error = cancelled.wait().unwrap_err();
+    assert!(matches!(
+        &cancelled_error,
+        KitError::Cancelled {
+            outcome,
+            ..
+        } if !outcome.committed
+            && outcome.committed_statements == Some(0)
+            && outcome.last_commit_epoch.is_none()
+            && outcome.first_commit_statement_index.is_none()
+            && outcome.last_commit_statement_index.is_none()
+            && outcome.completed_statements == 0
+            && outcome.statement_index == 0
+    ));
+    let metadata = cancelled_error.query_metadata().unwrap();
+    assert_eq!(metadata.cancel_outcome, None);
+    assert_eq!(
+        metadata.cancellation_reason.as_deref(),
+        Some("client_request")
+    );
+    assert_eq!(metadata.retryable, Some(false));
+    assert_eq!(metadata.server_state.as_deref(), Some("cancelled"));
 
     let timed_out = db
         .start_sql(
@@ -137,4 +159,36 @@ fn row_serialization_remains_cancellable() {
     ));
     db.set_sql_test_hook(None).unwrap();
     assert_eq!(db.sql_rows("SELECT 2 AS value").unwrap()[0]["value"], 2);
+}
+
+#[test]
+fn accepted_completion_race_never_returns_success() {
+    let db = database();
+    for _ in 0..256 {
+        let handle = db.start_sql("SELECT 1", SqlOptions::default()).unwrap();
+        let query_id = handle.id();
+        let output = handle.wait_for_serialization().unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let worker_barrier = Arc::clone(&barrier);
+        let worker = std::thread::spawn(move || {
+            worker_barrier.wait();
+            complete_sql_output(output)
+        });
+
+        barrier.wait();
+        let cancel = db.cancel_sql(query_id);
+        let result = worker.join().unwrap();
+        match cancel {
+            CancelOutcome::Accepted | CancelOutcome::AlreadyCancelling => {
+                assert!(
+                    matches!(result, Err(KitError::Cancelled { .. })),
+                    "{result:?}"
+                );
+            }
+            CancelOutcome::TooLate | CancelOutcome::AlreadyFinished => {
+                assert!(result.is_ok(), "{result:?}");
+            }
+            CancelOutcome::NotFound => panic!("registered query disappeared before completion"),
+        }
+    }
 }

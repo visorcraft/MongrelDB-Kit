@@ -9,6 +9,7 @@ import pytest
 
 from mongreldb_kit import (
     Database,
+    DatabaseLockedError,
     DuplicateError,
     ForeignKeyError,
     RestrictError,
@@ -95,6 +96,7 @@ def test_create_open_and_crud():
         assert row["name"] == "Alice"
 
     # Re-open and update.
+    db.close()
     db2 = Database.open(path)
     with db2.begin() as txn:
         txn.update("users", 1, {"name": "Alice Smith"})
@@ -103,6 +105,20 @@ def test_create_open_and_crud():
     with db2.begin() as txn:
         row = txn.get_by_pk("users", 1)
         assert row["name"] == "Alice Smith"
+
+
+def test_second_live_same_path_open_is_rejected():
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+    try:
+        with pytest.raises(DatabaseLockedError, match="already open in this process") as caught:
+            Database.open(path)
+        assert caught.value.code == "DATABASE_LOCKED"
+    finally:
+        db.close()
+
+    reopened = Database.open(path)
+    reopened.close()
 
 
 def test_timestamp_and_date_columns_round_trip():

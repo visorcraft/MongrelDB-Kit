@@ -541,6 +541,10 @@ db.sql_rows("ROLLBACK TO sp1")  # discards 'world', keeps 'hello'
 db.sql_rows("COMMIT")
 ```
 
+Savepoints require an explicit transaction. `ROLLBACK TO name` keeps the target
+active, removes savepoints created after it, and can recover an aborted
+transaction so work can continue.
+
 ## Key encoding
 
 The byte-identical key encoders used internally are exposed for tooling and tests. Components are
@@ -568,7 +572,15 @@ except DuplicateError as exc:
     print(exc.code)  # DUPLICATE
 ```
 
-Available exceptions: `ValidationError`, `DuplicateError`, `ForeignKeyError`, `RestrictError`, `TriggerValidationError`, `MigrationError`, `ConflictError`, `StorageError`, `IntegrityError`.
+Available exceptions include `ValidationError`, `DuplicateError`,
+`ForeignKeyError`, `RestrictError`, `TriggerValidationError`, `MigrationError`,
+`ConflictError`, `StorageError`, `DatabaseLockedError`, and `IntegrityError`.
+
+Only one live embedded `Database` handle may own a canonical database path in
+one process. A second `Database.open(...)` for the same path raises
+`DatabaseLockedError` with stable code `DATABASE_LOCKED`. Call
+`db.close()` before reopening the path or switching authenticated users. This
+keeps all writes on one epoch sequencer.
 
 ## Users, roles & permissions
 
@@ -640,9 +652,9 @@ db = Database.create_encrypted_with_credentials(
     "./store.kitdb", schema, "passphrase", "admin", "s3cret-pw"
 )
 
-# Long-lived handles call refresh_principal after a REVOKE to pick up
-# permission changes made by other handles.
-db.refresh_principal()
+# Switch authenticated users by closing the current owner first.
+db.close()
+db = Database.open_with_credentials("./store.kitdb", "reader", "reader-pw")
 ```
 
 The full model and recovery flow are documented in the engine
@@ -675,6 +687,42 @@ arrow_ipc = remote.sql_arrow("SELECT count(*) AS n FROM users")
 remote.create_virtual_table("docs_fts", "fts_docs", ["content=docs"])
 remote.drop_virtual_table("docs_fts")
 ```
+
+Remote SQL requires daemon cancellation capability version 2. Every request
+gets a client query ID, so transport failures can be reconciled with durable
+query status. Large reads can use bounded owner-bound pagination:
+
+```python
+page = remote.sql_page(
+    "SELECT id, title FROM documents ORDER BY id",
+    projection=["id", "title"],
+    page_size_rows=500,
+    max_page_bytes=1_000_000,
+    max_page_tokens=100_000,
+)
+if page.get("next_cursor"):
+    next_page = remote.continue_sql_page(page["next_cursor"])
+
+receipt = remote.execute_idempotent_sql(
+    "UPDATE jobs SET claimed = true WHERE id = 42",
+    idempotency_key="claim-job-42-attempt-1",
+)
+assert isinstance(receipt.get("last_commit_epoch"), (int, type(None)))
+assert receipt.get("first_commit_statement_index") in (0, None)
+```
+
+Pagination accepts a read-only `SELECT` and requires an explicit projection.
+The cursor is opaque and expires. Idempotent SQL accepts one write statement;
+reuse the same 1-to-256-byte key after transport loss. A committed or unknown
+outcome must not be retried automatically.
+
+Remote transaction, procedure, and trigger writes use the same errors.
+`CommitOutcomeError` preserves `committed`, exact `last_commit_epoch`, and
+`retryable`; `QueryOutcomeUnknownError.committed` remains `None`. Never retry
+either response automatically.
+
+Unknown commit state stays `None` in status dictionaries and on
+`QueryOutcomeUnknownError`. It is never converted to `False` or zero.
 
 ## Running this example
 

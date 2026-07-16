@@ -101,6 +101,7 @@ def daemon_url():
         if proc.poll() is not None:
             # Process exited early
             stdout, stderr = proc.communicate()
+            shutil.rmtree(tmpdir, ignore_errors=True)
             pytest.skip(f"mongreldb-server exited early: {stderr.decode()}")
         try:
             with urllib.request.urlopen(f"{url}/health", timeout=2) as resp:
@@ -112,12 +113,17 @@ def daemon_url():
 
     if not ready:
         proc.send_signal(signal.SIGKILL)
-        proc.wait()
+        proc.communicate()
+        shutil.rmtree(tmpdir, ignore_errors=True)
         pytest.skip("mongreldb-server did not become healthy in 15s")
 
     yield url
 
     # Graceful shutdown (auto-checkpoint)
     proc.send_signal(signal.SIGTERM)
-    proc.wait(timeout=10)
+    try:
+        proc.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
     shutil.rmtree(tmpdir, ignore_errors=True)

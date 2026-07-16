@@ -15,6 +15,7 @@ from .mongreldb_kit_py import (
     MigrationError,
     RestrictError,
     StorageError,
+    DatabaseLockedError,
     TriggerValidationError,
     ValidationError,
     QueryCancelledError,
@@ -23,6 +24,12 @@ from .mongreldb_kit_py import (
     TransactionAbortedError,
     UnsupportedError,
     TransportError,
+    QueryRegistryFullError,
+    CommitOutcomeError,
+    ResultLimitExceededError,
+    SerializationError,
+    QueryOutcomeUnknownError,
+    CapabilityUnsupportedError,
     migrate as _migrate,
     encode_pk as _encode_pk,
     encode_unique_key as _encode_unique_key,
@@ -32,7 +39,11 @@ from .mongreldb_kit_py import Database as _Database
 from .mongreldb_kit_py import Transaction as _Transaction
 
 from ._schema import Column, ForeignKey, Index, Table, UniqueConstraint
-from .remote import RemoteDatabase, RemoteSqlQueryHandle, RemoteTransaction
+from .remote import (
+    RemoteDatabase,
+    RemoteSqlQueryHandle,
+    RemoteTransaction,
+)
 
 __all__ = [
     "Database",
@@ -70,6 +81,7 @@ __all__ = [
     "MigrationError",
     "RestrictError",
     "StorageError",
+    "DatabaseLockedError",
     "TriggerValidationError",
     "ValidationError",
     "QueryCancelledError",
@@ -78,6 +90,12 @@ __all__ = [
     "TransactionAbortedError",
     "UnsupportedError",
     "TransportError",
+    "QueryRegistryFullError",
+    "CommitOutcomeError",
+    "ResultLimitExceededError",
+    "SerializationError",
+    "QueryOutcomeUnknownError",
+    "CapabilityUnsupportedError",
     "Column",
     "ForeignKey",
     "Index",
@@ -86,6 +104,8 @@ __all__ = [
     "RemoteDatabase",
     "RemoteTransaction",
     "RemoteSqlQueryHandle",
+    "CommitOutcomeError",
+    "QueryOutcomeUnknownError",
 ]
 
 
@@ -97,6 +117,11 @@ class Database:
 
     @staticmethod
     def open(path: str) -> "Database":
+        """Open a database.
+
+        Raises ``DatabaseLockedError`` if this process already has a live handle for
+        the same canonical path. Close that handle before reopening.
+        """
         return Database(_Database.open(path))
 
     @staticmethod
@@ -120,7 +145,8 @@ class Database:
     def open_with_credentials(path: str, username: str, password: str) -> "Database":
         """Open an existing database that has ``require_auth = true``,
         verifying credentials. Every subsequent operation is checked against
-        the authenticated principal's permissions.
+        the authenticated principal's permissions. Raises ``DatabaseLockedError`` if
+        this process already has a live handle for the same canonical path.
         """
         return Database(_Database.open_with_credentials(path, username, password))
 
@@ -324,11 +350,15 @@ class Database:
         *,
         timeout_ms: Optional[int] = None,
         query_id: Optional[str] = None,
+        max_output_rows: Optional[int] = None,
+        max_output_bytes: Optional[int] = None,
     ) -> Any:
         """Start SQL and return a thread-safe handle with ``id``, ``cancel()``,
         and blocking ``result()`` methods.
         """
-        return self._handle.start_sql(sql, timeout_ms, query_id)
+        return self._handle.start_sql(
+            sql, timeout_ms, query_id, max_output_rows, max_output_bytes
+        )
 
     def sql_rows(
         self,
@@ -336,6 +366,8 @@ class Database:
         *,
         timeout_ms: Optional[int] = None,
         query_id: Optional[str] = None,
+        max_output_rows: Optional[int] = None,
+        max_output_bytes: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """Run a SQL statement; return the result rows as a list of dicts.
 
@@ -344,7 +376,9 @@ class Database:
         transactional API for constrained writes. The engine's own declarative
         constraints (unique, FK, check) still apply.
         """
-        return self._handle.sql_rows(sql, timeout_ms, query_id)
+        return self._handle.sql_rows(
+            sql, timeout_ms, query_id, max_output_rows, max_output_bytes
+        )
 
     def sql_arrow(
         self,
@@ -352,13 +386,17 @@ class Database:
         *,
         timeout_ms: Optional[int] = None,
         query_id: Optional[str] = None,
+        max_output_rows: Optional[int] = None,
+        max_output_bytes: Optional[int] = None,
     ) -> bytes:
         """Run a SQL statement; return the result as raw Arrow IPC bytes.
 
         Decode with ``pyarrow.ipc.open_file``. Empty for DDL/DML. The same
         bypass caveats as :meth:`sql_rows` apply.
         """
-        return self._handle.sql_arrow(sql, timeout_ms, query_id)
+        return self._handle.sql_arrow(
+            sql, timeout_ms, query_id, max_output_rows, max_output_bytes
+        )
 
     async def sql_rows_async(
         self,
@@ -366,13 +404,21 @@ class Database:
         *,
         timeout_ms: Optional[int] = None,
         query_id: Optional[str] = None,
+        max_output_rows: Optional[int] = None,
+        max_output_bytes: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """Run SQL without blocking the asyncio event loop.
 
         Cancelling this task sends native cancellation before propagating
         ``asyncio.CancelledError``.
         """
-        handle = self.start_sql(sql, timeout_ms=timeout_ms, query_id=query_id)
+        handle = self.start_sql(
+            sql,
+            timeout_ms=timeout_ms,
+            query_id=query_id,
+            max_output_rows=max_output_rows,
+            max_output_bytes=max_output_bytes,
+        )
         try:
             return await asyncio.to_thread(handle.result)
         except asyncio.CancelledError:

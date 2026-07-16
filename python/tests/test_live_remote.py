@@ -168,21 +168,29 @@ class TestRemoteDatabaseLive:
         assert len(rows) >= 1, f"query returned {len(rows)} rows for PK={user_id}"
 
     def test_idempotency_key(self, daemon_url):
+        StorageError = _import_remote()[2][4]
         db = _connect(daemon_url)
         _setup(db)
         key = "test-idem-" + uuid.uuid4().hex[:8]
+        email = _unique_email()
         txn = db.begin()
         txn = txn.with_idempotency_key(key)
-        txn.insert("users_live", {"email": _unique_email(), "age": 33})
+        txn.insert("users_live", {"email": email, "age": 33})
         r1 = txn.commit()
-        epoch1 = r1.get("epoch")
-        # Replay with same key
+
+        # An exact replay returns the original durable receipt.
         txn2 = db.begin()
         txn2 = txn2.with_idempotency_key(key)
-        txn2.insert("users_live", {"email": _unique_email(), "age": 35})
+        txn2.insert("users_live", {"email": email, "age": 33})
         r2 = txn2.commit()
-        epoch2 = r2.get("epoch")
-        assert epoch1 == epoch2, f"epoch should be cached: {epoch1} vs {epoch2}"
+        assert r2 == r1
+
+        # Reusing the key for a different payload must never replay the receipt.
+        txn3 = db.begin().with_idempotency_key(key)
+        txn3.insert("users_live", {"email": email, "age": 35})
+        with pytest.raises(StorageError) as caught:
+            txn3.commit()
+        assert caught.value.code == "IDEMPOTENCY_KEY_REUSE_MISMATCH"
 
     def test_upsert_insert_then_update(self, daemon_url):
         db = _connect(daemon_url)
@@ -201,9 +209,14 @@ class TestRemoteDatabaseLive:
             pass  # Upsert with explicit PK may conflict if id=1 belongs to another test
 
     def test_sql_arrow_returns_bytes(self, daemon_url):
+        from mongreldb_kit import CapabilityUnsupportedError
+
         db = _connect(daemon_url)
         _setup(db)
-        result = db.sql_arrow("SELECT 1 AS one")
+        try:
+            result = db.sql_arrow("SELECT 1 AS one")
+        except CapabilityUnsupportedError:
+            pytest.skip("daemon lacks SQL cancellation capability version 2")
         assert isinstance(result, (bytes, bytearray))
         assert len(result) > 0
 

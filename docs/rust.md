@@ -305,7 +305,76 @@ db.replace_trigger(&spec)?;
 db.drop_trigger("users_ai")?;
 ```
 
-With the `remote` feature, `RemoteDatabase::sql_rows` runs daemon SQL and
+With the `remote` feature, `RemoteDatabase::sql_rows` runs daemon SQL. Configure
+Bearer or Basic authentication once so capabilities, SQL, cancellation, status,
+and every other route share the same credentials:
+
+```rust
+use mongreldb_kit::{RemoteAuth, RemoteDatabase, RemoteOptions, SecretString};
+
+let remote = RemoteDatabase::connect_with_options(
+    "https://db.example.com",
+    RemoteOptions {
+        auth: Some(RemoteAuth::Bearer(SecretString::from(
+            std::env::var("MONGRELDB_TOKEN")?,
+        ))),
+        ..RemoteOptions::default()
+    },
+)?;
+```
+
+`RemoteSqlQueryHandle::cancel` returns `RemoteCancelOutcome`, distinguishing
+accepted, already-cancelling, too-late, already-finished, not-found, and
+pre-cancelled results. `status` returns the durable statement, commit epoch,
+terminal error, and retryability fields. If transport fails after submission,
+the client checks status before cancelling; it returns `KitError::CommitOutcome`
+when the server proves a commit and `KitError::OutcomeUnknown` when no terminal
+outcome can be established.
+
+The same typed outcome contract covers remote `/kit/txn`, procedure, and
+trigger writes. A `COMMIT_OUTCOME` response remains `KitError::CommitOutcome`
+with `committed` and exact `last_commit_epoch` available through
+`KitError::query_outcome()`, plus `retryable` through
+`KitError::query_metadata()`.
+`QUERY_OUTCOME_UNKNOWN` remains `KitError::OutcomeUnknown`; do not replay it.
+
+`RemoteQueryStatus::durable_commit_state()` returns `None` for that unknown
+case. Its commit and counter fields remain `Option` values. Never treat `None`
+as `false` or zero.
+
+Remote SQL always requires cancellation capability version 2. This lets the
+client assign a query ID even for default `sql_rows` calls and recover a durable
+status if Arrow or JSON decoding fails after a commit.
+
+Use owner-bound, bounded pagination for large read-only results:
+
+```rust
+use mongreldb_kit::RemoteSqlPaginationOptions;
+
+let page = remote.sql_page(
+    "SELECT id, title FROM documents ORDER BY id",
+    RemoteSqlPaginationOptions {
+        page_size_rows: 500,
+        projection: vec!["id".into(), "title".into()],
+        query_id: None,
+        timeout: None,
+        max_page_bytes: Some(1_000_000),
+        max_page_tokens: Some(100_000),
+        max_output_rows: None,
+        max_output_bytes: None,
+    },
+)?;
+if let Some(cursor) = page.next_cursor.as_deref() {
+    let next = remote.continue_sql_page(cursor)?;
+}
+```
+
+For a retry-safe single write, call `execute_idempotent_sql` with
+`RemoteIdempotentSqlOptions`. Reuse the same idempotency key after transport
+loss. The returned `RemoteSqlWriteReceipt` contains the original query ID,
+replay state, committed statement count, and exact `last_commit_epoch`.
+It also preserves the first and last committed statement indexes.
+
 `VirtualTableSpec` generates module-backed virtual-table DDL:
 
 ```rust
@@ -395,6 +464,10 @@ db.sql("ROLLBACK TO sp1")?; // discards 'world'
 db.sql("COMMIT")?;
 ```
 
+Savepoints require an explicit transaction. `ROLLBACK TO name` keeps the target
+active, removes savepoints created after it, and can recover an aborted
+transaction so work can continue.
+
 ## Storage tuning & introspection
 
 The Kit surfaces the engine's power-user knobs for production sizing and
@@ -451,8 +524,11 @@ let block = db.allocate_sequence("orders_id_seq", 10)?; // reserve 10, returns t
 
 ## Error handling
 
-`KitError` is a flat enum of stable categories: `Validation`, `Duplicate`, `ForeignKey`, `Restrict`,
-`TriggerValidation`, `Migration`, `Conflict`, `Storage`, and `Integrity`. Match on the variant you handle:
+`KitError` is a flat enum of stable categories, including `Validation`,
+`Duplicate`, `ForeignKey`, `Restrict`, `TriggerValidation`, `Migration`,
+`Conflict`, `Storage`, `DatabaseLocked`, and `Integrity`. Match on the variant
+you handle. `DatabaseLocked` identifies a database already owned by another
+live handle or process without parsing its message.
 
 ```rust
 use mongreldb_kit::KitError;

@@ -278,6 +278,7 @@ class TestCredentialEnforcement:
             db = Database.create_with_credentials(path, make_schema(), "admin", "s3cret")
             assert db.require_auth_enabled() is True
 
+            db.close()
             db2 = Database.open_with_credentials(path, "admin", "s3cret")
             assert db2.require_auth_enabled() is True
         finally:
@@ -312,6 +313,7 @@ class TestCredentialEnforcement:
             assert db.require_auth_enabled() is True
 
             # Reopen without credentials should fail
+            db.close()
             with pytest.raises(Exception):
                 Database.open(path)
         finally:
@@ -326,6 +328,7 @@ class TestCredentialEnforcement:
             assert db.require_auth_enabled() is False
 
             # Plain open should work now
+            db.close()
             db2 = Database.open(path)
             assert db2.require_auth_enabled() is False
         finally:
@@ -351,6 +354,7 @@ class TestCredentialEnforcement:
             db.grant_permission("read_only", "select:orders")
             db.grant_role("reader", "read_only")
 
+            db.close()
             db2 = Database.open_with_credentials(path, "reader", "r-pw")
             # reader can SELECT but the user list should show both users
             assert "admin" in db2.users()

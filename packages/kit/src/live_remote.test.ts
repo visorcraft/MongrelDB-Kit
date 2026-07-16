@@ -9,7 +9,7 @@
  * Skips automatically if no mongreldb-server binary is found.
  */
 
-import { describe, test, expect, beforeAll, afterAll } from 'vitest';
+import { describe, test, expect, beforeAll, afterAll, type TestContext } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir as osTmpdir } from 'node:os';
@@ -89,6 +89,7 @@ function waitForHealth(url: string, timeoutMs = 15000): Promise<void> {
 
 let daemonProcess: ChildProcess | null = null;
 let daemonUrl = '';
+let hasSqlCancellationV2 = false;
 
 beforeAll(async () => {
 	const binary = await findServerBinary();
@@ -110,6 +111,18 @@ beforeAll(async () => {
 	});
 
 	await waitForHealth(daemonUrl);
+	try {
+		const response = await fetch(`${daemonUrl}/capabilities`);
+		const body = response.ok ? await response.json() as Record<string, unknown> : {};
+		const capability = body.sql_cancellation as Record<string, unknown> | undefined;
+		hasSqlCancellationV2 = capability?.version === 2
+			&& capability.client_query_ids === true
+			&& capability.cancel_endpoint === true
+			&& capability.query_status === true
+			&& capability.pre_registration_cancel === true;
+	} catch {
+		hasSqlCancellationV2 = false;
+	}
 }, 30000);
 
 afterAll(async () => {
@@ -141,6 +154,12 @@ function canFindServerBinarySync(): boolean {
 
 // Skip the suite if no daemon binary can be found.
 const hasDaemon = canFindServerBinarySync();
+function requireSqlCancellationV2(context: TestContext): boolean {
+	if (hasSqlCancellationV2) return true;
+	context.skip();
+	return false;
+}
+
 describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 	test('health() returns ok', async () => {
 		const { RemoteDatabase } = await import('./remote.js');
@@ -149,7 +168,8 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		expect(result).toBeDefined();
 	});
 
-	test('tableNames() returns empty initially', async () => {
+	test('tableNames() returns empty initially', async (context) => {
+		if (!requireSqlCancellationV2(context)) return;
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 		// Create a table via SQL
@@ -158,7 +178,8 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		expect(names).toContain('test_items');
 	});
 
-	test('sql INSERT + count', async () => {
+	test('sql INSERT + count', async (context) => {
+		if (!requireSqlCancellationV2(context)) return;
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 		await remote.sql("INSERT INTO test_items (id, name) VALUES (1, 'widget')");
@@ -166,7 +187,8 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		expect(remote.count('test_items')).toBe(2n);
 	});
 
-	test('sqlRows returns decoded rows', async () => {
+	test('sqlRows returns decoded rows', async (context) => {
+		if (!requireSqlCancellationV2(context)) return;
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 		const rows = await remote.sqlRows('SELECT * FROM test_items ORDER BY id');
@@ -175,7 +197,8 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		expect(rows[1].name).toBe('gadget');
 	});
 
-	test('sql UPDATE + verify', async () => {
+	test('sql UPDATE + verify', async (context) => {
+		if (!requireSqlCancellationV2(context)) return;
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 		await remote.sql("UPDATE test_items SET name = 'updated' WHERE id = 1");
@@ -183,14 +206,16 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		expect(rows[0].name).toBe('updated');
 	});
 
-	test('sql DELETE + verify count drops', async () => {
+	test('sql DELETE + verify count drops', async (context) => {
+		if (!requireSqlCancellationV2(context)) return;
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 		await remote.sql('DELETE FROM test_items WHERE id = 2');
 		expect(remote.count('test_items')).toBe(1n);
 	});
 
-	test('compact() succeeds', async () => {
+	test('compact() succeeds', async (context) => {
+		if (!requireSqlCancellationV2(context)) return;
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 		const result = remote.compact();
@@ -198,14 +223,16 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		expect(typeof result.compacted).toBe('number');
 	});
 
-	test('compactTable() succeeds', async () => {
+	test('compactTable() succeeds', async (context) => {
+		if (!requireSqlCancellationV2(context)) return;
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 		const result = remote.compactTable('test_items');
 		expect(typeof result).toBe('boolean');
 	});
 
-	test('retention settings and AS OF EPOCH time-travel reads', async () => {
+	test('retention settings and AS OF EPOCH time-travel reads', async (context) => {
+		if (!requireSqlCancellationV2(context)) return;
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 
@@ -228,7 +255,8 @@ describe.skipIf(!hasDaemon)('RemoteDatabase live tests', () => {
 		expect(past[0].name).toBe('orig');
 	});
 
-	test('sql DROP TABLE', async () => {
+	test('sql DROP TABLE', async (context) => {
+		if (!requireSqlCancellationV2(context)) return;
 		const { RemoteDatabase } = await import('./remote.js');
 		const remote = new RemoteDatabase(daemonUrl);
 		await remote.sql('DROP TABLE test_items');

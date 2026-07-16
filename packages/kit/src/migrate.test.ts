@@ -74,7 +74,7 @@ function withDbSync(fn: (db: KitDatabase) => void): void {
 describe('migrate', () => {
 	it('forwards default and per-statement SQL controls', async () => {
 		await withDb(async (db) => {
-			const startSql = vi.spyOn(db, 'startSql');
+			const sqlRows = vi.spyOn(db, 'sqlRows');
 			await migrate(
 				db,
 				new Schema([]),
@@ -94,11 +94,11 @@ describe('migrate', () => {
 				{ sql: { timeoutMs: 1000, queryId: '11111111111111111111111111111111' } }
 			);
 
-			expect(startSql).toHaveBeenNthCalledWith(1, 'SELECT 1', {
+			expect(sqlRows).toHaveBeenNthCalledWith(1, 'SELECT 1', {
 				timeoutMs: 1000,
 				queryId: '11111111111111111111111111111111'
 			});
-			expect(startSql).toHaveBeenNthCalledWith(2, 'SELECT 2', {
+			expect(sqlRows).toHaveBeenNthCalledWith(2, 'SELECT 2', {
 				timeoutMs: 2000,
 				queryId: '22222222222222222222222222222222'
 			});

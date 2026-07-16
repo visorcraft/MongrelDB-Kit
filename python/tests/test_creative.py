@@ -147,21 +147,20 @@ class TestAuthEdge:
         finally:
             pass
 
-    def test_refresh_principal_after_grant(self):
+    def test_principal_permissions_after_grant(self):
         d = tempfile.mkdtemp()
         path = os.path.join(d, "sec")
         try:
             db = Database.create_with_credentials(path, make_schema(), "admin", "pw")
             db.create_user("alice", "apw")
-            db2 = Database.open_with_credentials(path, "alice", "apw")
-            # Alice has no permissions initially.
-            # Admin grants Alice a role.
             db.create_role("r")
             db.grant_permission("r", "select:items")
             db.grant_role("alice", "r")
-            # Alice refreshes — should now have Select.
-            db2.refresh_principal()
-            # Alice can now SELECT (this exercises the refreshed permission).
+
+            # Only one live handle may own a path in a process. Switch to an
+            # explicitly authenticated Alice session after the admin closes.
+            db.close()
+            db2 = Database.open_with_credentials(path, "alice", "apw")
             txn = db2.begin()
             try:
                 rows = txn.select("items")

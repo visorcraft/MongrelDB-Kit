@@ -77,6 +77,7 @@ class TestReopenPersistence:
             txn.commit()
             db.sql_rows("CREATE TABLE copy AS SELECT id FROM items")
 
+            db.close()
             db2 = Database.open(path)
             assert db2.table_names()
             rows = db2.sql_rows("SELECT count(*) AS c FROM copy")
@@ -95,6 +96,7 @@ class TestReopenPersistence:
             txn.commit()
             db.sql_rows("CREATE MATERIALIZED VIEW mv AS SELECT id FROM items WHERE id < 5")
 
+            db.close()
             db2 = Database.open(path)
             rows = db2.sql_rows("SELECT count(*) AS c FROM mv")
             assert rows[0]["c"] == 4
@@ -235,6 +237,7 @@ class TestAuthSQLInteraction:
             db.grant_permission("r_role", "select:items")
             db.grant_role("reader", "r_role")
 
+            db.close()
             db2 = Database.open_with_credentials(path, "reader", "r")
             # reader has Select on items but NOT Ddl → CTAS should fail.
             with pytest.raises(Exception):
@@ -249,6 +252,7 @@ class TestAuthSQLInteraction:
             db = Database.create_with_credentials(path, make_schema(), "admin", "pw")
             db.disable_auth()
             # Plain open should work.
+            db.close()
             db2 = Database.open(path)
             assert db2.require_auth_enabled() is False
         finally:

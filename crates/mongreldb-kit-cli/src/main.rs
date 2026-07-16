@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,7 +11,7 @@ use clap::{Parser, Subcommand};
 use mongreldb_kit::{
     migrate as run_migrations, AggFunc, Aggregate, AggregateQuery, Column, ColumnType, Database,
     Direction, Expr, Literal, Migration, MigrationOp, OnConflict, OrderBy, Permission, Query,
-    QueryId, Schema, Select, SqlOptions, Table,
+    QueryId, Schema, Select, SqlOptions, SqlOutputLimits, Table,
 };
 use mongreldb_kit_core::migrations::plan_migrations;
 use mongreldb_kit_core::{ProcedureSpec, TriggerSpec, ViewSpec, VirtualTableSpec};
@@ -861,16 +863,92 @@ fn cmd_sql(
         .context("failed to start SQL")?;
     let active_id = handle.id();
     let cancel_db = Arc::clone(&db);
+    let interrupts = Arc::new(AtomicU8::new(0));
+    let writing_output = Arc::new(AtomicBool::new(false));
+    let handler_interrupts = Arc::clone(&interrupts);
+    let handler_writing_output = Arc::clone(&writing_output);
     ctrlc::set_handler(move || {
-        cancel_db.cancel_sql(active_id);
+        if handler_writing_output.load(Ordering::Acquire) {
+            std::process::exit(130);
+        }
+        if handler_interrupts.fetch_add(1, Ordering::AcqRel) == 0 {
+            cancel_db.cancel_sql(active_id);
+        } else {
+            std::process::exit(130);
+        }
     })
     .context("failed to install Ctrl-C SQL cancellation handler")?;
-    let batches = handle.wait().context("failed to execute SQL")?;
-    let rows = mongreldb_kit::arrow_util::batches_to_rows(&batches)
-        .context("failed to decode SQL rows")?;
-    let values: Vec<Value> = rows.into_iter().map(Value::Object).collect();
-    println!("{}", serde_json::to_string_pretty(&Value::Array(values))?);
-    Ok(())
+    let output = handle
+        .wait_for_serialization()
+        .context("failed to execute SQL")?;
+    let limits = SqlOutputLimits::default();
+    let rows = match mongreldb_kit::arrow_util::batches_to_rows_controlled_with_limits(
+        output.batches(),
+        output.query(),
+        limits,
+    ) {
+        Ok(rows) => rows,
+        Err(error) => {
+            mongreldb_kit::db::fail_sql_output(output, &error);
+            return Err(error).context("failed to decode SQL rows");
+        }
+    };
+    let rendered = (|| -> mongreldb_kit::Result<Vec<u8>> {
+        let mut rendered = Vec::new();
+        rendered.extend_from_slice(b"[\n");
+        let row_count = rows.len();
+        for (index, row) in rows.into_iter().enumerate() {
+            if index % 256 == 0 {
+                output.query().checkpoint()?;
+            }
+            let json = serde_json::to_string_pretty(&Value::Object(row)).map_err(|error| {
+                mongreldb_kit::arrow_util::controlled_serialization_error(
+                    output.query(),
+                    error.to_string(),
+                )
+            })?;
+            let mut formatted = String::with_capacity(json.len() + 8);
+            let lines = json.lines().collect::<Vec<_>>();
+            for (line_index, line) in lines.iter().enumerate() {
+                formatted.push_str("  ");
+                formatted.push_str(line);
+                if index + 1 < row_count && line_index + 1 == lines.len() {
+                    formatted.push(',');
+                }
+                formatted.push('\n');
+            }
+            if rendered
+                .len()
+                .saturating_add(formatted.len())
+                .saturating_add(2)
+                > limits.max_bytes
+            {
+                return Err(mongreldb_kit::arrow_util::controlled_result_limit_error(
+                    output.query(),
+                    limits,
+                ));
+            }
+            rendered.extend_from_slice(formatted.as_bytes());
+        }
+        rendered.extend_from_slice(b"]\n");
+        Ok(rendered)
+    })();
+    match rendered {
+        Ok(rendered) => {
+            mongreldb_kit::db::complete_sql_output(output)
+                .context("SQL was cancelled before output completion")?;
+            writing_output.store(true, Ordering::Release);
+            let stdout = io::stdout();
+            let mut writer = io::BufWriter::new(stdout.lock());
+            writer.write_all(&rendered)?;
+            writer.flush()?;
+            Ok(())
+        }
+        Err(error) => {
+            mongreldb_kit::db::fail_sql_output(output, &error);
+            Err(error).context("failed to serialize SQL rows")
+        }
+    }
 }
 
 fn cmd_view_create(path: &Path, view_path: &Path, creds: Option<&Credentials>) -> Result<()> {

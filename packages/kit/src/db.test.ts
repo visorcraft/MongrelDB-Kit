@@ -122,6 +122,39 @@ describe('KitDatabase', () => {
 		}
 	});
 
+	it('openSync propagates stable native lock code instead of creating', () => {
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([]));
+		try {
+			let failure: unknown;
+			try {
+				KitDatabase.openSync(dir, new Schema([]));
+			} catch (error) {
+				failure = error;
+			}
+			expect(failure).toMatchObject({ code: 'MONGRELDB_DATABASE_LOCKED' });
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('openSync propagates stable native auth code instead of creating', () => {
+		const dir = makeTempDir();
+		KitDatabase.createWithCredentialsSync(dir, new Schema([]), 'admin', 'password').close();
+		try {
+			let failure: unknown;
+			try {
+				KitDatabase.openSync(dir, new Schema([]));
+			} catch (error) {
+				failure = error;
+			}
+			expect(failure).toMatchObject({ code: 'MONGRELDB_AUTH_REQUIRED' });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('reconciles existing table column ids by name on open', () => {
 		const v1 = table('widgets', {
 			columns: [int('id', { primaryKey: true }), text('name'), int('count')],

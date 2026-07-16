@@ -36,30 +36,180 @@ import {
 } from './external.js';
 import { migrateSync as runMigrateSync, type Migration } from './migrate.js';
 import { isReferencedTable, deleteGuardsForTable, toCells, type ConstraintKit } from './constraints.js';
-import { KitError, QueryCancelledError, isRetryableConflict, mapSqlError } from './errors.js';
+import {
+	CommitOutcomeError,
+	KitError,
+	QueryIdConflictError,
+	QueryCancelledError,
+	QueryOutcomeUnknownError,
+	ResultLimitExceededError,
+	SerializationError,
+	QueryTimeoutError,
+	TransactionAbortedError,
+	isRetryableConflict
+} from './errors.js';
+import type { KitErrorCode, SqlErrorMetadata } from './errors.js';
 
 export interface SqlOptions {
 	timeoutMs?: number;
 	signal?: AbortSignal;
 	queryId?: string;
+	maxOutputRows?: number;
+	maxOutputBytes?: number;
+}
+
+export type CancelOutcome =
+	| 'accepted'
+	| 'already_cancelling'
+	| 'too_late'
+	| 'already_finished'
+	| 'not_found'
+	| 'pre_cancelled';
+
+export interface SqlDurableOutcome {
+	committed: boolean | null;
+	committedStatements: number | null;
+	lastCommitEpoch?: bigint;
+	firstCommitStatementIndex?: number;
+	lastCommitStatementIndex?: number;
+}
+
+export interface SqlQueryStatus {
+	queryId: string;
+	phase: string;
+	terminalState?: string;
+	serverState?: string;
+	operation: string;
+	committed: boolean | null;
+	durableOutcome: SqlDurableOutcome;
+	terminalErrorCode?: string;
+	terminalErrorCategory?: string;
+	completedStatements: number | null;
+	statementIndex: number | null;
+	cancellationReason: string;
+	cancelOutcome?: CancelOutcome;
+	retryable?: boolean;
 }
 
 export interface SqlQuery<T> {
 	readonly id: string;
 	readonly result: Promise<T>;
-	cancel(): Promise<void> | void;
+	cancel(): Promise<CancelOutcome>;
+	status(): Promise<SqlQueryStatus>;
 }
 
 type NativeSqlOptions = {
 	queryId?: string;
 	timeoutMs?: number;
+	maxOutputRows?: number;
+	maxOutputBytes?: number;
 };
 
 type NativeSqlQuery = {
 	readonly id: string;
-	cancel(): boolean;
+	cancel(): string;
+	status(): SqlQueryStatus;
 	result(): Promise<Buffer>;
+	resultArrow?(): Promise<Buffer>;
+	resultRows?(): Promise<Record<string, unknown>[]>;
 };
+
+const NATIVE_AUTH_REQUIRED = 'MONGRELDB_AUTH_REQUIRED';
+const NATIVE_DATABASE_LOCKED = 'MONGRELDB_DATABASE_LOCKED';
+const NATIVE_NOT_FOUND = 'MONGRELDB_NOT_FOUND';
+
+function nativeErrorCode(error: unknown): string | undefined {
+	return typeof error === 'object' && error !== null && 'code' in error
+		? String(error.code)
+		: undefined;
+}
+
+function nativeOpenCanCreate(error: unknown): boolean {
+	const code = nativeErrorCode(error);
+	if (code === NATIVE_AUTH_REQUIRED || code === NATIVE_DATABASE_LOCKED) return false;
+	return code === NATIVE_NOT_FOUND;
+}
+
+function nativeSqlError(status: SqlQueryStatus, error: unknown): Error {
+	const message = error instanceof Error ? error.message : String(error);
+	const metadata: SqlErrorMetadata = {
+		cancelOutcome: status.cancelOutcome,
+		cancellationReason: status.cancellationReason,
+		retryable: status.retryable,
+		serverState: status.serverState
+	};
+	if (status.durableOutcome.committed === null) {
+		return new QueryOutcomeUnknownError(status.queryId, message, metadata);
+	}
+	const outcome = {
+		committed: status.durableOutcome.committed,
+		committedStatements: status.durableOutcome.committedStatements ?? undefined,
+		lastCommitEpoch: status.durableOutcome.lastCommitEpoch,
+		completedStatements: status.completedStatements ?? undefined,
+		statementIndex: status.statementIndex ?? undefined
+	};
+	switch (status.terminalErrorCode) {
+		case 'QUERY_CANCELLED':
+		case 'QUERY_CANCELLED_AFTER_COMMIT':
+			return new QueryCancelledError(status.queryId, message, outcome, metadata);
+		case 'DEADLINE_EXCEEDED':
+		case 'DEADLINE_AFTER_COMMIT':
+			return new QueryTimeoutError(status.queryId, message, outcome, metadata);
+		case 'COMMIT_OUTCOME':
+			return new CommitOutcomeError(status.queryId, message, { ...outcome, committed: true }, metadata);
+		case 'RESULT_LIMIT_EXCEEDED':
+			return new ResultLimitExceededError(status.queryId, message, outcome, metadata);
+		case 'SERIALIZATION_FAILED':
+			return new SerializationError(status.queryId, message, outcome, metadata);
+		case 'SERIALIZATION_FAILED_AFTER_COMMIT':
+			return new SerializationError(status.queryId, message, { ...outcome, committed: true }, metadata);
+		default:
+			if (status.durableOutcome.committed) {
+				return new CommitOutcomeError(status.queryId, message, outcome, metadata);
+			}
+			return error instanceof Error ? error : new KitError(message);
+	}
+}
+
+const NATIVE_SQL_ERROR_CODES = new Set<KitErrorCode>([
+	'QUERY_ID_CONFLICT',
+	'QUERY_REGISTRY_FULL',
+	'TRANSACTION_ABORTED',
+	'COMMIT_OUTCOME',
+	'QUERY_CANCELLED',
+	'QUERY_CANCELLED_AFTER_COMMIT',
+	'DEADLINE_EXCEEDED',
+	'DEADLINE_AFTER_COMMIT',
+	'RESULT_LIMIT_EXCEEDED',
+	'SERIALIZATION_FAILED',
+	'SERIALIZATION_FAILED_AFTER_COMMIT'
+]);
+
+function nativeSqlStartError(queryId: string, error: unknown): Error {
+	const message = error instanceof Error ? error.message : String(error);
+	const code = nativeErrorCode(error) ?? '';
+	if (code === 'QUERY_ID_CONFLICT') return new QueryIdConflictError(queryId, message);
+	if (code === 'TRANSACTION_ABORTED') return new TransactionAbortedError(message);
+	if (NATIVE_SQL_ERROR_CODES.has(code as KitErrorCode)) {
+		return new KitError(message, code as KitErrorCode);
+	}
+	return error instanceof Error ? error : new KitError(message);
+}
+
+function nativeCancelOutcome(value: string): CancelOutcome {
+	const normalized = value.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+	switch (normalized) {
+		case 'accepted':
+		case 'already_cancelling':
+		case 'too_late':
+		case 'already_finished':
+		case 'not_found':
+		case 'pre_cancelled':
+			return normalized as CancelOutcome;
+		default:
+			throw new KitError(`unknown SQL cancellation outcome: ${value}`);
+	}
+}
 
 function sqlQueryId(): string {
 	return randomBytes(16).toString('hex');
@@ -130,8 +280,6 @@ type MongrelDatabase = NativeDatabase & {
 	trigger(name: string): { json: string } | null;
 	sql(sql: string): Promise<Buffer>;
 	sqlWithOptions(sql: string, options?: NativeSqlOptions): Promise<Buffer>;
-	startSql(sql: string, options?: NativeSqlOptions): NativeSqlQuery;
-	cancelSql(queryId: string): boolean;
 	// User/role/credentials (NAPI addon methods)
 	createUser(username: string, password: string): void;
 	dropUser(username: string): void;
@@ -444,12 +592,7 @@ export class KitDatabase {
 		try {
 			db = addon.Database.open(path);
 		} catch (e) {
-			// Propagate AuthRequired — do NOT fall back to create, which would
-			// silently bypass credential enforcement on an existing database.
-			const errMsg = e instanceof Error ? e.message : String(e);
-			if (errMsg.includes('AuthRequired') || errMsg.includes('authentication required')) {
-				throw e;
-			}
+			if (!nativeOpenCanCreate(e)) throw e;
 			db = addon.Database.withPath(path);
 		}
 
@@ -481,7 +624,8 @@ export class KitDatabase {
 		if (options?.encryption?.passphrase) {
 			try {
 				return KitDatabase.openEncryptedSync(path, schema, options.encryption.passphrase);
-			} catch {
+			} catch (error) {
+				if (!nativeOpenCanCreate(error)) throw error;
 				return KitDatabase.createEncryptedSync(path, schema, options.encryption.passphrase);
 			}
 		}
@@ -495,12 +639,7 @@ export class KitDatabase {
 		try {
 			db = addon.Database.open(path);
 		} catch (e) {
-			// Propagate AuthRequired — do NOT fall back to create, which would
-			// silently bypass credential enforcement on an existing database.
-			const errMsg = e instanceof Error ? e.message : String(e);
-			if (errMsg.includes('AuthRequired') || errMsg.includes('authentication required')) {
-				throw e;
-			}
+			if (!nativeOpenCanCreate(e)) throw e;
 			db = addon.Database.withPath(path);
 		}
 
@@ -694,35 +833,87 @@ export class KitDatabase {
 	}
 
 	startSql(sql: string, options: SqlOptions = {}): SqlQuery<ArrowTable> {
+		return this.startSqlWithResult(sql, options, async (native) => tableFromIPC(await native.result()));
+	}
+
+	private startSqlWithResult<T>(
+		sql: string,
+		options: SqlOptions,
+		readResult: (native: NativeSqlQuery) => Promise<T>
+	): SqlQuery<T> {
 		const queryId = options.queryId ?? sqlQueryId();
 		if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)) {
 			throw new RangeError('timeoutMs must be a positive safe integer');
 		}
+		for (const [name, value] of [['maxOutputRows', options.maxOutputRows], ['maxOutputBytes', options.maxOutputBytes]] as const) {
+			if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+				throw new RangeError(`${name} must be a positive safe integer`);
+			}
+		}
 		if (options.signal?.aborted) {
+			const error = new QueryCancelledError(
+				queryId,
+				'SQL query cancelled before execution',
+				{
+					committed: false,
+					committedStatements: 0,
+					completedStatements: 0,
+					statementIndex: 0
+				},
+				{
+					cancelOutcome: 'pre_cancelled',
+					cancellationReason: 'client_request',
+					retryable: false,
+					serverState: 'pre_cancelled'
+				}
+			);
+			const status: SqlQueryStatus = {
+				queryId,
+				phase: 'pre_cancelled',
+				serverState: 'pre_cancelled',
+				terminalState: 'cancelled_before_start',
+				operation: 'sql',
+				committed: false,
+				durableOutcome: { committed: false, committedStatements: 0 },
+				terminalErrorCode: 'QUERY_CANCELLED',
+				completedStatements: 0,
+				statementIndex: 0,
+				cancellationReason: 'client_request',
+				cancelOutcome: 'pre_cancelled',
+				retryable: false
+			};
 			return {
 				id: queryId,
-				result: Promise.reject(new QueryCancelledError(queryId)),
-				cancel() {}
+				result: Promise.reject(error),
+				cancel: async () => 'pre_cancelled',
+				status: async () => status
 			};
 		}
 
-		const native = this.db.startSql(sql, {
-			queryId,
-			timeoutMs: options.timeoutMs
-		});
-		const cancel = () => {
-			native.cancel();
+		let native: NativeSqlQuery;
+		try {
+			native = (this.db as unknown as {
+				startSql(sql: string, options?: NativeSqlOptions): NativeSqlQuery;
+			}).startSql(sql, {
+				queryId,
+				timeoutMs: options.timeoutMs,
+				maxOutputRows: options.maxOutputRows,
+				maxOutputBytes: options.maxOutputBytes
+			});
+		} catch (error) {
+			throw nativeSqlStartError(queryId, error);
+		}
+		const cancel = async () => nativeCancelOutcome(native.cancel());
+		const onAbort = () => {
+			void cancel();
 		};
-		const onAbort = () => cancel();
 		options.signal?.addEventListener('abort', onAbort, { once: true });
-		const result = native
-			.result()
-			.then((bytes) => tableFromIPC(bytes))
+		const result = readResult(native)
 			.catch((error: unknown) => {
-				throw mapSqlError(error, queryId);
+				throw nativeSqlError(native.status(), error);
 			})
 			.finally(() => options.signal?.removeEventListener('abort', onAbort));
-		return { id: native.id, result, cancel };
+		return { id: native.id, result, cancel, status: async () => native.status() };
 	}
 
 	async sql(sql: string, options?: SqlOptions): Promise<ArrowTable> {
@@ -730,7 +921,14 @@ export class KitDatabase {
 	}
 
 	async sqlRows(sql: string, options?: SqlOptions): Promise<Record<string, unknown>[]> {
-		return [...(await this.sql(sql, options))].map((row) => ({ ...row }));
+		return this.startSqlWithResult(
+			sql,
+			options ?? {},
+			async (native) => {
+				if (native.resultRows) return native.resultRows();
+				return [...tableFromIPC(await native.result())].map((row) => ({ ...row }));
+			}
+		).result;
 	}
 
 	async createVirtualTable(spec: VirtualTableSpec): Promise<ArrowTable> {

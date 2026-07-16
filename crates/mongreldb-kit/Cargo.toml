@@ -28,12 +28,15 @@ tokio = { version = "1", features = ["rt"] }
 # Remote (HTTP daemon) client surface. Gated behind the `remote` feature so the
 # default embedded build is not burdened with an HTTP dependency tree.
 reqwest = { version = "0.12", features = ["blocking", "json"], optional = true }
+base64 = { version = "0.22", optional = true }
+secrecy = { version = "0.10", optional = true }
+zeroize = { version = "1", optional = true }
 
 [features]
 default = []
 # Enable `RemoteDatabase` / `RemoteTransaction` — a typed client for a running
 # `mongreldb-server` daemon (see PLAN.md item #3).
-remote = ["dep:reqwest"]
+remote = ["dep:reqwest", "dep:base64", "dep:secrecy", "dep:zeroize"]
 
 [dev-dependencies]
 tempfile = "3"
