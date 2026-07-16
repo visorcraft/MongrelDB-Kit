@@ -1,0 +1,14 @@
+# Project yamllint config. The only YAML in this repo is GitHub Actions
+# workflows under .github/workflows/, so relax the rules that don't fit that
+# domain: the `on:` trigger key (truthy), the optional `---` document start,
+# long shell snippets/comments, and single-space inline comments.
+extends: default
+
+rules:
+  document-start: disable
+  truthy:
+    check-keys: false
+  line-length:
+    max: 140
+  comments:
+    min-spaces-from-content: 1

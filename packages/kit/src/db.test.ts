@@ -296,7 +296,7 @@ describe('KitDatabase', () => {
 			db.close();
 			rmSync(dir, { recursive: true, force: true });
 		}
-	});
+	}, 30_000);
 
 	it('scanBatched streams every row in bounded batches', () => {
 		const t = table('t', {

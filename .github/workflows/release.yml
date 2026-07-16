@@ -29,6 +29,12 @@ permissions:
   contents: write
   id-token: write # npm provenance
 
+env:
+  # Swatinem/rust-cache bundles deps that still `require('punycode')`, which
+  # Node flags as DEP0040. Upstream noise we can't fix here, so silence it for
+  # the action's Node runtime.
+  NODE_OPTIONS: "--disable-warning=DEP0040"
+
 jobs:
   publish:
     runs-on: ubuntu-latest

@@ -48,6 +48,7 @@ sed -i "s/version = \"$OLD\"/version = \"$NEW\"/" python/mongreldb_kit/pyproject
 sed -i "s/\"version\": \"$OLD\"/\"version\": \"$NEW\"/" packages/kit/package.json
 sed -i -E "s/return '[0-9]+\\.[0-9]+\\.[0-9]+';/return '$NEW';/" packages/kit/src/migrate.ts
 sed -i "s/VERSION=v$OLD/VERSION=v$NEW/" docs/cli.md
+sed -i "s/mongreldb-kit = \"$OLD\"/mongreldb-kit = \"$NEW\"/" docs/rust.md
 sed -i "s/mongreldb-kit = { path = \"..\\/mongreldb-kit\", version = \"$OLD\" }/mongreldb-kit = { path = \"..\\/mongreldb-kit\", version = \"$NEW\" }/" \
   crates/kit-perf/Cargo.toml
 

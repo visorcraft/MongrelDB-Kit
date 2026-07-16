@@ -11,6 +11,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Swatinem/rust-cache bundles deps that still `require('punycode')`, which
+  # Node flags as DEP0040. Upstream noise we can't fix here, so silence it for
+  # the action's Node runtime.
+  NODE_OPTIONS: "--disable-warning=DEP0040"
 
 jobs:
   # Fast feedback. `mongreldb-kit-core` itself does not link against the
