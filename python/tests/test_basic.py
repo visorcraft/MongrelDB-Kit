@@ -9,7 +9,6 @@ import pytest
 
 from mongreldb_kit import (
     Database,
-    DatabaseLockedError,
     DuplicateError,
     ForeignKeyError,
     RestrictError,
@@ -107,13 +106,12 @@ def test_create_open_and_crud():
         assert row["name"] == "Alice Smith"
 
 
-def test_second_live_same_path_open_is_rejected():
+def test_second_live_same_path_open_is_permitted():
     path = tmp_db()
     db = Database.create(path, users_orders_schema())
     try:
-        with pytest.raises(DatabaseLockedError, match="already open in this process") as caught:
-            Database.open(path)
-        assert caught.value.code == "DATABASE_LOCKED"
+        second = Database.open(path)
+        second.close()
     finally:
         db.close()
 

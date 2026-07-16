@@ -387,6 +387,7 @@ def _is_sql_write_receipt(
             "original_query_id",
             "status",
             "terminal_state",
+            "detail",
             "server_state",
             "cancel_outcome",
             "cancellation_reason",
@@ -981,6 +982,7 @@ def _is_query_status(value: Any, query_id: str) -> bool:
     )
     if (
         value.get("query_id") != query_id
+        or value.get("detail") not in (None, "compact")
         or value.get("status") not in _QUERY_STATUSES
         or value.get("state") not in _QUERY_STATES
         or not isinstance(server_state, str)
@@ -2563,29 +2565,77 @@ class RemoteDatabase:
             self._raise_terminal_transport_outcome(active_query_id, str(error))
             raise
 
-    def continue_sql_page(self, cursor: str) -> Dict[str, Any]:
+    def continue_sql_page(
+        self,
+        cursor: str,
+        *,
+        query_id: Optional[str] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Read the next page for an opaque owner-bound cursor."""
         self._require_sql_pagination()
         cursor_bytes = _utf8_length(cursor) if isinstance(cursor, str) else None
         if not cursor or cursor_bytes is None or cursor_bytes > 2048:
             raise ValueError("cursor must contain 1 to 2048 UTF-8 bytes")
+        if query_id is not None:
+            query_id = _normalize_query_id(query_id)
+        if timeout_ms is not None and (
+            isinstance(timeout_ms, bool)
+            or not isinstance(timeout_ms, int)
+            or timeout_ms <= 0
+        ):
+            raise ValueError("timeout_ms must be a positive integer")
+        operation_id = query_id or secrets.token_hex(16)
         try:
-            page = self._post_json("/sql/continue", {"cursor": cursor})
+            page = self._post_json(
+                "/sql/continue",
+                {
+                    "cursor": cursor,
+                    "operation_id": operation_id,
+                    "timeout_ms": timeout_ms,
+                },
+                require_query_id_header=True,
+            )
             if not _is_sql_page(page):
                 raise _MalformedHttpResponse(
                     "SQL continuation response was not a valid retained page"
                 )
             return page
         except (json.JSONDecodeError, UnicodeDecodeError, _MalformedHttpResponse) as error:
+            outcome = {
+                "committed": False,
+                "committed_statements": 0,
+                "last_commit_epoch": None,
+                "last_commit_epoch_text": None,
+                "first_commit_statement_index": None,
+                "last_commit_statement_index": None,
+                "completed_statements": 0,
+                "statement_index": 0,
+                "serialization": "failed",
+            }
             envelope = {
+                "query_id": operation_id,
+                "status": "failed_before_commit",
+                "server_state": "failed",
+                **{key: value for key, value in outcome.items() if key != "serialization"},
+                "cancel_outcome": "already_finished",
+                "cancellation_reason": "none",
+                "retryable": False,
+                "outcome": outcome,
                 "error": {
                     "code": "SERIALIZATION_FAILED",
                     "message": str(error),
-                    "query_id": "unknown",
+                    "query_id": operation_id,
+                    "committed": False,
+                    "retryable": False,
                 },
-                "outcome": {"committed": False},
             }
-            raise _map_error(500, json.dumps(envelope)) from None
+            raise _attach_query_metadata(
+                SerializationError(str(error)),
+                envelope,
+                operation_id,
+                "SERIALIZATION_FAILED",
+            ) from None
 
     def execute_idempotent_sql(
         self,
@@ -2877,7 +2927,13 @@ class RemoteDatabase:
         ) or path.startswith("/kit/procedures/")
         query_id_header_error = None
         try:
-            query_id = payload.get("query_id") if path == "/sql" else None
+            query_id = (
+                payload.get("query_id")
+                if path == "/sql"
+                else payload.get("operation_id")
+                if path == "/sql/continue"
+                else None
+            )
             with self._open(
                 "POST",
                 path,

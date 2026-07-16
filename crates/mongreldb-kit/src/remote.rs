@@ -293,6 +293,12 @@ impl Default for RemoteSqlOptions {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct RemoteSqlControlOptions {
+    pub query_id: Option<mongreldb_query::QueryId>,
+    pub timeout: Option<Duration>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RemoteSqlPaginationOptions {
     pub query_id: Option<mongreldb_query::QueryId>,
@@ -493,6 +499,8 @@ pub struct RemoteQueryTrace {
 pub struct RemoteQueryStatus {
     pub query_id: String,
     #[serde(default)]
+    pub detail: Option<String>,
+    #[serde(default)]
     pub status: String,
     #[serde(default)]
     pub state: String,
@@ -623,6 +631,13 @@ fn validate_query_status(
     ];
     if status.query_id != expected_query_id.to_string() {
         return Err("query status query_id does not match the request".into());
+    }
+    if status
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail != "compact")
+    {
+        return Err("query status detail is invalid".into());
     }
     if !STATUSES.contains(&status.status.as_str())
         || status.state.is_empty()
@@ -2611,23 +2626,41 @@ impl RemoteDatabase {
             .map_err(|error| self.client_serialization_error(query_id, error.to_string()))
     }
 
-    pub fn continue_sql_page(&self, cursor: &str) -> Result<RemoteSqlPage> {
+    pub fn continue_sql_page(
+        &self,
+        cursor: &str,
+        options: RemoteSqlControlOptions,
+    ) -> Result<RemoteSqlPage> {
         self.require_sql_pagination()?;
+        validate_positive_duration("timeout", options.timeout)?;
         if cursor.is_empty() || cursor.len() > 2_048 {
             return Err(KitError::Validation(
                 "SQL continuation cursor must contain 1 to 2048 bytes".into(),
             ));
         }
-        let response = self
+        let query_id = match options.query_id {
+            Some(query_id) => query_id,
+            None => mongreldb_query::QueryId::random().map_err(KitError::from)?,
+        };
+        let response = match self
             .client
             .post(self.url("/sql/continue"))
-            .json(&json!({ "cursor": cursor }))
+            .json(&json!({
+                "cursor": cursor,
+                "operation_id": query_id.to_string(),
+                "timeout_ms": options.timeout.map(duration_millis),
+            }))
             .send()
-            .map_err(ioe)?;
+        {
+            Ok(response) => response,
+            Err(error) => {
+                return Err(self.recover_after_transport_loss(query_id, error.to_string()))
+            }
+        };
         if !response.status().is_success() {
             let status = response.status();
             let invalid = |message: String| KitError::SerializationFailed {
-                query_id: None,
+                query_id: Some(query_id.to_string()),
                 outcome: Box::new(QueryExecutionOutcome {
                     committed: false,
                     committed_statements: Some(0),
@@ -2647,11 +2680,14 @@ impl RemoteDatabase {
             validate_sql_cursor_error_envelope(&value).map_err(invalid)?;
             return Err(map_error_body(status, &body));
         }
+        if let Err(error) = validate_sql_query_id_header(response.headers(), query_id) {
+            return Err(self.client_serialization_error(query_id, error));
+        }
         strict_response_json(response)
             .map_err(KitError::Storage)
             .and_then(|page| validate_sql_page(page, None))
             .map_err(|error| KitError::SerializationFailed {
-                query_id: None,
+                query_id: Some(query_id.to_string()),
                 outcome: Box::new(QueryExecutionOutcome {
                     committed: false,
                     committed_statements: Some(0),
@@ -4980,10 +5016,15 @@ mod tests {
                 let (mut stream, _) = listener.accept().unwrap();
                 let request = read_request(&stream);
                 let query_header = request
-                    .starts_with("POST /sql ")
+                    .starts_with("POST /sql")
                     .then(|| request.split_once("\r\n\r\n").unwrap().1)
                     .and_then(|body| serde_json::from_str::<Value>(body).ok())
-                    .and_then(|body| body["query_id"].as_str().map(str::to_owned))
+                    .and_then(|body| {
+                        body["query_id"]
+                            .as_str()
+                            .or_else(|| body["operation_id"].as_str())
+                            .map(str::to_owned)
+                    })
                     .map(|query_id| format!("x-mongreldb-query-id: {query_id}\r\n"))
                     .unwrap_or_default();
                 requests.push(request);
@@ -5876,7 +5917,13 @@ mod tests {
             .unwrap();
         assert_eq!(first.rows, vec![Map::from_iter([("id".into(), json!(1))])]);
         let second = database
-            .continue_sql_page(first.next_cursor.as_deref().unwrap())
+            .continue_sql_page(
+                first.next_cursor.as_deref().unwrap(),
+                RemoteSqlControlOptions {
+                    query_id: Some("11112222333344445555666677778888".parse().unwrap()),
+                    timeout: None,
+                },
+            )
             .unwrap();
         assert_eq!(second.rows, vec![Map::from_iter([("id".into(), json!(2))])]);
         let requests = server.join().unwrap();
@@ -6143,14 +6190,22 @@ mod tests {
             ("200 OK", r#"{"status":"completed","rows":[]}"#),
         ]);
         let database = RemoteDatabase::connect(&url).unwrap();
-        let error = database.continue_sql_page("cursor-1").unwrap_err();
+        let error = database
+            .continue_sql_page(
+                "cursor-1",
+                RemoteSqlControlOptions {
+                    query_id: Some("11112222333344445555666677778888".parse().unwrap()),
+                    timeout: None,
+                },
+            )
+            .unwrap_err();
         assert!(matches!(
             error,
             KitError::SerializationFailed {
-                query_id: None,
+                query_id: Some(query_id),
                 outcome,
                 ..
-            } if !outcome.committed
+            } if query_id == "11112222333344445555666677778888" && !outcome.committed
         ));
         assert_eq!(server.join().unwrap().len(), 3);
     }

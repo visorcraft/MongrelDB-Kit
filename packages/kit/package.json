@@ -1,6 +1,6 @@
 {
 	"name": "@visorcraft/mongreldb-kit",
-	"version": "0.57.0",
+	"version": "0.58.1",
 	"description": "Application persistence layer for MongrelDB: schema DSL, typed query builder, migrations, and relational constraints (unique, foreign keys, cascade/set-null/restrict).",
 	"license": "MIT OR Apache-2.0",
 	"type": "module",
@@ -47,7 +47,7 @@
 		"apache-arrow": "^21.1.0"
 	},
 	"peerDependencies": {
-		"@visorcraft/mongreldb": "^0.57.0"
+		"@visorcraft/mongreldb": "^0.58.1"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",

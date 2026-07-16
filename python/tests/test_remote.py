@@ -229,7 +229,7 @@ class Stub:
             def _send(self, status, body_bytes, content_type="application/json"):
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
-                if self.path == "/sql" and not outer.omit_query_id_header:
+                if self.path in ("/sql", "/sql/continue") and not outer.omit_query_id_header:
                     query_id = outer.response_query_id_header or getattr(
                         self, "request_query_id", None
                     )
@@ -320,7 +320,7 @@ class Stub:
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(length) if length else b""
                 body = json.loads(raw) if raw else {}
-                self.request_query_id = body.get("query_id")
+                self.request_query_id = body.get("query_id") or body.get("operation_id")
                 outer.requests.append(("POST", self.path, body))
                 if self.path in outer.raw_canned:
                     queue = outer.raw_canned[self.path]

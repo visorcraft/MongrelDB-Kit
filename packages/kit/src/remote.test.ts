@@ -227,6 +227,7 @@ const server = http.createServer((req, res) => {
 			res.writeHead(200, { 'content-type': 'application/json' });
 			res.end(JSON.stringify({
 				query_id: queryId,
+				detail: 'compact',
 				status: 'finished',
 				terminal_state: null,
 				state: 'finished',
@@ -466,7 +467,9 @@ const server = http.createServer((req, res) => {
 				: JSON.stringify(capabilities));
 		} else if (req.url === '/sql/continue'
 			&& (mode === 'cursor_error' || mode === 'cursor_error_conflict')) {
+			const operationId = JSON.parse(body).operation_id;
 			const error = {
+				query_id: operationId,
 				status: 'failed_before_commit',
 				terminal_state: 'failed_before_commit',
 				server_state: 'failed',
@@ -478,8 +481,8 @@ const server = http.createServer((req, res) => {
 				last_commit_statement_index: null,
 				completed_statements: 0,
 				statement_index: 0,
-				cancel_outcome: null,
-				cancellation_reason: null,
+				cancel_outcome: 'already_finished',
+				cancellation_reason: 'none',
 				retryable: false,
 				outcome: {
 					committed: false,
@@ -495,17 +498,29 @@ const server = http.createServer((req, res) => {
 				error: {
 					code: 'SQL_CURSOR_NOT_FOUND',
 					message: 'cursor missing',
+					query_id: operationId,
 					committed: mode === 'cursor_error_conflict',
 					retryable: false
 				}
 			};
-			res.writeHead(404, { 'content-type': 'application/json' });
+			res.writeHead(404, {
+				'content-type': 'application/json',
+				'x-mongreldb-query-id': operationId
+			});
 			res.end(JSON.stringify(error));
 		} else if (req.url === '/sql/continue' && mode === 'malformed_page') {
-			res.writeHead(200, { 'content-type': 'application/json' });
+			const operationId = JSON.parse(body).operation_id;
+			res.writeHead(200, {
+				'content-type': 'application/json',
+				'x-mongreldb-query-id': operationId
+			});
 			res.end(JSON.stringify({ status: 'completed', rows: [] }));
 		} else if (req.url === '/sql/continue') {
-			res.writeHead(200, { 'content-type': 'application/json' });
+			const operationId = JSON.parse(body).operation_id;
+			res.writeHead(200, {
+				'content-type': 'application/json',
+				'x-mongreldb-query-id': operationId
+			});
 			res.end(JSON.stringify({
 				status: 'completed', rows: [{ id: 2 }], next_cursor: null,
 				page: { offset: 1, row_count: 1, total_rows: 2, byte_count: 10, estimated_tokens: 3, limits: { rows: 1, bytes: 1024, tokens: 256 }, projection: ['id'], expires_at_ms: 999, snapshot: 'retained_result', token_estimate: 'ceil(projected_json_bytes/4)' }
@@ -1475,7 +1490,7 @@ describe('RemoteDatabase', () => {
 	it('requires exact durable metadata on cursor error responses', async () => {
 		for (const [mode, expected] of [
 			['cursor_error', RemoteProtocolError],
-			['cursor_error_conflict', SerializationError]
+			['cursor_error_conflict', QueryOutcomeUnknownError]
 		] as const) {
 			const { url, worker } = await startMockServer(mode);
 			try {

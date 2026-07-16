@@ -235,6 +235,12 @@ export type RemoteSqlPaginationOptions = {
 	maxOutputBytes?: number;
 };
 
+export type RemoteSqlControlOptions = {
+	queryId?: string;
+	timeoutMs?: number;
+	signal?: AbortSignal;
+};
+
 export type RemoteSqlPage = {
 	status: string;
 	rows: Record<string, unknown>[];
@@ -605,7 +611,7 @@ function isRemoteQueryStatus(value: unknown, queryId: string): value is RawRemot
 	const serverState = body.server_state ?? '';
 	const terminal = body.terminal_error;
 	if (!hasOnlyKeys(body, [
-		'query_id', 'status', 'state', 'server_state', 'terminal_state', 'operation',
+		'query_id', 'status', 'state', 'server_state', 'terminal_state', 'detail', 'operation',
 		'started_ms_ago', 'deadline_ms_remaining', 'session_id',
 		'committed', 'committed_statements', 'last_commit_epoch', 'last_commit_epoch_text',
 		'first_commit_statement_index', 'last_commit_statement_index', 'completed_statements',
@@ -648,6 +654,7 @@ function isRemoteQueryStatus(value: unknown, queryId: string): value is RawRemot
 			&& !['not_reached', 'cancel_won', 'commit_won']
 				.includes(traceRecord.commit_fence_outcome as string))) return false;
 	if (body.query_id !== queryId
+		|| body.detail !== undefined && body.detail !== 'compact'
 		|| typeof body.status !== 'string' || !QUERY_STATUSES.has(body.status)
 		|| typeof body.state !== 'string' || !QUERY_STATES.has(body.state)
 		|| typeof serverState !== 'string'
@@ -1725,27 +1732,53 @@ export class RemoteDatabase {
 		return remoteSqlPage(body);
 	}
 
-	async continueSqlPage(cursor: string): Promise<RemoteSqlPage> {
+	async continueSqlPage(
+		cursor: string,
+		options: RemoteSqlControlOptions = {}
+	): Promise<RemoteSqlPage> {
 		await this.requireSqlPagination();
 		if (cursor.length === 0 || Buffer.byteLength(cursor, 'utf8') > 2_048) {
 			throw new RangeError('cursor must contain 1 to 2048 UTF-8 bytes');
 		}
-		const response = await this.request('/sql/continue', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ cursor })
-		});
-		if (!response.ok) throw await remoteSqlError(response, 'unknown');
+		if (options.timeoutMs !== undefined
+			&& (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)) {
+			throw new RangeError('timeoutMs must be a positive safe integer');
+		}
+		const queryId = normalizeQueryId(options.queryId ?? randomBytes(16).toString('hex'));
+		let response: Response;
+		try {
+			response = await this.request('/sql/continue', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					cursor,
+					operation_id: queryId,
+					timeout_ms: options.timeoutMs
+				}),
+				signal: options.signal
+			});
+		} catch (error) {
+			if (options.signal?.aborted) await this.cancelSql(queryId).catch(() => undefined);
+			throw error;
+		}
+		if (!response.ok) throw await remoteSqlError(response, queryId);
+		if (response.headers.get('x-mongreldb-query-id') !== queryId) {
+			throw new SerializationError(
+				queryId,
+				'SQL continuation response x-mongreldb-query-id does not match the request',
+				{ committed: false }
+			);
+		}
 		const body = await responseJsonStrict(response, MAX_PAGE_JSON_RESPONSE_BYTES).catch((error: unknown) => {
 			throw new SerializationError(
-				'unknown',
+				queryId,
 				error instanceof Error ? error.message : 'SQL continuation response was not valid JSON',
 				{ committed: false }
 			);
 		});
 		if (!isRemoteSqlPage(body)) {
 			throw new SerializationError(
-				'unknown',
+				queryId,
 				'SQL continuation response was not a valid retained page',
 				{ committed: false }
 			);
