@@ -205,7 +205,7 @@ pub(crate) fn build_core_request(table: &KitTable, spec: &SearchSpec) -> Result<
 }
 
 fn build_named_retriever(table: &KitTable, r: &SearchRetriever) -> Result<NamedRetriever> {
-    let (name, weight, k, column, retriever) = match r {
+    let (name, weight, retriever) = match r {
         SearchRetriever::Ann {
             column,
             name,
@@ -223,8 +223,6 @@ fn build_named_retriever(table: &KitTable, r: &SearchRetriever) -> Result<NamedR
             (
                 name.clone(),
                 *weight,
-                *k,
-                column.clone(),
                 Retriever::Ann {
                     column_id,
                     query: query.clone(),
@@ -244,8 +242,6 @@ fn build_named_retriever(table: &KitTable, r: &SearchRetriever) -> Result<NamedR
             (
                 name.clone(),
                 *weight,
-                *k,
-                column.clone(),
                 Retriever::Sparse {
                     column_id,
                     query: query.clone(),
@@ -269,8 +265,6 @@ fn build_named_retriever(table: &KitTable, r: &SearchRetriever) -> Result<NamedR
             (
                 name.clone(),
                 *weight,
-                *k,
-                column.clone(),
                 Retriever::MinHash {
                     column_id,
                     members,
@@ -279,7 +273,6 @@ fn build_named_retriever(table: &KitTable, r: &SearchRetriever) -> Result<NamedR
             )
         }
     };
-    let _ = (k, column); // validated via helpers; keep symmetry for future diagnostics
     Ok(NamedRetriever {
         name,
         weight,
