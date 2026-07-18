@@ -821,7 +821,7 @@ name = "conformance-runner"
 version = "0.1.0"
 dependencies = [
  "axum",
- "mongreldb-core",
+ "mongreldb-core 0.59.0",
  "mongreldb-kit",
  "mongreldb-server",
  "serde",
@@ -2711,15 +2711,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "mongreldb-core"
+version = "0.59.1"
+dependencies = [
+ "aes-gcm",
+ "arc-swap",
+ "argon2",
+ "bincode",
+ "bytemuck",
+ "bytes",
+ "crc",
+ "fs2",
+ "getrandom 0.2.17",
+ "hkdf",
+ "hmac",
+ "lz4_flex 0.11.6",
+ "memmap2",
+ "parking_lot",
+ "rayon",
+ "regex",
+ "roaring",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "tokio",
+ "windows-sys 0.61.2",
+ "xxhash-rust",
+ "zeroize",
+ "zstd",
+]
+
+[[package]]
 name = "mongreldb-kit"
 version = "0.59.0"
 dependencies = [
  "arrow",
  "base64",
  "bincode",
- "mongreldb-core",
+ "mongreldb-core 0.59.1",
  "mongreldb-kit-core",
- "mongreldb-query",
+ "mongreldb-query 0.59.1",
  "parking_lot",
  "regex",
  "reqwest",
@@ -2788,7 +2821,32 @@ dependencies = [
  "datafusion-datasource",
  "futures",
  "getrandom 0.2.17",
- "mongreldb-core",
+ "mongreldb-core 0.59.0",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlparser",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "mongreldb-query"
+version = "0.59.1"
+dependencies = [
+ "aes-gcm",
+ "arrow",
+ "async-trait",
+ "bincode",
+ "chrono",
+ "datafusion",
+ "datafusion-datasource",
+ "futures",
+ "getrandom 0.2.17",
+ "mongreldb-core 0.59.1",
  "parking_lot",
  "regex",
  "serde",
@@ -2813,8 +2871,8 @@ dependencies = [
  "futures",
  "hmac",
  "libc",
- "mongreldb-core",
- "mongreldb-query",
+ "mongreldb-core 0.59.0",
+ "mongreldb-query 0.59.0",
  "serde",
  "serde_json",
  "sha2 0.10.9",

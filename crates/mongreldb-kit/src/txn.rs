@@ -880,6 +880,9 @@ impl<'a> Transaction<'a> {
     /// `Embedding` column is closest to `query`, resolved by the column's ANN
     /// (HNSW) index. Requires an `Ann` index on `column`. Results are the top-`k`
     /// survivor rows (as a set — distance ranking is not currently surfaced).
+    ///
+    /// For multi-retriever fusion, scores, and optional exact rerank, use
+    /// [`Self::search`] instead.
     pub fn ann_search(
         &self,
         table: &str,
@@ -897,6 +900,36 @@ impl<'a> Transaction<'a> {
             k,
         };
         self.snapshot_rows_pushed(table, &[cond])
+    }
+
+    /// Hybrid scored search: one or more named retrievers, reciprocal-rank
+    /// fusion, optional exact-vector rerank, hard `must` filters.
+    ///
+    /// Calls the engine's authorized search path
+    /// ([`mongreldb_core::Database::search_for_current_principal`]) — the same
+    /// pipeline as the C ABI `mongreldb_table_search`, NAPI `table.search`, and
+    /// daemon `POST /kit/search`. Does **not** include uncommitted staged rows;
+    /// commit first if you need to search writes from this transaction.
+    pub fn search(
+        &self,
+        table: &str,
+        spec: crate::search::SearchSpec,
+    ) -> Result<Vec<crate::search::SearchHit>> {
+        if self.has_staged_for(table) {
+            return Err(KitError::Validation(
+                "search does not include uncommitted staged rows; commit first".into(),
+            ));
+        }
+        let t = self.require_table(table)?;
+        let request = crate::search::build_core_request(t, &spec)?;
+        let hits = self
+            .db
+            .core_db()
+            .search_for_current_principal(table, &request)
+            .map_err(KitError::from)?;
+        hits.into_iter()
+            .map(|hit| crate::search::core_hit_to_kit(hit, t))
+            .collect()
     }
 
     /// Learned-sparse (SPLADE-style) retrieval: return the `k` rows whose

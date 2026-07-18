@@ -422,6 +422,155 @@ fn py_json_err(e: serde_json::Error) -> PyErr {
     map_err(KitError::from(e))
 }
 
+fn parse_search_spec(v: &serde_json::Value) -> Result<mongreldb_kit::SearchSpec, String> {
+    use mongreldb_kit::{SearchMetric, SearchRerank, SearchRetriever, SearchSpec};
+    let obj = v
+        .as_object()
+        .ok_or_else(|| "search spec must be a JSON object".to_string())?;
+    let limit = obj
+        .get("limit")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(10) as usize;
+    let fusion_constant = obj
+        .get("fusion_constant")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(60) as u32;
+    let projection = obj.get("projection").and_then(|p| {
+        p.as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+    });
+    let must = Vec::new(); // hard conditions: use dedicated condition builders later
+    let retrievers_v = obj
+        .get("retrievers")
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| "search spec requires retrievers[]".to_string())?;
+    let mut retrievers = Vec::new();
+    for r in retrievers_v {
+        let r = r
+            .as_object()
+            .ok_or_else(|| "retriever must be an object".to_string())?;
+        let kind = r
+            .get("kind")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "retriever.kind required".to_string())?;
+        let column = r
+            .get("column")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "retriever.column required".to_string())?
+            .to_string();
+        let name = r
+            .get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or(kind)
+            .to_string();
+        let weight = r.get("weight").and_then(|x| x.as_f64()).unwrap_or(1.0);
+        let k = r.get("k").and_then(|x| x.as_u64()).unwrap_or(64) as usize;
+        let ret = match kind {
+            "ann" => {
+                let query = r
+                    .get("query")
+                    .and_then(|x| x.as_array())
+                    .ok_or_else(|| "ann.query required".to_string())?
+                    .iter()
+                    .filter_map(|x| x.as_f64().map(|f| f as f32))
+                    .collect();
+                SearchRetriever::Ann {
+                    column,
+                    name,
+                    weight,
+                    k,
+                    query,
+                }
+            }
+            "sparse" => {
+                let query = r
+                    .get("query")
+                    .and_then(|x| x.as_array())
+                    .ok_or_else(|| "sparse.query required".to_string())?
+                    .iter()
+                    .filter_map(|pair| {
+                        let arr = pair.as_array()?;
+                        Some((arr.first()?.as_u64()? as u32, arr.get(1)?.as_f64()? as f32))
+                    })
+                    .collect();
+                SearchRetriever::Sparse {
+                    column,
+                    name,
+                    weight,
+                    k,
+                    query,
+                }
+            }
+            "minhash" => {
+                let members = r
+                    .get("members")
+                    .and_then(|x| x.as_array())
+                    .ok_or_else(|| "minhash.members required".to_string())?
+                    .iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect();
+                SearchRetriever::MinHash {
+                    column,
+                    name,
+                    weight,
+                    k,
+                    members,
+                }
+            }
+            other => return Err(format!("unknown retriever kind {other}")),
+        };
+        retrievers.push(ret);
+    }
+    let rerank = if let Some(rr) = obj.get("rerank") {
+        let rr = rr
+            .as_object()
+            .ok_or_else(|| "rerank must be an object".to_string())?;
+        let embedding_column = rr
+            .get("embedding_column")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "rerank.embedding_column required".to_string())?
+            .to_string();
+        let query = rr
+            .get("query")
+            .and_then(|x| x.as_array())
+            .ok_or_else(|| "rerank.query required".to_string())?
+            .iter()
+            .filter_map(|x| x.as_f64().map(|f| f as f32))
+            .collect();
+        let metric = match rr.get("metric").and_then(|x| x.as_str()).unwrap_or("cosine") {
+            "cosine" => SearchMetric::Cosine,
+            "dot_product" | "dot" => SearchMetric::DotProduct,
+            "euclidean" | "l2" => SearchMetric::Euclidean,
+            other => return Err(format!("unknown metric {other}")),
+        };
+        let candidate_limit = rr
+            .get("candidate_limit")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(64) as usize;
+        let weight = rr.get("weight").and_then(|x| x.as_f64()).unwrap_or(1.0);
+        Some(SearchRerank {
+            embedding_column,
+            query,
+            metric,
+            candidate_limit,
+            weight,
+        })
+    } else {
+        None
+    };
+    Ok(SearchSpec {
+        must,
+        retrievers,
+        fusion_constant,
+        rerank,
+        limit,
+        projection,
+    })
+}
+
 fn set_code(m: &Bound<'_, PyModule>, name: &str, code: &str) -> PyResult<()> {
     let cls = m.getattr(name)?;
     cls.setattr("code", code)?;
@@ -1928,6 +2077,40 @@ impl PyTransaction {
             .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))?;
         let rows = txn.ann_search(table, column, query, k).map_err(map_err)?;
         rows.iter().map(row_to_json).collect()
+    }
+
+    /// Hybrid scored search (retrievers + fusion + optional rerank).
+    ///
+    /// `spec_json` is a JSON object matching kit [`SearchSpec`]:
+    /// `retrievers` (required), `must`, `fusion_constant`, `rerank`, `limit`,
+    /// `projection` (column names). Returns hit objects as JSON strings with
+    /// scores + row values.
+    fn search(&self, table: &str, spec_json: &str) -> PyResult<Vec<String>> {
+        let txn = self
+            .txn
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))?;
+        let v: serde_json::Value = serde_json::from_str(spec_json).map_err(py_json_err)?;
+        let spec = parse_search_spec(&v).map_err(|e| PyRuntimeError::new_err(e))?;
+        let hits = txn.search(table, spec).map_err(map_err)?;
+        hits.iter()
+            .map(|hit| {
+                let mut map = serde_json::Map::new();
+                map.insert("row_id".into(), serde_json::json!(hit.row_id));
+                map.insert("values".into(), serde_json::Value::Object(hit.values.clone()));
+                map.insert("fused_score".into(), serde_json::json!(hit.fused_score));
+                map.insert("final_score".into(), serde_json::json!(hit.final_score));
+                map.insert("final_rank".into(), serde_json::json!(hit.final_rank));
+                if let Some(s) = hit.exact_rerank_score {
+                    map.insert("exact_rerank_score".into(), serde_json::json!(s));
+                }
+                map.insert(
+                    "components".into(),
+                    serde_json::to_value(&hit.components).unwrap_or(serde_json::Value::Null),
+                );
+                serde_json::to_string(&map).map_err(|e| StorageError::new_err(e.to_string()))
+            })
+            .collect()
     }
 
     /// Learned-sparse (SPLADE) retrieval over a `Sparse` column's index; returns

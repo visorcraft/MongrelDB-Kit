@@ -12,6 +12,7 @@ pub mod query;
 #[cfg(feature = "remote")]
 pub mod remote;
 pub mod schema;
+pub mod search;
 pub mod tsv;
 pub mod txn;
 
@@ -43,6 +44,9 @@ pub use remote::{
     SqlPaginationCapabilities,
 };
 pub use schema::Row;
+pub use search::{
+    SearchComponent, SearchHit, SearchMetric, SearchRerank, SearchRetriever, SearchSpec,
+};
 pub use txn::Transaction;
 
 // Re-export the core model so downstream consumers can depend on a single crate.
