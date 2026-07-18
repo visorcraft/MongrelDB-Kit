@@ -101,3 +101,4 @@ test-results/
 # Coverage and benchmark output
 criterion/
 bench-results/
+.cargo/

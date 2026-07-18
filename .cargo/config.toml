@@ -1,3 +1,0 @@
-[patch.crates-io]
-mongreldb-core = { path = "../mongreldb/crates/mongreldb-core" }
-mongreldb-query = { path = "../mongreldb/crates/mongreldb-query" }
