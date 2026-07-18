@@ -57,6 +57,32 @@ pub enum DefaultKind {
     CustomName(String),
 }
 
+/// Where dense embedding values for a column originate.
+///
+/// Mirrors `mongreldb_core::EmbeddingSource` in a language-neutral shape
+/// (string paths, serde-tagged). Omitting this on a column means
+/// application-supplied vectors (the engine default). Storage never calls a
+/// vendor from this field alone — generation goes through the process-local
+/// provider registry (see `Database::embed_texts` / `embedding_providers`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EmbeddingSource {
+    /// Application writes float vectors directly (default).
+    SuppliedByApplication,
+    /// Local on-disk model; a provider registered under `model_id` runs inference.
+    LocalModel {
+        /// Filesystem path to model weights / tokenizer bundle.
+        model_path: String,
+        /// Stable model identity (registry key and ANN generation stamp).
+        model_id: String,
+    },
+    /// Named provider registered on the process (`provider` registry key).
+    GeneratedColumn {
+        /// Registry key of the provider.
+        provider: String,
+    },
+}
+
 /// A column definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Column {
@@ -100,6 +126,10 @@ pub struct Column {
     /// Vector dimension for an `Embedding` column (required for ANN).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_dim: Option<u32>,
+    /// How embedding values are produced. Only meaningful for
+    /// [`ColumnType::Embedding`]. `None` = application-supplied (engine default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_source: Option<EmbeddingSource>,
     /// Encrypt this column's page payload at rest (requires an encrypted db).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub encrypted: bool,
@@ -129,6 +159,7 @@ impl Column {
             regex: None,
             check_expr: None,
             embedding_dim: None,
+            embedding_source: None,
             encrypted: false,
             encrypted_indexable: false,
         }
@@ -263,6 +294,14 @@ pub enum SchemaError {
     MissingReferencedTable(String, String, String),
     #[error("foreign key \"{1}\" references unknown column \"{2}\" on table \"{3}\"")]
     MissingReferencedColumn(String, String, String, String),
+    #[error(
+        "column \"{1}\" on table \"{0}\" sets embedding_source but is not an embedding column"
+    )]
+    EmbeddingSourceOnNonEmbedding(String, String),
+    #[error(
+        "embedding column \"{1}\" on table \"{0}\" with LocalModel/GeneratedColumn source requires embedding_dim > 0"
+    )]
+    EmbeddingSourceMissingDim(String, String),
 }
 
 /// A validated collection of tables.
@@ -360,6 +399,24 @@ impl Schema {
             }
             if column_ids.contains_key(&col.id) {
                 return Err(SchemaError::DuplicateColumnId(table.name.clone(), col.id));
+            }
+            if col.embedding_source.is_some() && col.storage_type != ColumnType::Embedding {
+                return Err(SchemaError::EmbeddingSourceOnNonEmbedding(
+                    table.name.clone(),
+                    col.name.clone(),
+                ));
+            }
+            if matches!(
+                col.embedding_source,
+                Some(
+                    EmbeddingSource::LocalModel { .. } | EmbeddingSource::GeneratedColumn { .. }
+                )
+            ) && col.embedding_dim.unwrap_or(0) == 0
+            {
+                return Err(SchemaError::EmbeddingSourceMissingDim(
+                    table.name.clone(),
+                    col.name.clone(),
+                ));
             }
             column_names.insert(col.name.clone(), col.id);
             column_ids.insert(col.id, col.name.clone());
@@ -600,5 +657,79 @@ mod tests {
         let decoded: Schema = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.tables.len(), 1);
         assert_eq!(decoded.table("users").unwrap().columns.len(), 2);
+    }
+
+    #[test]
+    fn embedding_source_roundtrips_json() {
+        let mut emb = Column::new(2, "vec", ColumnType::Embedding);
+        emb.embedding_dim = Some(4);
+        emb.embedding_source = Some(EmbeddingSource::LocalModel {
+            model_path: "/models/kit-mini".into(),
+            model_id: "kit-mini".into(),
+        });
+        let schema = Schema::new(vec![Table {
+            id: 1,
+            name: "docs".into(),
+            columns: vec![Column::new(1, "id", ColumnType::Int64), emb],
+            primary_key: vec!["id".into()],
+            indexes: vec![],
+            foreign_keys: vec![],
+            unique_constraints: vec![],
+            check_constraints: vec![],
+        }])
+        .unwrap();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(json.contains("local_model"));
+        assert!(json.contains("kit-mini"));
+        let decoded: Schema = serde_json::from_str(&json).unwrap();
+        let col = decoded.table("docs").unwrap().column("vec").unwrap();
+        assert_eq!(
+            col.embedding_source,
+            Some(EmbeddingSource::LocalModel {
+                model_path: "/models/kit-mini".into(),
+                model_id: "kit-mini".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn embedding_source_rejected_on_non_embedding() {
+        let mut col = Column::new(2, "name", ColumnType::Text);
+        col.embedding_source = Some(EmbeddingSource::SuppliedByApplication);
+        let err = Schema::new(vec![Table {
+            id: 1,
+            name: "t".into(),
+            columns: vec![Column::new(1, "id", ColumnType::Int64), col],
+            primary_key: vec!["id".into()],
+            indexes: vec![],
+            foreign_keys: vec![],
+            unique_constraints: vec![],
+            check_constraints: vec![],
+        }])
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            SchemaError::EmbeddingSourceOnNonEmbedding(_, _)
+        ));
+    }
+
+    #[test]
+    fn generated_embedding_requires_dim() {
+        let mut emb = Column::new(2, "vec", ColumnType::Embedding);
+        emb.embedding_source = Some(EmbeddingSource::GeneratedColumn {
+            provider: "local-test".into(),
+        });
+        let err = Schema::new(vec![Table {
+            id: 1,
+            name: "t".into(),
+            columns: vec![Column::new(1, "id", ColumnType::Int64), emb],
+            primary_key: vec!["id".into()],
+            indexes: vec![],
+            foreign_keys: vec![],
+            unique_constraints: vec![],
+            check_constraints: vec![],
+        }])
+        .unwrap_err();
+        assert!(matches!(err, SchemaError::EmbeddingSourceMissingDim(_, _)));
     }
 }

@@ -756,6 +756,43 @@ impl Database {
             .insert(name.into(), Box::new(provider));
     }
 
+    /// Process-local embedding provider registry (same instance as core).
+    ///
+    /// Empty by default — dense ANN works when applications supply vectors.
+    /// Register providers with [`EmbeddingProviderRegistry::register`] (or
+    /// [`Self::register_embedding_provider`]) before calling
+    /// [`Self::embed_texts`]. Does **not** auto-fill inserts/updates.
+    pub fn embedding_providers(&self) -> &mongreldb_core::EmbeddingProviderRegistry {
+        self.inner.embedding_providers()
+    }
+
+    /// Register (or replace) an embedding provider on this process-local registry.
+    pub fn register_embedding_provider(
+        &self,
+        provider: Arc<dyn mongreldb_core::EmbeddingProvider>,
+    ) {
+        self.embedding_providers().register(provider);
+    }
+
+    /// Generate dense vectors via the process-local registry for `source`.
+    ///
+    /// Explicit helper only: ordinary insert/update never call providers.
+    /// `SuppliedByApplication` always refuses generation (pass vectors yourself).
+    /// Dimension mismatches and non-finite provider output are errors — Kit does
+    /// not invent hashed/random pseudo-embeddings.
+    pub fn embed_texts(
+        &self,
+        source: &mongreldb_kit_core::schema::EmbeddingSource,
+        texts: &[&str],
+        expected_dim: u32,
+    ) -> Result<Vec<Vec<f32>>> {
+        let core_source = crate::schema::to_core_embedding_source(source);
+        self.inner
+            .embedding_providers()
+            .embed(&core_source, texts, expected_dim)
+            .map_err(|e| KitError::Validation(e.to_string()))
+    }
+
     /// The raw, unguarded MongrelDB core database. This is the Rust analogue of
     /// the TypeScript kit's `nativeDb` escape hatch: writes made directly
     /// against it bypass all kit constraints.

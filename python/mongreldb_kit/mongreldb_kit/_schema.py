@@ -21,6 +21,13 @@ class Column:
     # function (a dim of 0 makes the index non-functional). Mirrors the Rust
     # kit-core `Column.embedding_dim` and the TS kit `ColumnSpec.embeddingDim`.
     embedding_dim: Optional[int] = None
+    # How embedding values are produced (kit-core EmbeddingSource JSON shape).
+    # Omitted / None = application-supplied vectors (engine default).
+    # Examples:
+    #   {"kind": "supplied_by_application"}
+    #   {"kind": "local_model", "model_path": "/models/x", "model_id": "x"}
+    #   {"kind": "generated_column", "provider": "my-provider"}
+    embedding_source: Optional[dict[str, Any]] = None
     min: Optional[float] = None
     max: Optional[float] = None
     min_length: Optional[int] = None
@@ -44,6 +51,8 @@ class Column:
             d["enum_values"] = self.enum_values
         if self.embedding_dim is not None:
             d["embedding_dim"] = self.embedding_dim
+        if self.embedding_source is not None:
+            d["embedding_source"] = self.embedding_source
         if self.min is not None:
             d["min"] = self.min
         if self.max is not None:

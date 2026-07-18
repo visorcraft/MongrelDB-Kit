@@ -338,6 +338,11 @@ fn alter_column(
             ty: Some(crate::schema::to_core_type(target.storage_type)),
             flags: Some(crate::schema::to_core_flags(table, target)),
             default_value: None,
+            // `None` leaves the catalog field unchanged; `Some(Some(..))` sets it.
+            embedding_source: target
+                .embedding_source
+                .as_ref()
+                .map(|src| Some(crate::schema::to_core_embedding_source(src))),
         },
     )
     .map_err(KitError::from)?;

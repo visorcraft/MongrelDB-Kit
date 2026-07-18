@@ -63,6 +63,10 @@ __all__ = [
     "timestamp",
     "datetime",
     "date",
+    "embedding",
+    "embedding_source_supplied",
+    "embedding_source_local_model",
+    "embedding_source_generated",
     "index",
     "unique",
     "fk",
@@ -922,6 +926,7 @@ def column(
     generated: bool = False,
     enum_values: Optional[list[str]] = None,
     embedding_dim: Optional[int] = None,
+    embedding_source: Optional[dict[str, Any]] = None,
     min: Optional[float] = None,
     max: Optional[float] = None,
     min_length: Optional[int] = None,
@@ -944,6 +949,8 @@ def column(
         col["enum_values"] = enum_values
     if embedding_dim is not None:
         col["embedding_dim"] = embedding_dim
+    if embedding_source is not None:
+        col["embedding_source"] = embedding_source
     if min is not None:
         col["min"] = min
     if max is not None:
@@ -1208,5 +1215,34 @@ def embedding(name: str, id: int, dim: int, **kwargs: Any) -> dict[str, Any]:
     The dimension is required for ANN indexes to function; a dim of 0 makes
     the index non-functional. This mirrors the Rust kit-core ``embedding_dim``
     field and the TS kit ``ColumnSpec.embeddingDim``.
+
+    Optional ``embedding_source`` (dict) records how vectors are produced:
+
+    - omitted / None — application-supplied (default)
+    - ``{"kind": "supplied_by_application"}``
+    - ``{"kind": "local_model", "model_path": "...", "model_id": "..."}``
+    - ``{"kind": "generated_column", "provider": "..."}``
+
+    Provider registration and ``embed_texts`` remain embedded-Rust-first;
+    Python schema carries the catalog metadata for parity.
     """
     return column(name, id, "embedding", embedding_dim=dim, **kwargs)
+
+
+def embedding_source_supplied() -> dict[str, Any]:
+    """Catalog source: application writes vectors directly."""
+    return {"kind": "supplied_by_application"}
+
+
+def embedding_source_local_model(model_path: str, model_id: str) -> dict[str, Any]:
+    """Catalog source: local model resolved via process-local registry ``model_id``."""
+    return {
+        "kind": "local_model",
+        "model_path": model_path,
+        "model_id": model_id,
+    }
+
+
+def embedding_source_generated(provider: str) -> dict[str, Any]:
+    """Catalog source: named provider registered on the process."""
+    return {"kind": "generated_column", "provider": provider}

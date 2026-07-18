@@ -2,6 +2,7 @@ import type {
 	ColumnSpec,
 	ColumnStorageType,
 	ColumnApplicationType,
+	EmbeddingSource,
 	TableSpec,
 	IndexSpec,
 	ForeignKeySpec,
@@ -23,6 +24,8 @@ export type ColumnOptions = {
 	minLength?: number;
 	maxLength?: number;
 	regex?: RegExp;
+	/** Embedding generation source (only for `embedding` columns). */
+	embeddingSource?: EmbeddingSource;
 	/** Encrypt this column's payload at rest (requires an encrypted database). */
 	encrypted?: boolean;
 	/** Encrypt but keep queryable via deterministic tokens (encrypted database). */
@@ -63,6 +66,7 @@ export function column<
 		minLength: opts?.minLength,
 		maxLength: opts?.maxLength,
 		regex: opts?.regex,
+		embeddingSource: opts?.embeddingSource,
 		encrypted: opts?.encrypted,
 		encryptedIndexable: opts?.encryptedIndexable
 	};
@@ -180,7 +184,12 @@ export function arrayCol<const TName extends string, const TOpts extends ColumnO
 	return column(name, 'array', opts);
 }
 
-/** A dense float-vector column of dimension `dim` for ANN (`annSearch`). */
+/** A dense float-vector column of dimension `dim` for ANN (`annSearch`).
+ *
+ * Optional `embeddingSource` records how vectors are produced (catalog metadata).
+ * Default / omit = application-supplied. Generation is never silent on insert —
+ * use the embedded Rust Kit `embed_texts` helper (or supply vectors yourself).
+ */
 export function embedding<const TName extends string, const TOpts extends ColumnOptions = {}>(
 	name: TName,
 	dim: number,
@@ -188,7 +197,26 @@ export function embedding<const TName extends string, const TOpts extends Column
 ): ColumnSpec<TName, 'embedding', OptsNull<TOpts>, OptsDefault<TOpts>, OptsGenerated<TOpts>> {
 	const col = column(name, 'embedding', opts);
 	col.embeddingDim = dim;
+	if (opts?.embeddingSource !== undefined) {
+		col.embeddingSource = opts.embeddingSource;
+	}
 	return col;
+}
+
+/** Serialize kit `EmbeddingSource` to the snake_case JSON shape used by kit-core. */
+export function embeddingSourceToJson(source: EmbeddingSource): Record<string, unknown> {
+	switch (source.kind) {
+		case 'supplied_by_application':
+			return { kind: 'supplied_by_application' };
+		case 'local_model':
+			return {
+				kind: 'local_model',
+				model_path: source.modelPath,
+				model_id: source.modelId
+			};
+		case 'generated_column':
+			return { kind: 'generated_column', provider: source.provider };
+	}
 }
 
 /** A learned-sparse (SPLADE) token-vector column for `sparseMatch`. */

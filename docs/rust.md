@@ -6,7 +6,7 @@ This guide shows how to define a schema, run migrations, and perform CRUD with t
 
 ```toml
 [dependencies]
-mongreldb-kit = "0.59.1"
+mongreldb-kit = "0.60.0"
 serde_json = "1"
 ```
 
@@ -521,6 +521,63 @@ let block = db.allocate_sequence("orders_id_seq", 10)?; // reserve 10, returns t
 ```
 
 `DefaultKind` also covers `Static(value)`, `Now`, `Uuid`, and `CustomName(name)`.
+
+## Embeddings and providers
+
+MongrelDB 0.60+ treats embedding **generation** as an optional pluggable layer. Core storage and
+ANN indexes never hard-code a vendor. Kit lowers optional column metadata and exposes the
+process-local registry on the **embedded** database.
+
+### Catalog: `EmbeddingSource` on columns
+
+```rust
+use mongreldb_kit::{Column, ColumnType, EmbeddingSource, Index, IndexKind, Schema, Table};
+
+let mut emb = Column::new(2, "embedding", ColumnType::Embedding);
+emb.embedding_dim = Some(4);
+// Omit embedding_source → application-supplied (default).
+emb.embedding_source = Some(EmbeddingSource::LocalModel {
+    model_path: "/models/kit-mini".into(),
+    model_id: "kit-mini".into(),
+});
+// Also: EmbeddingSource::SuppliedByApplication
+//       EmbeddingSource::GeneratedColumn { provider: "my-provider".into() }
+```
+
+Create/alter lower this onto the engine `ColumnDef.embedding_source` field.
+
+### Registry and explicit generation
+
+```rust
+use mongreldb_kit::{Database, EmbeddingSource, FixedVectorProvider};
+use std::sync::Arc;
+
+// Register a provider (demo FixedVectorProvider is non-semantic — tests/plumbing only).
+db.register_embedding_provider(Arc::new(FixedVectorProvider {
+    id: "kit-mini".into(),
+    model_id: "kit-mini".into(),
+    vector: vec![0.0, 1.0, 0.0, 0.0],
+}));
+assert!(db.embedding_providers().list_ids().contains(&"kit-mini".into()));
+
+let source = EmbeddingSource::LocalModel {
+    model_path: "/models/kit-mini".into(),
+    model_id: "kit-mini".into(),
+};
+let vectors = db.embed_texts(&source, &["hello"], 4)?;
+// insert vectors yourself — ordinary insert never auto-calls providers
+```
+
+`embed_texts` with `SuppliedByApplication` always refuses; mismatched dimensions error rather than
+inventing vectors. Core types (`EmbeddingProvider`, `EmbeddingProviderRegistry`,
+`CoreEmbeddingSource`, `FixedVectorProvider`) are re-exported from `mongreldb_kit`.
+
+### Non-goals
+
+- Silent auto-fill of embedding columns on insert/update.
+- Remote Kit clients registering providers on `mongreldb-server` (server/operator config).
+- Hard-coded OpenAI/Anthropic/etc. clients inside Kit.
+- Hashed/random dense vectors presented as semantic search.
 
 ## Error handling
 

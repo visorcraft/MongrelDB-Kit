@@ -211,6 +211,7 @@ fn core_direct(n: i64) -> Times {
                 ty: TypeId::Int64,
                 flags: ColumnFlags::empty().with(ColumnFlags::PRIMARY_KEY),
                 default_value: None,
+                embedding_source: None,
             },
             ColumnDef {
                 id: 2,
@@ -218,6 +219,7 @@ fn core_direct(n: i64) -> Times {
                 ty: TypeId::Bytes,
                 flags: ColumnFlags::empty(),
                 default_value: None,
+                embedding_source: None,
             },
             ColumnDef {
                 id: 3,
@@ -225,6 +227,7 @@ fn core_direct(n: i64) -> Times {
                 ty: TypeId::Float64,
                 flags: ColumnFlags::empty(),
                 default_value: None,
+                embedding_source: None,
             },
         ],
         indexes: vec![],
@@ -316,6 +319,7 @@ fn bulk_core(n: i64) -> f64 {
                 ty: TypeId::Int64,
                 flags: ColumnFlags::empty().with(ColumnFlags::PRIMARY_KEY),
                 default_value: None,
+                embedding_source: None,
             },
             ColumnDef {
                 id: 2,
@@ -323,6 +327,7 @@ fn bulk_core(n: i64) -> f64 {
                 ty: TypeId::Bytes,
                 flags: ColumnFlags::empty(),
                 default_value: None,
+                embedding_source: None,
             },
             ColumnDef {
                 id: 3,
@@ -330,6 +335,7 @@ fn bulk_core(n: i64) -> f64 {
                 ty: TypeId::Float64,
                 flags: ColumnFlags::empty(),
                 default_value: None,
+                embedding_source: None,
             },
         ],
         indexes: vec![],

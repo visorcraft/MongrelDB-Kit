@@ -10,9 +10,11 @@ use mongreldb_core::schema::{
     TypeId,
 };
 use mongreldb_kit_core::schema::{
-    Column, ColumnType, DefaultKind, IndexKind as KitIndexKind, Table as KitTable,
+    Column, ColumnType, DefaultKind, EmbeddingSource as KitEmbeddingSource,
+    IndexKind as KitIndexKind, Table as KitTable,
 };
 use serde_json::{Map, Value};
+use std::path::PathBuf;
 
 /// Convert a kit table to a core schema.
 ///
@@ -36,6 +38,12 @@ pub fn to_core_schema(table: &KitTable) -> Result<CoreSchema> {
             ty: resolve_type(c),
             flags: to_core_flags(table, c),
             default_value: kit_default_to_core(&c.default, c.storage_type),
+            // `None` = application-supplied (engine default). Explicit kit
+            // sources lower into the core catalog for LocalModel/GeneratedColumn.
+            embedding_source: c
+                .embedding_source
+                .as_ref()
+                .map(to_core_embedding_source),
         })
         .collect();
 
@@ -223,6 +231,27 @@ fn resolve_type(col: &Column) -> TypeId {
             dim: col.embedding_dim.unwrap_or(0),
         },
         other => to_core_type(other),
+    }
+}
+
+/// Lower kit embedding-source metadata to the engine catalog shape.
+pub fn to_core_embedding_source(source: &KitEmbeddingSource) -> mongreldb_core::EmbeddingSource {
+    match source {
+        KitEmbeddingSource::SuppliedByApplication => {
+            mongreldb_core::EmbeddingSource::SuppliedByApplication
+        }
+        KitEmbeddingSource::LocalModel {
+            model_path,
+            model_id,
+        } => mongreldb_core::EmbeddingSource::LocalModel {
+            model_path: PathBuf::from(model_path),
+            model_id: model_id.clone(),
+        },
+        KitEmbeddingSource::GeneratedColumn { provider } => {
+            mongreldb_core::EmbeddingSource::GeneratedColumn {
+                provider: provider.clone(),
+            }
+        }
     }
 }
 
@@ -626,6 +655,61 @@ mod tests {
         // Kit-only shapes stay kit-side (None = no engine default).
         assert_eq!(by("seq").default_value, None);
         assert_eq!(by("custom").default_value, None);
+    }
+
+    #[test]
+    fn embedding_source_kinds_lower_to_core_catalog() {
+        use mongreldb_kit_core::schema::EmbeddingSource as KitSrc;
+
+        let mut app = Column::new(2, "app_vec", ColumnType::Embedding);
+        app.embedding_dim = Some(4);
+        app.embedding_source = Some(KitSrc::SuppliedByApplication);
+
+        let mut local = Column::new(3, "local_vec", ColumnType::Embedding);
+        local.embedding_dim = Some(4);
+        local.embedding_source = Some(KitSrc::LocalModel {
+            model_path: "/models/demo".into(),
+            model_id: "demo".into(),
+        });
+
+        let mut gen = Column::new(4, "gen_vec", ColumnType::Embedding);
+        gen.embedding_dim = Some(8);
+        gen.embedding_source = Some(KitSrc::GeneratedColumn {
+            provider: "my-provider".into(),
+        });
+
+        let mut omitted = Column::new(5, "omit_vec", ColumnType::Embedding);
+        omitted.embedding_dim = Some(4);
+        // embedding_source left None → application-supplied default
+
+        let table = envelope_table(vec![
+            kit_text_column(1, "id", None, None, None),
+            app,
+            local,
+            gen,
+            omitted,
+        ]);
+        let core = to_core_schema(&table).unwrap();
+        let by = |n: &str| core.columns.iter().find(|c| c.name == n).unwrap();
+
+        assert_eq!(
+            by("app_vec").embedding_source,
+            Some(mongreldb_core::EmbeddingSource::SuppliedByApplication)
+        );
+        assert_eq!(
+            by("local_vec").embedding_source,
+            Some(mongreldb_core::EmbeddingSource::LocalModel {
+                model_path: PathBuf::from("/models/demo"),
+                model_id: "demo".into(),
+            })
+        );
+        assert_eq!(
+            by("gen_vec").embedding_source,
+            Some(mongreldb_core::EmbeddingSource::GeneratedColumn {
+                provider: "my-provider".into(),
+            })
+        );
+        assert_eq!(by("omit_vec").embedding_source, None);
     }
 
     #[test]

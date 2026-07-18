@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { table, int, text, timestamp, unique, index, foreignKey, check, Schema } from './schema.js';
+import {
+	table,
+	int,
+	text,
+	timestamp,
+	unique,
+	index,
+	foreignKey,
+	check,
+	Schema,
+	embedding,
+	embeddingSourceToJson
+} from './schema.js';
 
 describe('schema DSL', () => {
 	it('builds a users table spec', () => {
@@ -118,5 +130,55 @@ describe('schema DSL', () => {
 		const a = table('a', { id: 1, columns: [int('id')], primaryKey: ['id'] });
 		const b = table('b', { id: 1, columns: [int('id')], primaryKey: ['id'] });
 		expect(() => new Schema([a, b])).toThrow('Duplicate table id');
+	});
+
+	it('embedding column accepts embeddingSource metadata for each kind', () => {
+		const omitted = embedding('vec', 4);
+		expect(omitted.embeddingDim).toBe(4);
+		expect(omitted.embeddingSource).toBeUndefined();
+
+		const app = embedding('app_vec', 8, {
+			embeddingSource: { kind: 'supplied_by_application' }
+		});
+		expect(app.embeddingSource).toEqual({ kind: 'supplied_by_application' });
+
+		const local = embedding('local_vec', 4, {
+			embeddingSource: {
+				kind: 'local_model',
+				modelPath: '/models/kit-mini',
+				modelId: 'kit-mini'
+			}
+		});
+		expect(local.embeddingSource).toEqual({
+			kind: 'local_model',
+			modelPath: '/models/kit-mini',
+			modelId: 'kit-mini'
+		});
+		expect(embeddingSourceToJson(local.embeddingSource!)).toEqual({
+			kind: 'local_model',
+			model_path: '/models/kit-mini',
+			model_id: 'kit-mini'
+		});
+
+		const gen = embedding('gen_vec', 4, {
+			embeddingSource: { kind: 'generated_column', provider: 'my-provider' }
+		});
+		expect(gen.embeddingSource).toEqual({
+			kind: 'generated_column',
+			provider: 'my-provider'
+		});
+		expect(embeddingSourceToJson(gen.embeddingSource!)).toEqual({
+			kind: 'generated_column',
+			provider: 'my-provider'
+		});
+
+		const docs = table('docs', {
+			columns: [int('id', { primaryKey: true }), local],
+			primaryKey: ['id'],
+			indexes: [index(['local_vec'], { ann: true })]
+		});
+		const embCol = docs.columns.find((c) => c.name === 'local_vec');
+		expect(embCol?.embeddingSource?.kind).toBe('local_model');
+		expect(docs.indexes.some((i) => i.kind === 'ann')).toBe(true);
 	});
 });

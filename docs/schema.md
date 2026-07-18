@@ -183,6 +183,40 @@ db.insertInto(files).values({ data: new Uint8Array([1, 2, 3]) }).executeSync();
 const data = row.data as Uint8Array;
 ```
 
+### Embedding columns and pluggable sources
+
+Dense vectors use `embedding(name, dim, opts?)` (storage type `embedding`, `Row` type
+`number[]`). Pair with an ANN index (`index(['vec'], { ann: true })`) for
+`annSearch` / `ann_search`.
+
+Optional `embeddingSource` records **how** vectors are produced (catalog metadata only):
+
+| Source | Meaning |
+| --- | --- |
+| *(omit)* | Application-supplied vectors (engine default) |
+| `{ kind: 'supplied_by_application' }` | Same, explicit |
+| `{ kind: 'local_model', modelPath, modelId }` | Local model; registry key = `modelId` |
+| `{ kind: 'generated_column', provider }` | Named process-local provider |
+
+```ts
+embedding('vec', 768); // app-supplied (default)
+embedding('vec', 768, {
+  embeddingSource: { kind: 'local_model', modelPath: '/models/kit-mini', modelId: 'kit-mini' },
+});
+```
+
+**Defaults and non-goals**
+
+- Insert/update **never** auto-call embedding providers. Supply vectors yourself, or use the
+  embedded Rust Kit helpers (`register_embedding_provider`, `embed_texts`) then insert.
+- TypeScript/Python record source metadata for schema parity; process-local provider
+  registration is embedded-Rust-first.
+- Remote Kit clients cannot register providers on a running daemon (operator/server concern).
+- Kit does not hard-code cloud embedding vendors, and does not invent hashed/random vectors to
+  fake Dense ANN. Prefer sparse retrieval when no real model is available.
+
+See [Rust](./rust.md#embeddings-and-providers) for the registry / generation APIs.
+
 ## `ColumnOptions`
 
 Every constructor accepts the same options object:

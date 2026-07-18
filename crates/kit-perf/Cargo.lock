@@ -2219,9 +2219,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.59.0"
+version = "0.60.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a71fdfcd49ec5767c12a61fe38257afb76e6e732b5085775daf6e3251dbe193"
+checksum = "d10f32f6f3b4addf8a1f187760d7156f40457d08d9951a063b01c294a2fc6399"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2236,6 +2236,9 @@ dependencies = [
  "hmac",
  "lz4_flex 0.11.6",
  "memmap2",
+ "mongreldb-fault",
+ "mongreldb-log",
+ "mongreldb-types",
  "parking_lot",
  "rayon",
  "regex",
@@ -2253,8 +2256,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mongreldb-fault"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbd238d9a85b2fd59705b515b19c30b7f51c1ad0dd2787ef20df588c2ab1b3b3"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "mongreldb-kit"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "arrow",
  "bincode",
@@ -2272,7 +2284,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "hex",
  "regex",
@@ -2284,10 +2296,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "mongreldb-query"
-version = "0.59.0"
+name = "mongreldb-log"
+version = "0.60.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8112b06f176834011b7ae1dffc14fe98e9872008100cf8ff28d04d5d4d0036a7"
+checksum = "a9e4e195b83425612822d592f8376f182f033d52f56dcfa914a939eff809813e"
+dependencies = [
+ "mongreldb-types",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "mongreldb-query"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0cba133a359e699e55d90b120fa3de6e113f9875e80dabcea4c30e3d8153931"
 dependencies = [
  "aes-gcm",
  "arrow",
@@ -2299,6 +2323,7 @@ dependencies = [
  "futures",
  "getrandom 0.2.17",
  "mongreldb-core",
+ "mongreldb-types",
  "parking_lot",
  "regex",
  "serde",
@@ -2308,6 +2333,17 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "mongreldb-types"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aef8820680f95dfd0863e0283c31c018695db5cc7b049dd858411b585fabd884"
+dependencies = [
+ "getrandom 0.2.17",
+ "serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

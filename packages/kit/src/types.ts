@@ -23,6 +23,17 @@ export type PkValue = string | bigint | (string | bigint | null)[];
 
 export type ColumnApplicationType = ColumnStorageType;
 
+/**
+ * Where dense embedding values for a column originate.
+ * Mirrors kit-core / mongreldb-core `EmbeddingSource` (schema metadata only).
+ * Omitting means application-supplied vectors. Provider registration is
+ * embedded-Rust-first — TypeScript records the intent for catalog parity.
+ */
+export type EmbeddingSource =
+	| { kind: 'supplied_by_application' }
+	| { kind: 'local_model'; modelPath: string; modelId: string }
+	| { kind: 'generated_column'; provider: string };
+
 export interface ColumnSpec<
 	TName extends string = string,
 	TApp extends ColumnApplicationType = ColumnApplicationType,
@@ -41,6 +52,11 @@ export interface ColumnSpec<
 	generated: TGenerated;
 	/** Vector dimension for an `embedding` column (required for ANN). */
 	embeddingDim?: number;
+	/**
+	 * How embedding values are produced. Only for `storageType: 'embedding'`.
+	 * Omitted = application-supplied (engine default).
+	 */
+	embeddingSource?: EmbeddingSource;
 	/** Encrypt this column at rest (requires an encrypted database). */
 	encrypted?: boolean;
 	/** Encrypt but keep queryable via deterministic tokens. */
