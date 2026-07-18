@@ -48,7 +48,11 @@ fn row(id: i64, emb: Vec<f32>) -> Map<String, Value> {
 #[test]
 fn create_table_records_each_embedding_source_on_core_catalog() {
     let dir = tempdir().unwrap();
-    let cases: Vec<(&str, Option<EmbeddingSource>, Option<mongreldb_kit::CoreEmbeddingSource>)> = vec![
+    let cases: Vec<(
+        &str,
+        Option<EmbeddingSource>,
+        Option<mongreldb_kit::CoreEmbeddingSource>,
+    )> = vec![
         (
             "app",
             Some(EmbeddingSource::SuppliedByApplication),
@@ -97,10 +101,7 @@ fn create_table_records_each_embedding_source_on_core_catalog() {
             assert!(
                 col.embedding_source
                     .as_ref()
-                    .map(|s| matches!(
-                        s,
-                        mongreldb_kit::CoreEmbeddingSource::SuppliedByApplication
-                    ))
+                    .map(|s| matches!(s, mongreldb_kit::CoreEmbeddingSource::SuppliedByApplication))
                     .unwrap_or(true),
                 "omit means application-supplied default"
             );
@@ -126,7 +127,10 @@ fn registry_register_list_and_embed_helper() {
         model_id: "fixed-v1".into(),
         vector: vec![0.0, 1.0, 0.0, 0.0],
     }));
-    assert_eq!(db.embedding_providers().list_ids(), vec!["fixed-v1".to_string()]);
+    assert_eq!(
+        db.embedding_providers().list_ids(),
+        vec!["fixed-v1".to_string()]
+    );
     assert!(db.embedding_providers().get("fixed-v1").is_some());
     assert!(db.embedding_providers().get("missing").is_none());
 
@@ -181,11 +185,8 @@ fn ordinary_insert_does_not_auto_call_providers() {
     .unwrap();
     assert!(db.embedding_providers().list_ids().is_empty());
     let mut txn = db.begin().unwrap();
-    txn.insert(
-        "docs",
-        row(1, vec![1.0, 0.0, 0.0, 0.0]),
-    )
-    .unwrap();
+    txn.insert("docs", row(1, vec![1.0, 0.0, 0.0, 0.0]))
+        .unwrap();
     txn.commit().unwrap();
     let txn = db.begin().unwrap();
     let hits = txn
@@ -205,7 +206,8 @@ fn local_model_register_embed_insert_ann_search() {
         model_path: "/models/kit-mini".into(),
         model_id: "kit-mini".into(),
     };
-    let db = Database::create(&dir.path().join("local"), docs_schema(Some(source.clone()))).unwrap();
+    let db =
+        Database::create(&dir.path().join("local"), docs_schema(Some(source.clone()))).unwrap();
 
     // Catalog recorded LocalModel.
     {

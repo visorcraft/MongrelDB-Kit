@@ -40,10 +40,7 @@ pub fn to_core_schema(table: &KitTable) -> Result<CoreSchema> {
             default_value: kit_default_to_core(&c.default, c.storage_type),
             // `None` = application-supplied (engine default). Explicit kit
             // sources lower into the core catalog for LocalModel/GeneratedColumn.
-            embedding_source: c
-                .embedding_source
-                .as_ref()
-                .map(to_core_embedding_source),
+            embedding_source: c.embedding_source.as_ref().map(to_core_embedding_source),
         })
         .collect();
 

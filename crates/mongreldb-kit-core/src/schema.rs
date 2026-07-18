@@ -408,9 +408,7 @@ impl Schema {
             }
             if matches!(
                 col.embedding_source,
-                Some(
-                    EmbeddingSource::LocalModel { .. } | EmbeddingSource::GeneratedColumn { .. }
-                )
+                Some(EmbeddingSource::LocalModel { .. } | EmbeddingSource::GeneratedColumn { .. })
             ) && col.embedding_dim.unwrap_or(0) == 0
             {
                 return Err(SchemaError::EmbeddingSourceMissingDim(
