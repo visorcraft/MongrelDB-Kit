@@ -2092,7 +2092,7 @@ impl PyTransaction {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))?;
         let v: serde_json::Value = serde_json::from_str(spec_json).map_err(py_json_err)?;
-        let spec = parse_search_spec(&v).map_err(|e| PyRuntimeError::new_err(e))?;
+        let spec = parse_search_spec(&v).map_err(PyRuntimeError::new_err)?;
         let hits = txn.search(table, spec).map_err(map_err)?;
         hits.iter()
             .map(|hit| {
