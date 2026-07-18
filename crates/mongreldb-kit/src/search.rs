@@ -160,12 +160,12 @@ pub(crate) fn build_core_request(table: &KitTable, spec: &SearchSpec) -> Result<
     let rerank = match &spec.rerank {
         None => None,
         Some(rr) => {
-            if rr.candidate_limit < spec.limit || rr.candidate_limit > MAX_RETRIEVER_K {
+            if !(spec.limit..=MAX_RETRIEVER_K).contains(&rr.candidate_limit) {
                 return Err(KitError::Validation(
                     "rerank candidate_limit is out of range".into(),
                 ));
             }
-            if !rr.weight.is_finite() || rr.weight < 0.0 || rr.weight > MAX_RETRIEVER_WEIGHT {
+            if !rr.weight.is_finite() || !(0.0..=MAX_RETRIEVER_WEIGHT).contains(&rr.weight) {
                 return Err(KitError::Validation(
                     "rerank weight must be finite, non-negative, and within limit".into(),
                 ));
@@ -293,12 +293,12 @@ fn validate_named(name: &str, weight: f64, k: usize) -> Result<()> {
             "retriever name must be non-empty and within the byte limit".into(),
         ));
     }
-    if k == 0 || k > MAX_RETRIEVER_K {
+    if !(1..=MAX_RETRIEVER_K).contains(&k) {
         return Err(KitError::Validation(format!(
             "retriever k must be between 1 and {MAX_RETRIEVER_K}"
         )));
     }
-    if !weight.is_finite() || weight < 0.0 || weight > MAX_RETRIEVER_WEIGHT {
+    if !weight.is_finite() || !(0.0..=MAX_RETRIEVER_WEIGHT).contains(&weight) {
         return Err(KitError::Validation(
             "retriever weight must be finite, non-negative, and within limit".into(),
         ));
