@@ -427,10 +427,7 @@ fn parse_search_spec(v: &serde_json::Value) -> Result<mongreldb_kit::SearchSpec,
     let obj = v
         .as_object()
         .ok_or_else(|| "search spec must be a JSON object".to_string())?;
-    let limit = obj
-        .get("limit")
-        .and_then(|x| x.as_u64())
-        .unwrap_or(10) as usize;
+    let limit = obj.get("limit").and_then(|x| x.as_u64()).unwrap_or(10) as usize;
     let fusion_constant = obj
         .get("fusion_constant")
         .and_then(|x| x.as_u64())
@@ -540,7 +537,11 @@ fn parse_search_spec(v: &serde_json::Value) -> Result<mongreldb_kit::SearchSpec,
             .iter()
             .filter_map(|x| x.as_f64().map(|f| f as f32))
             .collect();
-        let metric = match rr.get("metric").and_then(|x| x.as_str()).unwrap_or("cosine") {
+        let metric = match rr
+            .get("metric")
+            .and_then(|x| x.as_str())
+            .unwrap_or("cosine")
+        {
             "cosine" => SearchMetric::Cosine,
             "dot_product" | "dot" => SearchMetric::DotProduct,
             "euclidean" | "l2" => SearchMetric::Euclidean,
@@ -2097,7 +2098,10 @@ impl PyTransaction {
             .map(|hit| {
                 let mut map = serde_json::Map::new();
                 map.insert("row_id".into(), serde_json::json!(hit.row_id));
-                map.insert("values".into(), serde_json::Value::Object(hit.values.clone()));
+                map.insert(
+                    "values".into(),
+                    serde_json::Value::Object(hit.values.clone()),
+                );
                 map.insert("fused_score".into(), serde_json::json!(hit.fused_score));
                 map.insert("final_score".into(), serde_json::json!(hit.final_score));
                 map.insert("final_rank".into(), serde_json::json!(hit.final_rank));

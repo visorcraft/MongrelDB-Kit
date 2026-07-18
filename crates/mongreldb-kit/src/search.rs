@@ -12,9 +12,9 @@
 use crate::error::{KitError, Result};
 use crate::schema::Row;
 use mongreldb_core::query::{
-    Condition, Fusion, NamedRetriever, Rerank, Retriever, SearchHit as CoreSearchHit, SearchRequest,
-    SetMember, VectorMetric, MAX_FINAL_LIMIT, MAX_RETRIEVER_K, MAX_RETRIEVER_NAME_BYTES,
-    MAX_RETRIEVER_WEIGHT,
+    Condition, Fusion, NamedRetriever, Rerank, Retriever, SearchHit as CoreSearchHit,
+    SearchRequest, SetMember, VectorMetric, MAX_FINAL_LIMIT, MAX_RETRIEVER_K,
+    MAX_RETRIEVER_NAME_BYTES, MAX_RETRIEVER_WEIGHT,
 };
 use mongreldb_kit_core::schema::Table as KitTable;
 use serde_json::{Map, Value};
