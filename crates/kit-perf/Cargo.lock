@@ -2219,9 +2219,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.60.0"
+version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d10f32f6f3b4addf8a1f187760d7156f40457d08d9951a063b01c294a2fc6399"
+checksum = "cae5d41ec6ba980034e037b525caad64663fba4ede33dd4d8572db94a420ba39"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2257,16 +2257,16 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-fault"
-version = "0.60.0"
+version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbd238d9a85b2fd59705b515b19c30b7f51c1ad0dd2787ef20df588c2ab1b3b3"
+checksum = "aa15cb99e6c3c0cc2cce6130f44811d8e745bdc0547c14b0ba678dd97bdbf586"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "arrow",
  "bincode",
@@ -2284,7 +2284,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.60.0"
+version = "0.60.2"
 dependencies = [
  "hex",
  "regex",
@@ -2297,9 +2297,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-log"
-version = "0.60.0"
+version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9e4e195b83425612822d592f8376f182f033d52f56dcfa914a939eff809813e"
+checksum = "00718a390b239ff789286dd50281a036784d54f9b7179676fe47e5f79d000ab4"
 dependencies = [
  "mongreldb-types",
  "serde",
@@ -2309,9 +2309,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-query"
-version = "0.60.0"
+version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0cba133a359e699e55d90b120fa3de6e113f9875e80dabcea4c30e3d8153931"
+checksum = "391f65c60ca54016ebc8ec94106fce7e407b62b0d9f9904562bff10ee8cced59"
 dependencies = [
  "aes-gcm",
  "arrow",
@@ -2337,9 +2337,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-types"
-version = "0.60.0"
+version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aef8820680f95dfd0863e0283c31c018695db5cc7b049dd858411b585fabd884"
+checksum = "6f2624cd15fbbdf99aab746d0961b45ba3380d7f633f1a8aa0649dff5994637e"
 dependencies = [
  "getrandom 0.2.17",
  "serde",
