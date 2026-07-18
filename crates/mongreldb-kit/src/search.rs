@@ -146,7 +146,7 @@ pub(crate) fn build_core_request(table: &KitTable, spec: &SearchSpec) -> Result<
             "search requires at least one retriever".into(),
         ));
     }
-    if spec.limit == 0 || spec.limit > MAX_FINAL_LIMIT {
+    if !(1..=MAX_FINAL_LIMIT).contains(&spec.limit) {
         return Err(KitError::Validation(format!(
             "search limit must be between 1 and {MAX_FINAL_LIMIT}"
         )));
