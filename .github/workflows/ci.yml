@@ -3,8 +3,18 @@ name: CI
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - "**/*.md"
+      - "assets/**"
   pull_request:
     branches: [master]
+    paths-ignore:
+      - "**/*.md"
+      - "assets/**"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -22,7 +32,7 @@ jobs:
   # present: `crates/mongreldb-kit` depends on it via a sibling path dep
   # (`../../../mongreldb/...`), and every `cargo` invocation loads the whole
   # workspace manifest. So the engine is checked out as a sibling here too,
-  # matching the `integration` job layout. `tsc --noEmit` / the Python facade
+  # matching the integration job layout. `tsc --noEmit` / the Python facade
   # import still do not exercise the native addon.
   lint-and-core:
     runs-on: ubuntu-latest
@@ -70,7 +80,7 @@ jobs:
       - name: TypeScript typecheck
         working-directory: MongrelDB-Kit/packages/kit
         run: |
-          npm install --no-save --ignore-scripts --legacy-peer-deps
+          npm ci --ignore-scripts --legacy-peer-deps
           mkdir -p node_modules/@visorcraft
           ln -sfn "$GITHUB_WORKSPACE/mongreldb/crates/mongreldb-node" node_modules/@visorcraft/mongreldb
           npm run check
@@ -80,14 +90,10 @@ jobs:
         # The facade's __init__ eagerly imports the native extension, which this
         # fast job doesn't build, so byte-compile the pure-Python sources for a
         # syntax check instead of importing them. The full import + tests run in
-        # the integration job.
+        # the python-integration job.
         run: python -m py_compile python/mongreldb_kit/mongreldb_kit/*.py
 
-  # Full integration. Requires the MongrelDB engine repo checked out as a sibling
-  # directory so the `../../../mongreldb/...` Cargo path deps and the
-  # `mongreldb` Node addon resolve. Set the MONGRELDB_TOKEN secret if the engine
-  # repo is private; otherwise the default GITHUB_TOKEN is used.
-  integration:
+  rust-integration:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kit
@@ -112,6 +118,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: MongrelDB-Kit
+          key: rust-integration
 
       - name: clippy (workspace)
         working-directory: MongrelDB-Kit
@@ -121,6 +128,36 @@ jobs:
         working-directory: MongrelDB-Kit
         run: cargo test --workspace
 
+      - name: Conformance
+        working-directory: MongrelDB-Kit
+        run: cargo run -p conformance-runner
+
+  node-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kit
+        uses: actions/checkout@v7
+        with:
+          path: MongrelDB-Kit
+
+      - name: Checkout MongrelDB engine (sibling)
+        uses: actions/checkout@v7
+        with:
+          repository: visorcraft/mongreldb
+          ref: master
+          path: mongreldb
+          token: ${{ secrets.MONGRELDB_TOKEN || github.token }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: mongreldb/crates/mongreldb-node
+          key: node-integration
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
@@ -129,13 +166,13 @@ jobs:
       - name: Build MongrelDB Node addon
         working-directory: mongreldb/crates/mongreldb-node
         run: |
-          npm install --no-save
+          npm ci
           npm run build
 
       - name: Link engine addon for the kit
         working-directory: MongrelDB-Kit/packages/kit
         run: |
-          npm install --no-save --ignore-scripts --legacy-peer-deps
+          npm ci --ignore-scripts --legacy-peer-deps
           mkdir -p node_modules/@visorcraft
           ln -sfn "$GITHUB_WORKSPACE/mongreldb/crates/mongreldb-node" node_modules/@visorcraft/mongreldb
 
@@ -144,6 +181,32 @@ jobs:
         run: |
           npm run build
           npm test
+
+  python-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kit
+        uses: actions/checkout@v7
+        with:
+          path: MongrelDB-Kit
+
+      - name: Checkout MongrelDB engine (sibling)
+        uses: actions/checkout@v7
+        with:
+          repository: visorcraft/mongreldb
+          ref: master
+          path: mongreldb
+          token: ${{ secrets.MONGRELDB_TOKEN || github.token }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: MongrelDB-Kit
+          key: python-integration
 
       - name: Python build (PyO3) + tests
         working-directory: MongrelDB-Kit
@@ -157,7 +220,3 @@ jobs:
           # would produce — the facade does `from .mongreldb_kit_py import ...`.
           (cd python/mongreldb_kit && maturin develop)
           PYTHONPATH=python/mongreldb_kit python -m pytest python/tests tests/conformance/python -q
-
-      - name: Conformance (Rust)
-        working-directory: MongrelDB-Kit
-        run: cargo run -p conformance-runner
