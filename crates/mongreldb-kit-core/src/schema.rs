@@ -215,6 +215,17 @@ pub enum IndexKind {
     LearnedRange,
 }
 
+/// ANN representation and distance metric.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnQuantization {
+    /// One sign bit per component, ranked by Hamming distance.
+    #[default]
+    BinarySign,
+    /// Full `f32` vectors, ranked by cosine distance.
+    Dense,
+}
+
 /// An index on one or more columns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Index {
@@ -225,6 +236,9 @@ pub struct Index {
     /// unchanged.
     #[serde(default)]
     pub kind: IndexKind,
+    /// ANN representation. Ignored for non-ANN indexes.
+    #[serde(default)]
+    pub ann_quantization: AnnQuantization,
 }
 
 /// A uniqueness constraint over one or more columns.
@@ -642,6 +656,7 @@ mod tests {
                     columns: vec!["email".into()],
                     unique: true,
                     kind: Default::default(),
+                    ann_quantization: Default::default(),
                 },
                 // A non-unique index must NOT synthesize a constraint.
                 Index {
@@ -649,6 +664,7 @@ mod tests {
                     columns: vec!["handle".into()],
                     unique: false,
                     kind: Default::default(),
+                    ann_quantization: Default::default(),
                 },
             ],
             foreign_keys: vec![],
@@ -679,6 +695,7 @@ mod tests {
                 columns: vec!["email".into()],
                 unique: true,
                 kind: Default::default(),
+                ann_quantization: Default::default(),
             }],
             foreign_keys: vec![],
             unique_constraints: vec![UniqueConstraint {
@@ -712,6 +729,7 @@ mod tests {
                 columns: vec!["email".into()],
                 unique: true,
                 kind: Default::default(),
+                ann_quantization: Default::default(),
             }],
             foreign_keys: vec![],
             unique_constraints: vec![],
@@ -726,6 +744,34 @@ mod tests {
         let decoded: Schema = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.tables.len(), 1);
         assert_eq!(decoded.table("users").unwrap().columns.len(), 2);
+    }
+
+    #[test]
+    fn dense_ann_quantization_roundtrips_and_old_json_defaults_binary() {
+        let dense = Index {
+            name: "idx_embedding".into(),
+            columns: vec!["embedding".into()],
+            unique: false,
+            kind: IndexKind::Ann,
+            ann_quantization: AnnQuantization::Dense,
+        };
+        let json = serde_json::to_value(&dense).unwrap();
+        assert_eq!(json["ann_quantization"], "dense");
+        assert_eq!(
+            serde_json::from_value::<Index>(json)
+                .unwrap()
+                .ann_quantization,
+            AnnQuantization::Dense
+        );
+
+        let old: Index = serde_json::from_value(serde_json::json!({
+            "name": "idx_embedding",
+            "columns": ["embedding"],
+            "unique": false,
+            "kind": "ann"
+        }))
+        .unwrap();
+        assert_eq!(old.ann_quantization, AnnQuantization::BinarySign);
     }
 
     #[test]

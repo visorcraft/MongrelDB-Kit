@@ -28,6 +28,7 @@ fn docs_schema(source: Option<EmbeddingSource>) -> Schema {
             columns: vec!["embedding".into()],
             unique: false,
             kind: IndexKind::Ann,
+            ann_quantization: Default::default(),
         }],
         foreign_keys: vec![],
         unique_constraints: vec![],

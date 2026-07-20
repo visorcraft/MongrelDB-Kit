@@ -189,6 +189,39 @@ Dense vectors use `embedding(name, dim, opts?)` (storage type `embedding`, `Row`
 `number[]`). Pair with an ANN index (`index(['vec'], { ann: true })`) for
 `annSearch` / `ann_search`.
 
+ANN indexes default to `binary_sign` (one sign bit per component, Hamming
+distance). Choose `dense` to retain full finite `f32` vectors in HNSW and rank
+by cosine distance:
+
+```ts
+const binary = index(['vec'], {
+  name: 'idx_documents_vec',
+  ann: true,
+});
+const dense = index(['vec'], {
+  name: binary.name,
+  ann: true,
+  annQuantization: 'dense',
+});
+
+const jobId = db.startReplaceIndex('documents', binary.name, dense);
+const job = await db.waitIndexBuild(jobId, 60_000);
+if (job.state !== 'succeeded') throw new Error(job.error ?? job.state);
+```
+
+`startCreateIndex` and `startReplaceIndex` return durable job IDs. Use
+`indexBuild`, `waitIndexBuild`, `cancelIndexBuild`, and `resumeIndexBuild` to
+control them. The engine builds a hidden generation while writes continue,
+catches up committed inserts, updates, and deletes, then publishes through a
+short final barrier. A cancelled or failed pre-publication job leaves the old
+index authoritative.
+
+Rust exposes the same operations as `Database::start_create_index`,
+`start_replace_index`, `index_build`, `wait_index_build`,
+`cancel_index_build`, and `resume_index_build`. Python uses the corresponding
+snake-case methods. Python index declarations set
+`ann_quantization="dense"`.
+
 Optional `embeddingSource` records **how** vectors are produced:
 
 | Source | Meaning |

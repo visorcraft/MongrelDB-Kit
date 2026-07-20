@@ -2,13 +2,14 @@
 
 use crate::error::{KitError, Result};
 use crate::internal::{ensure_internal_tables, internal_tables_core};
-use crate::schema::to_core_schema;
+use crate::schema::{to_core_indexes, to_core_schema};
 use mongreldb_core::epoch::Snapshot;
 use mongreldb_core::memtable::Row as CoreRow;
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::Schema as CoreSchema;
 use mongreldb_core::Database as CoreDatabase;
 use mongreldb_core::{AggState, ApproxAgg, NativeAgg, NativeAggResult, RowId};
+use mongreldb_kit_core::schema::Index as KitIndex;
 use mongreldb_kit_core::schema::IndexKind as KitIndexKind;
 use mongreldb_kit_core::schema::Schema as KitSchema;
 use mongreldb_kit_core::schema::Table as KitTable;
@@ -799,6 +800,95 @@ impl Database {
     /// against it bypass all kit constraints.
     pub fn raw(&self) -> &CoreDatabase {
         &self.inner
+    }
+
+    /// Persist and asynchronously build one secondary index.
+    ///
+    /// Online engine jobs publish one physical single-column index. Kit
+    /// multi-column declarations therefore are not accepted by this API.
+    pub fn start_create_index(&self, table: &str, index: &KitIndex) -> Result<u64> {
+        let table_schema = self
+            .schema
+            .table(table)
+            .ok_or_else(|| KitError::Validation(format!("table {table:?} not found")))?;
+        let definition = one_core_index(table_schema, index)?;
+        self.inner
+            .start_create_index(table, definition)
+            .map_err(KitError::from)
+    }
+
+    /// Persist and asynchronously replace one secondary index.
+    ///
+    /// `expected_old_name` is the logical Kit index name. The full old
+    /// physical name is resolved from the loaded Kit schema.
+    pub fn start_replace_index(
+        &self,
+        table: &str,
+        expected_old_name: &str,
+        replacement: &KitIndex,
+    ) -> Result<u64> {
+        let table_schema = self
+            .schema
+            .table(table)
+            .ok_or_else(|| KitError::Validation(format!("table {table:?} not found")))?;
+        let old = table_schema
+            .indexes
+            .iter()
+            .find(|index| index.name == expected_old_name)
+            .ok_or_else(|| {
+                KitError::Validation(format!(
+                    "index {expected_old_name:?} not found on table {table:?}"
+                ))
+            })?;
+        let old_definition = one_core_index(table_schema, old)?;
+        let definition = one_core_index(table_schema, replacement)?;
+        self.inner
+            .start_replace_index(table, &old_definition.name, definition)
+            .map_err(KitError::from)
+    }
+
+    /// Resume a durable pending or crash-paused index build.
+    pub fn resume_index_build(&self, job_id: u64) -> Result<()> {
+        self.inner
+            .resume_index_build(job_id)
+            .map_err(KitError::from)
+    }
+
+    /// Request cancellation of a pending or running index build.
+    pub fn cancel_index_build(&self, job_id: u64) -> Result<()> {
+        self.inner
+            .job_registry()
+            .cancel(job_id)
+            .map_err(mongreldb_core::MongrelError::from)
+            .map_err(KitError::from)
+    }
+
+    /// Read durable state and progress for one index build.
+    pub fn index_build(&self, job_id: u64) -> Result<mongreldb_core::JobRecord> {
+        let record = self
+            .inner
+            .job_registry()
+            .get(job_id)
+            .ok_or_else(|| KitError::Validation(format!("job {job_id} not found")))?;
+        if record.kind != mongreldb_core::JobKind::IndexBuild {
+            return Err(KitError::Validation(format!(
+                "job {job_id} is not an index build"
+            )));
+        }
+        Ok(record)
+    }
+
+    /// Wait without polling until an index build reaches a terminal state.
+    pub fn wait_index_build(
+        &self,
+        job_id: u64,
+        timeout: std::time::Duration,
+    ) -> Result<mongreldb_core::JobRecord> {
+        self.inner
+            .job_registry()
+            .wait_terminal(job_id, timeout)
+            .map_err(mongreldb_core::MongrelError::from)
+            .map_err(KitError::from)
     }
 
     /// Application table names, excluding the reserved `__kit_*` tables.
@@ -2086,6 +2176,18 @@ impl Database {
         let snapshot = guard.snapshot();
         Ok(guard.get(mongreldb_core::RowId(row_id), snapshot))
     }
+}
+
+fn one_core_index(table: &KitTable, index: &KitIndex) -> Result<mongreldb_core::IndexDef> {
+    let mut definitions = to_core_indexes(table, index)?;
+    if definitions.len() != 1 {
+        return Err(KitError::Validation(format!(
+            "online index jobs require exactly one column; index {:?} has {}",
+            index.name,
+            definitions.len()
+        )));
+    }
+    Ok(definitions.remove(0))
 }
 
 pub(crate) fn create_core_table(db: &CoreDatabase, name: &str, schema: CoreSchema) -> Result<()> {

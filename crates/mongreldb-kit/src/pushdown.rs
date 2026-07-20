@@ -523,6 +523,7 @@ mod tests {
                 columns: vec!["email".into()],
                 unique: false,
                 kind: Default::default(),
+                ann_quantization: Default::default(),
             }],
             foreign_keys: vec![],
             unique_constraints: vec![],

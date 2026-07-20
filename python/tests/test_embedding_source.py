@@ -7,6 +7,7 @@ from mongreldb_kit import (
     embedding_source_generated_spec,
     embedding_source_local_model,
     embedding_source_supplied,
+    index,
     table,
 )
 
@@ -94,3 +95,13 @@ def test_column_dataclass_to_dict_includes_embedding_source():
         "model_path": "/m",
         "model_id": "m",
     }
+
+
+def test_dense_ann_schema_serialization():
+    assert index("idx_vec", "vec", kind="ann")["ann_quantization"] == "binary_sign"
+    assert (
+        index("idx_vec", "vec", kind="ann", ann_quantization="dense")[
+            "ann_quantization"
+        ]
+        == "dense"
+    )

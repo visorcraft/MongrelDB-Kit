@@ -320,6 +320,9 @@ pub(crate) fn core_hit_to_kit(hit: CoreSearchHit, table: &KitTable) -> Result<Se
                 mongreldb_core::query::RetrieverScore::AnnHammingDistance(d) => {
                     ("ann_hamming_distance".into(), f64::from(d))
                 }
+                mongreldb_core::query::RetrieverScore::AnnCosineDistance(d) => {
+                    ("ann_cosine_distance".into(), f64::from(d))
+                }
                 mongreldb_core::query::RetrieverScore::SparseDotProduct(v) => {
                     ("sparse_dot_product".into(), v)
                 }

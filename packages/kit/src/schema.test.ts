@@ -209,5 +209,12 @@ describe('schema DSL', () => {
 		const embCol = docs.columns.find((c) => c.name === 'local_vec');
 		expect(embCol?.embeddingSource?.kind).toBe('local_model');
 		expect(docs.indexes.some((i) => i.kind === 'ann')).toBe(true);
+		expect(index(['local_vec'], { ann: true }).annQuantization).toBe('binary_sign');
+		expect(
+			index(['local_vec'], { ann: true, annQuantization: 'dense' }).annQuantization
+		).toBe('dense');
+		expect(() => index(['local_vec'], { annQuantization: 'dense' })).toThrow(
+			'annQuantization requires ann: true'
+		);
 	});
 });

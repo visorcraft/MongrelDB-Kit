@@ -31,6 +31,9 @@
 - Migration runner with content-addressed checksums, stored schema catalog, table renames, and SQL views.
 - Embedded SQL surface (sql / sqlArrow / sqlRows) with recursive CTEs, window functions, CREATE TABLE AS SELECT, materialized views, multi-statement execution, and a mongreldb_fts_rank relevance-scoring UDF.
 - Storage tuning (spill thresholds, compaction zstd, result-cache sizing, index build policy), trigger config, and per-table introspection (run count, page-cache stats, memtable/cache lengths).
+- BinarySign and full-f32 Dense ANN schema options, plus durable online
+  create/replace index jobs with status, cancellation, resume, and wait APIs
+  in Rust, TypeScript, and Python.
 - Non-blocking async I/O variants (`putAsync` / `queryAsync` / `countAsync` / …) and `WriteBuffer` micro-batching for high-throughput ingest (TypeScript).
 - Engine-side trigger management plus SQL-backed virtual/external table helpers.
 - Extended SQL Function helpers for JSON, date/time, aggregate, and math-style SQL calls.

@@ -29,6 +29,7 @@ fn users_table() -> Table {
             columns: vec!["email".into()],
             unique: true,
             kind: Default::default(),
+            ann_quantization: Default::default(),
         }],
         foreign_keys: vec![],
         unique_constraints: vec![UniqueConstraint {

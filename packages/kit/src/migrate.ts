@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Database as NativeDatabase, Cell, RowJs } from '@visorcraft/mongreldb/native.js';
-import { ColumnType, IndexKindSpec, ConditionKind } from '@visorcraft/mongreldb/native.js';
+import {
+	AnnQuantizationSpec,
+	ColumnType,
+	IndexKindSpec,
+	ConditionKind
+} from '@visorcraft/mongreldb/native.js';
 import { KitDatabase, type SqlOptions } from './db.js';
 import type { Schema } from './schema.js';
 import { rowFromRowJs } from './rows.js';
@@ -107,7 +112,7 @@ export interface MigrationOptions {
 
 type MongrelSchemaSpec = {
 	columns: MongrelColumnSpec[];
-	indexes: { name: string; columnId: number; kind: number }[];
+	indexes: { name: string; columnId: number; kind: number; annQuantization?: number }[];
 };
 
 type MongrelColumnSpec = {
@@ -194,7 +199,7 @@ function toMongrelColumnSpec(table: TableSpec, column: ColumnSpec): MongrelColum
 }
 
 function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
-	const indexes = table.indexes.flatMap((idx) =>
+	const indexes: MongrelSchemaSpec['indexes'] = table.indexes.flatMap((idx) =>
 		idx.columns.map((colName) => {
 			const col = table.columns.find((c) => c.name === colName);
 			if (!col) {
@@ -203,7 +208,24 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			return {
 				name: `${idx.name}_${colName}`,
 				columnId: col.id,
-				kind: IndexKindSpec.Bitmap
+				kind:
+					idx.kind === 'fm'
+						? IndexKindSpec.FmIndex
+						: idx.kind === 'ann'
+							? IndexKindSpec.Ann
+							: idx.kind === 'sparse'
+								? IndexKindSpec.Sparse
+								: idx.kind === 'minhash'
+									? IndexKindSpec.MinHash
+									: idx.kind === 'learned_range'
+										? IndexKindSpec.LearnedRange
+										: IndexKindSpec.Bitmap,
+				annQuantization:
+					idx.kind === 'ann'
+						? idx.annQuantization === 'dense'
+							? AnnQuantizationSpec.Dense
+							: AnnQuantizationSpec.BinarySign
+						: undefined
 			};
 		})
 	);
@@ -491,7 +513,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.60.3';
+	return '0.61.1';
 }
 
 function makeContext(kit: KitDatabase, sqlOptions?: SqlOptions): MigrationContext {
@@ -1120,7 +1142,49 @@ function addIndexSync(kit: KitDatabase, tableName: string, index: IndexSpec): vo
 }
 
 export async function addIndex(kit: KitDatabase, tableName: string, index: IndexSpec): Promise<void> {
-	addIndexSync(kit, tableName, index);
+	const table = kit.schema.table(tableName);
+	if (table.indexes.some((candidate) => candidate.name === index.name)) {
+		throw new KitMigrationError(`Index "${index.name}" already exists on "${tableName}"`);
+	}
+	if (index.unique || index.columns.length !== 1) {
+		addIndexSync(kit, tableName, index);
+		return;
+	}
+	const jobId = kit.startCreateIndex(tableName, index);
+	const job = await kit.waitIndexBuild(jobId);
+	if (job.state !== 'succeeded') {
+		throw new KitMigrationError(
+			`Index "${index.name}" build failed on "${tableName}": ${job.error ?? job.state}`
+		);
+	}
+	table.indexes.push(index);
+}
+
+/** Replace one non-unique single-column index through the hidden-generation job path. */
+export async function replaceIndex(
+	kit: KitDatabase,
+	tableName: string,
+	expectedOldName: string,
+	replacement: IndexSpec
+): Promise<void> {
+	const table = kit.schema.table(tableName);
+	const oldPosition = table.indexes.findIndex((index) => index.name === expectedOldName);
+	if (oldPosition < 0) {
+		throw new KitMigrationError(
+			`Index "${expectedOldName}" does not exist on "${tableName}"`
+		);
+	}
+	if (table.indexes[oldPosition]!.unique || replacement.unique) {
+		throw new KitMigrationError('Online replaceIndex does not change unique constraints');
+	}
+	const jobId = kit.startReplaceIndex(tableName, expectedOldName, replacement);
+	const job = await kit.waitIndexBuild(jobId);
+	if (job.state !== 'succeeded') {
+		throw new KitMigrationError(
+			`Index "${expectedOldName}" replacement failed on "${tableName}": ${job.error ?? job.state}`
+		);
+	}
+	table.indexes[oldPosition] = replacement;
 }
 
 function dropIndexSync(kit: KitDatabase, tableName: string, indexName: string): void {

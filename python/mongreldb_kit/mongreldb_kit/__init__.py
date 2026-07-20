@@ -229,6 +229,41 @@ class Database:
         schema_json = schema if isinstance(schema, str) else json.dumps(schema)
         self._handle.set_schema(schema_json)
 
+    def start_create_index(self, table: str, index_spec: Any) -> int:
+        """Start one durable online single-column index build."""
+        spec = index_spec.to_dict() if hasattr(index_spec, "to_dict") else index_spec
+        return self._handle.start_create_index(table, json.dumps(spec))
+
+    def start_replace_index(
+        self, table: str, expected_old_name: str, replacement: Any
+    ) -> int:
+        """Replace one index through a hidden generation and atomic publish."""
+        spec = replacement.to_dict() if hasattr(replacement, "to_dict") else replacement
+        return self._handle.start_replace_index(
+            table, expected_old_name, json.dumps(spec)
+        )
+
+    def resume_index_build(self, job_id: int) -> None:
+        self._handle.resume_index_build(job_id)
+
+    def cancel_index_build(self, job_id: int) -> None:
+        self._handle.cancel_index_build(job_id)
+
+    def index_build(self, job_id: int) -> dict[str, Any]:
+        return json.loads(self._handle.index_build(job_id))
+
+    def wait_index_build(
+        self, job_id: int, timeout_ms: int = 86_400_000
+    ) -> dict[str, Any]:
+        """Wait without polling. Native wait releases the Python GIL."""
+        return json.loads(self._handle.wait_index_build(job_id, timeout_ms))
+
+    async def wait_index_build_async(
+        self, job_id: int, timeout_ms: int = 86_400_000
+    ) -> dict[str, Any]:
+        """Wait without blocking the asyncio event loop."""
+        return await asyncio.to_thread(self.wait_index_build, job_id, timeout_ms)
+
     def allocate_sequence(self, name: str, count: int = 1) -> int:
         """Allocate ``count`` values from a named sequence, returning the first."""
         return self._handle.allocate_sequence(name, count)
@@ -1036,6 +1071,7 @@ def index(
     columns: str | list[str],
     unique: bool = False,
     kind: str = "bitmap",
+    ann_quantization: str = "binary_sign",
 ) -> dict[str, Any]:
     """Declare a secondary index. ``kind`` is ``bitmap`` (default), ``fm``,
     ``ann``, ``sparse``, ``minhash`` (set-similarity), or ``learned_range``
@@ -1045,12 +1081,20 @@ def index(
         "learned": "learned_range",
         "brin": "learned_range",
     }
-    return {
+    normalized_kind = aliases.get(kind, kind)
+    if ann_quantization not in {"binary_sign", "dense"}:
+        raise ValueError("ann_quantization must be 'binary_sign' or 'dense'")
+    result = {
         "name": name,
         "columns": [columns] if isinstance(columns, str) else list(columns),
         "unique": unique,
-        "kind": aliases.get(kind, kind),
+        "kind": normalized_kind,
     }
+    if normalized_kind == "ann":
+        result["ann_quantization"] = ann_quantization
+    elif ann_quantization != "binary_sign":
+        raise ValueError("ann_quantization is only valid for kind='ann'")
+    return result
 
 
 def unique(name: str, columns: str | list[str]) -> dict[str, Any]:

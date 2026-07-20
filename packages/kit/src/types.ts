@@ -92,6 +92,8 @@ export interface IndexSpec {
 	 * `learned_range` builds a PGM zonemap that accelerates range predicates
 	 * (`gt`/`gte`/`lt`/`lte`) on numeric/timestamp columns. */
 	kind?: 'bitmap' | 'fm' | 'ann' | 'sparse' | 'minhash' | 'learned_range';
+	/** ANN representation and metric. Defaults to sign-bit Hamming. */
+	annQuantization?: 'binary_sign' | 'dense';
 }
 
 export interface ForeignKeySpec {

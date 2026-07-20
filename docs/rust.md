@@ -6,7 +6,7 @@ This guide shows how to define a schema, run migrations, and perform CRUD with t
 
 ```toml
 [dependencies]
-mongreldb-kit = "0.60.3"
+mongreldb-kit = "0.61.1"
 serde_json = "1"
 ```
 
@@ -545,6 +545,32 @@ emb.embedding_source = Some(EmbeddingSource::LocalModel {
 ```
 
 Create/alter lower this onto the engine `ColumnDef.embedding_source` field.
+
+### ANN representation and online replacement
+
+`Index::ann_quantization` selects `AnnQuantization::BinarySign` (default,
+Hamming distance) or `AnnQuantization::Dense` (full finite `f32`, cosine
+distance). One physical online job operates on one column:
+
+```rust
+use mongreldb_kit::{AnnQuantization, Index, IndexKind};
+
+let dense = Index {
+    name: "idx_documents_vec".into(),
+    columns: vec!["vec".into()],
+    unique: false,
+    kind: IndexKind::Ann,
+    ann_quantization: AnnQuantization::Dense,
+};
+let job_id = db.start_replace_index("documents", "idx_documents_vec", &dense)?;
+let job = db.wait_index_build(job_id, std::time::Duration::from_secs(60))?;
+assert_eq!(job.state, mongreldb_core::JobState::Succeeded);
+```
+
+`start_create_index`, `start_replace_index`, `index_build`,
+`wait_index_build`, `cancel_index_build`, and `resume_index_build` expose the
+durable job lifecycle. Construction and committed-row catch-up run outside
+the final publication barrier.
 
 ### Registry and explicit generation
 

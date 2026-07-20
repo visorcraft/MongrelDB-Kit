@@ -6,11 +6,11 @@ use mongreldb_core::constraint::{
 };
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::{
-    ColumnDef, ColumnFlags, DefaultExpr, IndexDef, IndexKind, IndexOptions, Schema as CoreSchema,
-    TypeId,
+    AnnOptions, AnnQuantization, ColumnDef, ColumnFlags, DefaultExpr, IndexDef, IndexKind,
+    IndexOptions, Schema as CoreSchema, TypeId,
 };
 use mongreldb_kit_core::schema::{
-    Column, ColumnType, DefaultKind, EmbeddingSource as KitEmbeddingSource,
+    Column, ColumnType, DefaultKind, EmbeddingSource as KitEmbeddingSource, Index as KitIndex,
     IndexKind as KitIndexKind, Table as KitTable,
 };
 use serde_json::{Map, Value};
@@ -107,25 +107,7 @@ pub fn to_core_schema(table: &KitTable) -> Result<CoreSchema> {
 
     let mut indexes: Vec<IndexDef> = Vec::new();
     for idx in &table.indexes {
-        let kind = match idx.kind {
-            KitIndexKind::Bitmap => IndexKind::Bitmap,
-            KitIndexKind::Fm => IndexKind::FmIndex,
-            KitIndexKind::Ann => IndexKind::Ann,
-            KitIndexKind::Sparse => IndexKind::Sparse,
-            KitIndexKind::MinHash => IndexKind::MinHash,
-            KitIndexKind::LearnedRange => IndexKind::LearnedRange,
-        };
-        for col_name in &idx.columns {
-            if let Some(col) = table.column(col_name) {
-                indexes.push(IndexDef {
-                    name: format!("{}_{}", idx.name, col_name),
-                    column_id: col.id as u16,
-                    kind,
-                    predicate: None,
-                    options: IndexOptions::default(),
-                });
-            }
-        }
+        indexes.extend(to_core_indexes(table, idx)?);
     }
     for uq in &table.unique_constraints {
         for col_name in &uq.columns {
@@ -153,6 +135,49 @@ pub fn to_core_schema(table: &KitTable) -> Result<CoreSchema> {
         },
         clustered: false,
     })
+}
+
+pub(crate) fn to_core_indexes(table: &KitTable, index: &KitIndex) -> Result<Vec<IndexDef>> {
+    let kind = match index.kind {
+        KitIndexKind::Bitmap => IndexKind::Bitmap,
+        KitIndexKind::Fm => IndexKind::FmIndex,
+        KitIndexKind::Ann => IndexKind::Ann,
+        KitIndexKind::Sparse => IndexKind::Sparse,
+        KitIndexKind::MinHash => IndexKind::MinHash,
+        KitIndexKind::LearnedRange => IndexKind::LearnedRange,
+    };
+    index
+        .columns
+        .iter()
+        .map(|column_name| {
+            let column = table.column(column_name).ok_or_else(|| {
+                KitError::Validation(format!(
+                    "index {:?} references unknown column {column_name:?}",
+                    index.name
+                ))
+            })?;
+            Ok(IndexDef {
+                name: format!("{}_{}", index.name, column_name),
+                column_id: column.id as u16,
+                kind,
+                predicate: None,
+                options: IndexOptions {
+                    ann: (kind == IndexKind::Ann).then_some(AnnOptions {
+                        quantization: match index.ann_quantization {
+                            mongreldb_kit_core::schema::AnnQuantization::BinarySign => {
+                                AnnQuantization::BinarySign
+                            }
+                            mongreldb_kit_core::schema::AnnQuantization::Dense => {
+                                AnnQuantization::Dense
+                            }
+                        },
+                        ..AnnOptions::default()
+                    }),
+                    ..IndexOptions::default()
+                },
+            })
+        })
+        .collect()
 }
 
 fn lower_kit_check(expression: &str, table: &KitTable) -> Result<CheckExpr> {
@@ -602,6 +627,25 @@ mod tests {
         assert_eq!(
             core_to_json(&value, ColumnType::Embedding).unwrap(),
             json!([1.0, -2.0])
+        );
+    }
+
+    #[test]
+    fn dense_ann_lowers_to_cosine_engine_index() {
+        let mut embedding = Column::new(2, "embedding", ColumnType::Embedding);
+        embedding.embedding_dim = Some(3);
+        let mut table = envelope_table(vec![kit_text_column(1, "id", None, None, None), embedding]);
+        table.indexes.push(mongreldb_kit_core::Index {
+            name: "idx_embedding".into(),
+            columns: vec!["embedding".into()],
+            unique: false,
+            kind: KitIndexKind::Ann,
+            ann_quantization: mongreldb_kit_core::AnnQuantization::Dense,
+        });
+        let core = to_core_schema(&table).unwrap();
+        assert_eq!(
+            core.indexes[0].options.ann.as_ref().unwrap().quantization,
+            AnnQuantization::Dense
         );
     }
 

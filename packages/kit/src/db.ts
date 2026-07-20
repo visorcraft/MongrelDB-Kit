@@ -6,6 +6,7 @@ import type {
 	Transaction,
 	ColumnType as NativeColumnType,
 	IndexKindSpec as NativeIndexKindSpec,
+	AnnQuantizationSpec as NativeAnnQuantizationSpec,
 	ConditionKind as NativeConditionKind,
 	ConditionSpec,
 	Cell,
@@ -15,7 +16,11 @@ import type {
 	CacheStatsJs,
 	TriggerConfigJs
 } from '@visorcraft/mongreldb/native.js';
-import { IndexBuildPolicyJs, WriteBuffer } from '@visorcraft/mongreldb/native.js';
+import {
+	AnnQuantizationSpec,
+	IndexBuildPolicyJs,
+	WriteBuffer
+} from '@visorcraft/mongreldb/native.js';
 import { Schema } from './schema.js';
 import { rowsToTsv, tsvToRows } from './tsv.js';
 import { rowFromRowJs } from './rows.js';
@@ -299,6 +304,12 @@ type MongrelDatabase = NativeDatabase & {
 	disableAuth(): void;
 	requireAuthEnabled(): boolean;
 	refreshPrincipal(): void;
+	startCreateIndex(table: string, index: MongrelIndexSpec): bigint;
+	startReplaceIndex(table: string, expectedOldName: string, index: MongrelIndexSpec): bigint;
+	resumeIndexBuild(jobId: bigint): void;
+	cancelJob(jobId: bigint): void;
+	indexJob(jobId: bigint): IndexJobInfo;
+	waitIndexJob(jobId: bigint, timeoutMs?: number): Promise<IndexJobInfo>;
 };
 
 type MongrelModule = {
@@ -314,6 +325,7 @@ type MongrelModule = {
 	};
 	ColumnType: typeof NativeColumnType;
 	IndexKindSpec: typeof NativeIndexKindSpec;
+	AnnQuantizationSpec: typeof NativeAnnQuantizationSpec;
 	ConditionKind: typeof NativeConditionKind;
 };
 
@@ -323,6 +335,16 @@ type MongrelIndexSpec = {
 	name: string;
 	columnId: number;
 	kind: number;
+	annQuantization?: number;
+};
+
+export type IndexJobInfo = {
+	jobId: bigint;
+	state: string;
+	progress: number;
+	done: bigint;
+	total: bigint;
+	error?: string;
 };
 
 type MongrelSchemaSpec = {
@@ -366,29 +388,8 @@ function toMongrelColumnType(storageType: ColumnStorageType): number {
 }
 
 function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
-	const indexes = table.indexes.flatMap((idx) =>
-		idx.columns.map((colName) => {
-			const col = table.columns.find((c) => c.name === colName);
-			if (!col) {
-				throw new Error(`Index column "${colName}" not found in table "${table.name}"`);
-			}
-			return {
-				name: `${idx.name}_${colName}`,
-				columnId: col.id,
-				kind:
-					idx.kind === 'fm'
-						? addon.IndexKindSpec.FmIndex
-						: idx.kind === 'ann'
-							? addon.IndexKindSpec.Ann
-							: idx.kind === 'sparse'
-								? addon.IndexKindSpec.Sparse
-								: idx.kind === 'minhash'
-									? addon.IndexKindSpec.MinHash
-									: idx.kind === 'learned_range'
-										? addon.IndexKindSpec.LearnedRange
-										: addon.IndexKindSpec.Bitmap
-			};
-		})
+	const indexes: MongrelSchemaSpec['indexes'] = table.indexes.flatMap((idx) =>
+		idx.columns.map((colName) => toMongrelIndex(table, idx, colName))
 	);
 
 	const indexedColumns = new Set(table.indexes.flatMap((idx) => idx.columns));
@@ -448,6 +449,35 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			encryptedIndexable: col.encryptedIndexable
 		})),
 		indexes
+	};
+}
+
+function toMongrelIndex(table: TableSpec, index: TableSpec['indexes'][number], colName: string): MongrelIndexSpec {
+	const col = table.columns.find((candidate) => candidate.name === colName);
+	if (!col) {
+		throw new Error(`Index column "${colName}" not found in table "${table.name}"`);
+	}
+	return {
+		name: `${index.name}_${colName}`,
+		columnId: col.id,
+		kind:
+			index.kind === 'fm'
+				? addon.IndexKindSpec.FmIndex
+				: index.kind === 'ann'
+					? addon.IndexKindSpec.Ann
+					: index.kind === 'sparse'
+						? addon.IndexKindSpec.Sparse
+						: index.kind === 'minhash'
+							? addon.IndexKindSpec.MinHash
+							: index.kind === 'learned_range'
+								? addon.IndexKindSpec.LearnedRange
+								: addon.IndexKindSpec.Bitmap,
+		annQuantization:
+			index.kind === 'ann'
+				? index.annQuantization === 'dense'
+					? addon.AnnQuantizationSpec.Dense
+					: addon.AnnQuantizationSpec.BinarySign
+				: undefined
 	};
 }
 
@@ -773,6 +803,56 @@ export class KitDatabase {
 
 	get nativeDb(): MongrelDatabase {
 		return this.db;
+	}
+
+	/** Start an online single-column index build and return its durable job id. */
+	startCreateIndex(tableName: string, index: TableSpec['indexes'][number]): bigint {
+		const table = this.schema.table(tableName);
+		if (index.columns.length !== 1) {
+			throw new Error('Online index jobs require exactly one column');
+		}
+		return this.db.startCreateIndex(
+			tableName,
+			toMongrelIndex(table, index, index.columns[0]!)
+		);
+	}
+
+	/** Replace an existing single-column index without exposing a partial index. */
+	startReplaceIndex(
+		tableName: string,
+		expectedOldName: string,
+		replacement: TableSpec['indexes'][number]
+	): bigint {
+		const table = this.schema.table(tableName);
+		const old = table.indexes.find((index) => index.name === expectedOldName);
+		if (!old) {
+			throw new Error(`Index "${expectedOldName}" does not exist on "${tableName}"`);
+		}
+		if (old.columns.length !== 1 || replacement.columns.length !== 1) {
+			throw new Error('Online index jobs require exactly one column');
+		}
+		const oldPhysicalName = `${old.name}_${old.columns[0]!}`;
+		return this.db.startReplaceIndex(
+			tableName,
+			oldPhysicalName,
+			toMongrelIndex(table, replacement, replacement.columns[0]!)
+		);
+	}
+
+	resumeIndexBuild(jobId: bigint): void {
+		this.db.resumeIndexBuild(jobId);
+	}
+
+	cancelIndexBuild(jobId: bigint): void {
+		this.db.cancelJob(jobId);
+	}
+
+	indexBuild(jobId: bigint): IndexJobInfo {
+		return this.db.indexJob(jobId);
+	}
+
+	waitIndexBuild(jobId: bigint, timeoutMs?: number): Promise<IndexJobInfo> {
+		return this.db.waitIndexJob(jobId, timeoutMs) as Promise<IndexJobInfo>;
 	}
 
 	tableNames(): string[] {

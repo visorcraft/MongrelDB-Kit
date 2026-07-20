@@ -248,6 +248,8 @@ export interface IndexOptions {
 	fm?: boolean;
 	/** Create an ANN (HNSW) index on an embedding column for `annSearch()`. */
 	ann?: boolean;
+	/** ANN representation. `dense` preserves f32 vectors and ranks by cosine distance. */
+	annQuantization?: 'binary_sign' | 'dense';
 	/** Create a sparse (SPLADE) index on a sparse column for `sparseMatch()`. */
 	sparse?: boolean;
 	/** Create a MinHash/LSH set-similarity index to accelerate `setSimilarity()`. */
@@ -272,6 +274,9 @@ export interface ForeignKeyReference {
 }
 
 export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
+	if (opts.annQuantization !== undefined && !opts.ann) {
+		throw new Error('annQuantization requires ann: true');
+	}
 	return {
 		name: opts.name ?? `idx_${columns.join('_')}`,
 		columns,
@@ -286,7 +291,8 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 						? 'minhash'
 						: opts.learnedRange
 							? 'learned_range'
-							: 'bitmap'
+							: 'bitmap',
+		annQuantization: opts.ann ? (opts.annQuantization ?? 'binary_sign') : undefined
 	};
 }
 

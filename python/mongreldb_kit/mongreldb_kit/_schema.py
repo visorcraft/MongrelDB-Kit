@@ -81,11 +81,15 @@ class Index:
     # When omitted the engine picks a default per column type. Mirrors the
     # `index()` factory's `kind` kwarg and the kit-core `Index.kind`.
     kind: Optional[str] = None
+    # ANN representation: "binary_sign" (default) or full-f32 "dense".
+    ann_quantization: str = "binary_sign"
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"name": self.name, "columns": list(self.columns), "unique": self.unique}
         if self.kind is not None:
             d["kind"] = self.kind
+        if self.kind == "ann":
+            d["ann_quantization"] = self.ann_quantization
         return d
 
 

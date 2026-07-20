@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 
 import pytest
 
@@ -105,6 +106,28 @@ def test_create_open_and_crud():
     with db2.begin() as txn:
         row = txn.get_by_pk("users", 1)
         assert row["name"] == "Alice Smith"
+
+
+def test_transaction_can_move_to_another_thread():
+    path = tmp_db()
+    db = Database.create(path, users_orders_schema())
+    transactions = [db.begin()]
+    errors = []
+
+    def rollback() -> None:
+        try:
+            txn = transactions.pop()
+            txn.rollback()
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=rollback)
+    thread.start()
+    thread.join()
+
+    assert not errors
+    with db.begin() as check:
+        assert check.select("users") == []
 
 
 def test_second_live_same_path_open_is_rejected():

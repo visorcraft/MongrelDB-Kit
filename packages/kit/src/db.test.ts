@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KitDatabase } from './db.js';
-import { Schema, table, int, text, bool, real, json, index } from './schema.js';
+import { Schema, table, int, text, bool, real, json, embedding, index } from './schema.js';
 import { eq, gt, gte } from './query.js';
 import { procedure } from './procedure.js';
 import { newColumn, textValue, trigger } from './trigger.js';
@@ -14,6 +14,35 @@ function makeTempDir(): string {
 }
 
 describe('KitDatabase', () => {
+	it('replaces BinarySign ANN with Dense through a durable online job', async () => {
+		const binary = index(['embedding'], {
+			name: 'idx_vectors_embedding',
+			ann: true
+		});
+		const vectors = table('vectors', {
+			columns: [int('id', { primaryKey: true }), embedding('embedding', 2)],
+			primaryKey: 'id',
+			indexes: [binary]
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([vectors]));
+		try {
+			db.insertInto(vectors).values({ id: 1n, embedding: [1, 0] }).executeSync();
+			const dense = index(['embedding'], {
+				name: binary.name,
+				ann: true,
+				annQuantization: 'dense'
+			});
+			const jobId = db.startReplaceIndex('vectors', binary.name, dense);
+			const job = await db.waitIndexBuild(jobId, 60_000);
+			expect(job.state).toBe('succeeded');
+			expect(db.indexBuild(jobId).state).toBe('succeeded');
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('passes enum and defaults into the native engine schema', () => {
 		const users = table('users', {
 			columns: [

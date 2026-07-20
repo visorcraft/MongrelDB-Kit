@@ -94,6 +94,7 @@ fn indexed_schema() -> Schema {
             columns: vec!["tags".into()],
             unique: false,
             kind: IndexKind::MinHash,
+            ann_quantization: Default::default(),
         }],
         foreign_keys: vec![],
         unique_constraints: vec![],

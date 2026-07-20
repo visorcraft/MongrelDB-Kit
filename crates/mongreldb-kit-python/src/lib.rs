@@ -1043,6 +1043,58 @@ impl PyDatabase {
         Ok(())
     }
 
+    fn start_create_index(&self, table: &str, index_json: &str) -> PyResult<u64> {
+        let index: mongreldb_kit_core::Index =
+            serde_json::from_str(index_json).map_err(py_json_err)?;
+        self.require_db()?
+            .start_create_index(table, &index)
+            .map_err(map_err)
+    }
+
+    fn start_replace_index(
+        &self,
+        table: &str,
+        expected_old_name: &str,
+        index_json: &str,
+    ) -> PyResult<u64> {
+        let index: mongreldb_kit_core::Index =
+            serde_json::from_str(index_json).map_err(py_json_err)?;
+        self.require_db()?
+            .start_replace_index(table, expected_old_name, &index)
+            .map_err(map_err)
+    }
+
+    fn resume_index_build(&self, job_id: u64) -> PyResult<()> {
+        self.require_db()?
+            .resume_index_build(job_id)
+            .map_err(map_err)
+    }
+
+    fn cancel_index_build(&self, job_id: u64) -> PyResult<()> {
+        self.require_db()?
+            .cancel_index_build(job_id)
+            .map_err(map_err)
+    }
+
+    fn index_build(&self, job_id: u64) -> PyResult<String> {
+        let record = self.require_db()?.index_build(job_id).map_err(map_err)?;
+        serde_json::to_string(&record).map_err(py_json_err)
+    }
+
+    #[pyo3(signature = (job_id, timeout_ms = 86_400_000))]
+    fn wait_index_build(&self, py: Python<'_>, job_id: u64, timeout_ms: u64) -> PyResult<String> {
+        let db = self
+            .db
+            .clone()
+            .ok_or_else(|| PyRuntimeError::new_err("database already closed"))?;
+        let record = py
+            .detach(move || {
+                db.wait_index_build(job_id, std::time::Duration::from_millis(timeout_ms))
+            })
+            .map_err(map_err)?;
+        serde_json::to_string(&record).map_err(py_json_err)
+    }
+
     /// Allocate `count` values from a named sequence, returning the first value.
     /// Retries internally on write-write conflicts.
     #[pyo3(signature = (name, count = 1))]
@@ -1652,7 +1704,7 @@ impl PyDatabase {
 // Transaction
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Transaction", unsendable)]
+#[pyclass(name = "Transaction")]
 pub struct PyTransaction {
     // Field order is load-bearing: `txn` borrows the `Database` and MUST drop
     // before `_db_owner` (the `Arc` that keeps that `Database` alive). Rust drops

@@ -746,7 +746,7 @@ describe('migration ops', () => {
 			});
 		});
 
-		it('addIndex rebuilds the table and preserves rows', async () => {
+		it('addIndex builds online and preserves rows', async () => {
 			const accounts = accountsTable();
 			await withSchemaDb([accounts], async (db) => {
 				await db.insertInto(accounts).values({ id: 1n, email: 'a@example.com' }).execute();

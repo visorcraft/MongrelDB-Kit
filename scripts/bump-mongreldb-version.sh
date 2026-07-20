@@ -26,7 +26,11 @@ if [[ "$NEW" == "$OLD" ]]; then
 fi
 echo "Pointing Kit at MongrelDB $OLD -> $NEW"
 
-sed -i '/^\[patch.crates-io\]/,/^mongreldb-server = /d' Cargo.toml
+strip_crates_io_patch() {
+  perl -0pi -e 's/^\[patch\.crates-io\]\n.*?(?=^\[|\z)//ms' "$1"
+}
+
+strip_crates_io_patch Cargo.toml
 sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$NEW\"/" \
   crates/mongreldb-kit/Cargo.toml
 sed -i "s/mongreldb-query = \"$OLD\"/mongreldb-query = \"$NEW\"/" \
@@ -36,7 +40,7 @@ sed -i "s/mongreldb-core = \"[0-9.]*\"/mongreldb-core = \"$NEW\"/" \
   tests/conformance/rust/Cargo.toml
 sed -i "s/mongreldb-core = { version = \"$OLD\"/mongreldb-core = { version = \"$NEW\"/" \
   crates/kit-perf/Cargo.toml
-sed -i '/^\[patch.crates-io\]/,/^mongreldb-query = /d' crates/kit-perf/Cargo.toml
+strip_crates_io_patch crates/kit-perf/Cargo.toml
 sed -i "s/@visorcraft\/mongreldb\": \"\\^$OLD\"/@visorcraft\/mongreldb\": \"^$NEW\"/" \
   packages/kit/package.json
 sed -i "s/SERVER_VERSION = 'v$OLD'/SERVER_VERSION = 'v$NEW'/" packages/kit/src/live_remote.test.ts
