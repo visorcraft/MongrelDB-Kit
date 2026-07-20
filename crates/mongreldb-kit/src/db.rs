@@ -759,24 +759,25 @@ impl Database {
     /// Process-local embedding provider registry (same instance as core).
     ///
     /// Empty by default — dense ANN works when applications supply vectors.
-    /// Register providers with [`EmbeddingProviderRegistry::register`] (or
-    /// [`Self::register_embedding_provider`]) before calling
-    /// [`Self::embed_texts`]. Does **not** auto-fill inserts/updates.
+    /// Register providers with [`EmbeddingProviderRegistry::register_new`] (or
+    /// [`Self::register_embedding_provider`]) before explicit
+    /// [`Self::embed_texts`] calls or `GeneratedColumnSpec` writes.
     pub fn embedding_providers(&self) -> &mongreldb_core::EmbeddingProviderRegistry {
         self.inner.embedding_providers()
     }
 
-    /// Register (or replace) an embedding provider on this process-local registry.
+    /// Register an embedding provider unless its ID already exists.
     pub fn register_embedding_provider(
         &self,
         provider: Arc<dyn mongreldb_core::EmbeddingProvider>,
     ) {
-        self.embedding_providers().register(provider);
+        let _ = self.embedding_providers().register_new(provider);
     }
 
     /// Generate dense vectors via the process-local registry for `source`.
     ///
-    /// Explicit helper only: ordinary insert/update never call providers.
+    /// Explicit helper for legacy source shapes. `GeneratedColumnSpec`
+    /// insert/update materialization runs transactionally in the engine.
     /// `SuppliedByApplication` always refuses generation (pass vectors yourself).
     /// Dimension mismatches and non-finite provider output are errors — Kit does
     /// not invent hashed/random pseudo-embeddings.

@@ -25,14 +25,27 @@ export type ColumnApplicationType = ColumnStorageType;
 
 /**
  * Where dense embedding values for a column originate.
- * Mirrors kit-core / mongreldb-core `EmbeddingSource` (schema metadata only).
- * Omitting means application-supplied vectors. Provider registration is
- * embedded-Rust-first — TypeScript records the intent for catalog parity.
+ * Mirrors kit-core / mongreldb-core `EmbeddingSource`.
+ * Omitting means application-supplied vectors. Transactional generation
+ * requires a process-local provider registered by the server or Rust Kit.
  */
 export type EmbeddingSource =
 	| { kind: 'supplied_by_application' }
 	| { kind: 'local_model'; modelPath: string; modelId: string }
-	| { kind: 'generated_column'; provider: string };
+	| { kind: 'generated_column'; provider: string }
+	| {
+			kind: 'generated_column_spec';
+			spec: {
+				providerId: string;
+				modelId: string;
+				modelVersion: string;
+				sourceColumns: number[];
+				inputTemplate: string;
+				dimension: number;
+				normalization: 'none' | 'l2';
+				failurePolicy: 'abort_write';
+			};
+	  };
 
 export interface ColumnSpec<
 	TName extends string = string,

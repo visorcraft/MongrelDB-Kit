@@ -106,6 +106,12 @@ fn validate_column(
 ) -> Result<(), ValidationError> {
     let value = match value {
         Some(Value::Null) | None => {
+            if matches!(
+                col.embedding_source,
+                Some(crate::schema::EmbeddingSource::GeneratedColumnSpec { .. })
+            ) {
+                return Ok(());
+            }
             if !col.nullable {
                 return Err(ValidationError::new(
                     &table.name,

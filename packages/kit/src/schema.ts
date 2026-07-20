@@ -186,9 +186,9 @@ export function arrayCol<const TName extends string, const TOpts extends ColumnO
 
 /** A dense float-vector column of dimension `dim` for ANN (`annSearch`).
  *
- * Optional `embeddingSource` records how vectors are produced (catalog metadata).
- * Default / omit = application-supplied. Generation is never silent on insert —
- * use the embedded Rust Kit `embed_texts` helper (or supply vectors yourself).
+ * Optional `embeddingSource` records how vectors are produced.
+ * Default / omit = application-supplied. `generated_column_spec` materializes
+ * transactionally when the runtime has the named provider.
  */
 export function embedding<const TName extends string, const TOpts extends ColumnOptions = {}>(
 	name: TName,
@@ -216,6 +216,20 @@ export function embeddingSourceToJson(source: EmbeddingSource): Record<string, u
 			};
 		case 'generated_column':
 			return { kind: 'generated_column', provider: source.provider };
+		case 'generated_column_spec':
+			return {
+				kind: 'generated_column_spec',
+				spec: {
+					provider_id: source.spec.providerId,
+					model_id: source.spec.modelId,
+					model_version: source.spec.modelVersion,
+					source_columns: source.spec.sourceColumns,
+					input_template: source.spec.inputTemplate,
+					dimension: source.spec.dimension,
+					normalization: source.spec.normalization,
+					failure_policy: source.spec.failurePolicy
+				}
+			};
 	}
 }
 

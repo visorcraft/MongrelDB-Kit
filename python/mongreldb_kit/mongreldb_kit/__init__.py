@@ -67,6 +67,7 @@ __all__ = [
     "embedding_source_supplied",
     "embedding_source_local_model",
     "embedding_source_generated",
+    "embedding_source_generated_spec",
     "index",
     "unique",
     "fk",
@@ -1222,9 +1223,9 @@ def embedding(name: str, id: int, dim: int, **kwargs: Any) -> dict[str, Any]:
     - ``{"kind": "supplied_by_application"}``
     - ``{"kind": "local_model", "model_path": "...", "model_id": "..."}``
     - ``{"kind": "generated_column", "provider": "..."}``
+    - ``{"kind": "generated_column_spec", "spec": {...}}``
 
-    Provider registration and ``embed_texts`` remain embedded-Rust-first;
-    Python schema carries the catalog metadata for parity.
+    Provider registration remains a server/operator or embedded-Rust concern.
     """
     return column(name, id, "embedding", embedding_dim=dim, **kwargs)
 
@@ -1246,3 +1247,29 @@ def embedding_source_local_model(model_path: str, model_id: str) -> dict[str, An
 def embedding_source_generated(provider: str) -> dict[str, Any]:
     """Catalog source: named provider registered on the process."""
     return {"kind": "generated_column", "provider": provider}
+
+
+def embedding_source_generated_spec(
+    provider_id: str,
+    model_id: str,
+    model_version: str,
+    source_columns: list[int],
+    input_template: str,
+    dimension: int,
+    normalization: str = "none",
+    failure_policy: str = "abort_write",
+) -> dict[str, Any]:
+    """Transactional generated embedding from named source columns."""
+    return {
+        "kind": "generated_column_spec",
+        "spec": {
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "model_version": model_version,
+            "source_columns": source_columns,
+            "input_template": input_template,
+            "dimension": dimension,
+            "normalization": normalization,
+            "failure_policy": failure_policy,
+        },
+    }

@@ -189,14 +189,15 @@ Dense vectors use `embedding(name, dim, opts?)` (storage type `embedding`, `Row`
 `number[]`). Pair with an ANN index (`index(['vec'], { ann: true })`) for
 `annSearch` / `ann_search`.
 
-Optional `embeddingSource` records **how** vectors are produced (catalog metadata only):
+Optional `embeddingSource` records **how** vectors are produced:
 
 | Source | Meaning |
 | --- | --- |
 | *(omit)* | Application-supplied vectors (engine default) |
 | `{ kind: 'supplied_by_application' }` | Same, explicit |
 | `{ kind: 'local_model', modelPath, modelId }` | Local model; registry key = `modelId` |
-| `{ kind: 'generated_column', provider }` | Named process-local provider |
+| `{ kind: 'generated_column', provider }` | Legacy explicit-generation helper |
+| `{ kind: 'generated_column_spec', spec }` | Transactional generation from source columns |
 
 ```ts
 embedding('vec', 768); // app-supplied (default)
@@ -205,10 +206,14 @@ embedding('vec', 768, {
 });
 ```
 
+`generated_column_spec` stores provider/model/version identity, source column IDs,
+an input template, dimension, normalization, and `abort_write` failure policy.
+Insert/update commits the source row and generated vector atomically when the
+runtime has the named provider.
+
 **Defaults and non-goals**
 
-- Insert/update **never** auto-call embedding providers. Supply vectors yourself, or use the
-  embedded Rust Kit helpers (`register_embedding_provider`, `embed_texts`) then insert.
+- Legacy source shapes remain explicit. Use `generated_column_spec` for automatic writes.
 - TypeScript/Python record source metadata for schema parity; process-local provider
   registration is embedded-Rust-first.
 - Remote Kit clients cannot register providers on a running daemon (operator/server concern).

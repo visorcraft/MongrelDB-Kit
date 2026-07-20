@@ -4,6 +4,7 @@ from mongreldb_kit import (
     Column,
     embedding,
     embedding_source_generated,
+    embedding_source_generated_spec,
     embedding_source_local_model,
     embedding_source_supplied,
     table,
@@ -41,6 +42,28 @@ def test_embedding_source_helpers_and_column_dict():
     assert gen["embedding_source"] == {
         "kind": "generated_column",
         "provider": "my-provider",
+    }
+
+    generated_spec = embedding(
+        "generated_vec",
+        3,
+        4,
+        embedding_source=embedding_source_generated_spec(
+            "provider", "model", "1", [2], "{body}", 4
+        ),
+    )
+    assert generated_spec["embedding_source"] == {
+        "kind": "generated_column_spec",
+        "spec": {
+            "provider_id": "provider",
+            "model_id": "model",
+            "model_version": "1",
+            "source_columns": [2],
+            "input_template": "{body}",
+            "dimension": 4,
+            "normalization": "none",
+            "failure_policy": "abort_write",
+        },
     }
 
     schema = table(

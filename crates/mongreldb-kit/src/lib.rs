@@ -29,9 +29,9 @@ pub use mongreldb_core::auth::{Permission, RoleEntry, UserEntry};
 pub use mongreldb_core::auth_state::{AuthState, RequiredPermission, TableAuthChecker};
 pub use mongreldb_core::cache::CacheStats;
 pub use mongreldb_core::{
-    CancellationReason, EmbeddingError, EmbeddingModelMeta, EmbeddingProvider,
-    EmbeddingProviderRegistry, EmbeddingSource as CoreEmbeddingSource, FixedVectorProvider,
-    IndexBuildPolicy, TriggerConfig,
+    CancellationReason, EmbeddingError, EmbeddingModelMeta, EmbeddingNormalization,
+    EmbeddingProvider, EmbeddingProviderRegistry, EmbeddingSource as CoreEmbeddingSource,
+    FixedVectorProvider, IndexBuildPolicy, TriggerConfig,
 };
 pub use mongreldb_query::{
     CancelOutcome, QueryId, QueryTerminalErrorCategory, QueryTerminalState, SerializationOutcome,

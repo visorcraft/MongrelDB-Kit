@@ -4,8 +4,9 @@
 //! All tests drive public Kit APIs only (no private `inner`).
 
 use mongreldb_kit::{
-    Column, ColumnType, Database, EmbeddingSource, FixedVectorProvider, Index, IndexKind, Schema,
-    Table,
+    Column, ColumnType, Database, EmbeddingNormalization, EmbeddingSource,
+    EmbeddingSpecNormalization, EmbeddingWriteFailurePolicy, FixedVectorProvider,
+    GeneratedEmbeddingSpec, Index, IndexKind, Schema, Table,
 };
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
@@ -125,6 +126,8 @@ fn registry_register_list_and_embed_helper() {
     db.register_embedding_provider(Arc::new(FixedVectorProvider {
         id: "fixed-v1".into(),
         model_id: "fixed-v1".into(),
+        model_version: "1".into(),
+        normalization: EmbeddingNormalization::None,
         vector: vec![0.0, 1.0, 0.0, 0.0],
     }));
     assert_eq!(
@@ -229,6 +232,8 @@ fn local_model_register_embed_insert_ann_search() {
     db.register_embedding_provider(Arc::new(FixedVectorProvider {
         id: "kit-mini".into(),
         model_id: "kit-mini".into(),
+        model_version: "1".into(),
+        normalization: EmbeddingNormalization::None,
         vector: vec![0.25, 0.5, 0.75, 1.0],
     }));
 
@@ -247,4 +252,66 @@ fn local_model_register_embed_insert_ann_search() {
         hits.iter().any(|h| h.values.get("id") == Some(&json!(42))),
         "ann_search should return the inserted LocalModel-generated row: {hits:?}"
     );
+}
+
+#[test]
+fn generated_column_spec_materializes_on_commit() {
+    let directory = tempdir().unwrap();
+    let mut id = Column::new(1, "id", ColumnType::Int64);
+    id.primary_key = true;
+    let body = Column::new(2, "body", ColumnType::Text);
+    let mut embedding = Column::new(3, "embedding", ColumnType::Embedding);
+    embedding.embedding_dim = Some(4);
+    embedding.embedding_source = Some(EmbeddingSource::GeneratedColumnSpec {
+        spec: GeneratedEmbeddingSpec {
+            provider_id: "fixed-v1".into(),
+            model_id: "fixed-model".into(),
+            model_version: "1".into(),
+            source_columns: vec![2],
+            input_template: "{body}".into(),
+            dimension: 4,
+            normalization: EmbeddingSpecNormalization::None,
+            failure_policy: EmbeddingWriteFailurePolicy::AbortWrite,
+        },
+    });
+    let schema = Schema::new(vec![Table {
+        id: 1,
+        name: "docs".into(),
+        columns: vec![id, body, embedding],
+        primary_key: vec!["id".into()],
+        indexes: vec![],
+        foreign_keys: vec![],
+        unique_constraints: vec![],
+        check_constraints: vec![],
+    }])
+    .unwrap();
+    let db = Database::create(directory.path(), schema).unwrap();
+    db.register_embedding_provider(Arc::new(FixedVectorProvider {
+        id: "fixed-v1".into(),
+        model_id: "fixed-model".into(),
+        model_version: "1".into(),
+        normalization: EmbeddingNormalization::None,
+        vector: vec![1.0, 2.0, 3.0, 4.0],
+    }));
+
+    let mut transaction = db.begin().unwrap();
+    transaction
+        .insert(
+            "docs",
+            Map::from_iter([("id".into(), json!(1)), ("body".into(), json!("hello"))]),
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+
+    let row = db.raw().rows_for("docs", None).unwrap().remove(0);
+    assert_eq!(
+        row.columns.get(&3).unwrap().as_embedding(),
+        Some([1.0, 2.0, 3.0, 4.0].as_slice())
+    );
+    assert!(row
+        .columns
+        .get(&3)
+        .unwrap()
+        .generated_embedding_metadata()
+        .is_some());
 }

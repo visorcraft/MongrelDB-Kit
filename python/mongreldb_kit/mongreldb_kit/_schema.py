@@ -27,6 +27,10 @@ class Column:
     #   {"kind": "supplied_by_application"}
     #   {"kind": "local_model", "model_path": "/models/x", "model_id": "x"}
     #   {"kind": "generated_column", "provider": "my-provider"}
+    #   {"kind": "generated_column_spec", "spec": {
+    #       "provider_id": "provider", "model_id": "model", "model_version": "1",
+    #       "source_columns": [2], "input_template": "{body}", "dimension": 4,
+    #       "normalization": "none", "failure_policy": "abort_write"}}
     embedding_source: Optional[dict[str, Any]] = None
     min: Optional[float] = None
     max: Optional[float] = None

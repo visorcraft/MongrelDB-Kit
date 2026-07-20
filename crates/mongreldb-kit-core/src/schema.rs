@@ -4,7 +4,7 @@
 //! indexes, unique constraints, foreign keys, and check constraints.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Storage/application types supported by Kit columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,9 +61,35 @@ pub enum DefaultKind {
 ///
 /// Mirrors `mongreldb_core::EmbeddingSource` in a language-neutral shape
 /// (string paths, serde-tagged). Omitting this on a column means
-/// application-supplied vectors (the engine default). Storage never calls a
-/// vendor from this field alone — generation goes through the process-local
-/// provider registry (see `Database::embed_texts` / `embedding_providers`).
+/// application-supplied vectors (the engine default). Transactional generation
+/// uses a portable [`GeneratedEmbeddingSpec`] plus a process-local provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingSpecNormalization {
+    #[default]
+    None,
+    L2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingWriteFailurePolicy {
+    #[default]
+    AbortWrite,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratedEmbeddingSpec {
+    pub provider_id: String,
+    pub model_id: String,
+    pub model_version: String,
+    pub source_columns: Vec<u32>,
+    pub input_template: String,
+    pub dimension: u32,
+    pub normalization: EmbeddingSpecNormalization,
+    pub failure_policy: EmbeddingWriteFailurePolicy,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EmbeddingSource {
@@ -81,6 +107,8 @@ pub enum EmbeddingSource {
         /// Registry key of the provider.
         provider: String,
     },
+    /// Transactionally materialized embedding from source columns.
+    GeneratedColumnSpec { spec: GeneratedEmbeddingSpec },
 }
 
 /// A column definition.
@@ -302,6 +330,8 @@ pub enum SchemaError {
         "embedding column \"{1}\" on table \"{0}\" with LocalModel/GeneratedColumn source requires embedding_dim > 0"
     )]
     EmbeddingSourceMissingDim(String, String),
+    #[error("generated embedding column \"{1}\" on table \"{0}\" is invalid: {2}")]
+    InvalidGeneratedEmbeddingSpec(String, String, String),
 }
 
 /// A validated collection of tables.
@@ -408,7 +438,11 @@ impl Schema {
             }
             if matches!(
                 col.embedding_source,
-                Some(EmbeddingSource::LocalModel { .. } | EmbeddingSource::GeneratedColumn { .. })
+                Some(
+                    EmbeddingSource::LocalModel { .. }
+                        | EmbeddingSource::GeneratedColumn { .. }
+                        | EmbeddingSource::GeneratedColumnSpec { .. }
+                )
             ) && col.embedding_dim.unwrap_or(0) == 0
             {
                 return Err(SchemaError::EmbeddingSourceMissingDim(
@@ -418,6 +452,43 @@ impl Schema {
             }
             column_names.insert(col.name.clone(), col.id);
             column_ids.insert(col.id, col.name.clone());
+        }
+
+        for col in &table.columns {
+            let Some(EmbeddingSource::GeneratedColumnSpec { spec }) = col.embedding_source.as_ref()
+            else {
+                continue;
+            };
+            if spec.provider_id.is_empty()
+                || spec.model_id.is_empty()
+                || spec.model_version.is_empty()
+                || spec.source_columns.is_empty()
+            {
+                return Err(SchemaError::InvalidGeneratedEmbeddingSpec(
+                    table.name.clone(),
+                    col.name.clone(),
+                    "provider, model, version, and source columns are required".into(),
+                ));
+            }
+            if col.embedding_dim != Some(spec.dimension) {
+                return Err(SchemaError::InvalidGeneratedEmbeddingSpec(
+                    table.name.clone(),
+                    col.name.clone(),
+                    "spec dimension must match embedding_dim".into(),
+                ));
+            }
+            let mut seen = HashSet::new();
+            if spec.source_columns.iter().any(|source_id| {
+                *source_id == col.id
+                    || !seen.insert(*source_id)
+                    || !column_ids.contains_key(source_id)
+            }) {
+                return Err(SchemaError::InvalidGeneratedEmbeddingSpec(
+                    table.name.clone(),
+                    col.name.clone(),
+                    "source columns must exist, be unique, and exclude the target".into(),
+                ));
+            }
         }
 
         for pk in &table.primary_key {
@@ -729,5 +800,41 @@ mod tests {
         }])
         .unwrap_err();
         assert!(matches!(err, SchemaError::EmbeddingSourceMissingDim(_, _)));
+    }
+
+    #[test]
+    fn generated_embedding_spec_roundtrips_and_validates_sources() {
+        let mut emb = Column::new(3, "vec", ColumnType::Embedding);
+        emb.embedding_dim = Some(4);
+        emb.embedding_source = Some(EmbeddingSource::GeneratedColumnSpec {
+            spec: GeneratedEmbeddingSpec {
+                provider_id: "provider".into(),
+                model_id: "model".into(),
+                model_version: "1".into(),
+                source_columns: vec![2],
+                input_template: "{body}".into(),
+                dimension: 4,
+                normalization: EmbeddingSpecNormalization::None,
+                failure_policy: EmbeddingWriteFailurePolicy::AbortWrite,
+            },
+        });
+        let schema = Schema::new(vec![Table {
+            id: 1,
+            name: "docs".into(),
+            columns: vec![
+                Column::new(1, "id", ColumnType::Int64),
+                Column::new(2, "body", ColumnType::Text),
+                emb,
+            ],
+            primary_key: vec!["id".into()],
+            indexes: vec![],
+            foreign_keys: vec![],
+            unique_constraints: vec![],
+            check_constraints: vec![],
+        }])
+        .unwrap();
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(json.contains("generated_column_spec"));
+        assert_eq!(serde_json::from_str::<Schema>(&json).unwrap(), schema);
     }
 }

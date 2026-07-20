@@ -249,6 +249,31 @@ pub fn to_core_embedding_source(source: &KitEmbeddingSource) -> mongreldb_core::
                 provider: provider.clone(),
             }
         }
+        KitEmbeddingSource::GeneratedColumnSpec { spec } => {
+            mongreldb_core::EmbeddingSource::GeneratedColumnSpec {
+                spec: mongreldb_core::GeneratedEmbeddingSpec {
+                    provider_id: spec.provider_id.clone(),
+                    model_id: spec.model_id.clone(),
+                    model_version: spec.model_version.clone(),
+                    source_columns: spec.source_columns.iter().map(|id| *id as u16).collect(),
+                    input_template: spec.input_template.clone(),
+                    dimension: spec.dimension,
+                    normalization: match spec.normalization {
+                        mongreldb_kit_core::schema::EmbeddingSpecNormalization::None => {
+                            mongreldb_core::EmbeddingNormalization::None
+                        }
+                        mongreldb_kit_core::schema::EmbeddingSpecNormalization::L2 => {
+                            mongreldb_core::EmbeddingNormalization::L2
+                        }
+                    },
+                    failure_policy: match spec.failure_policy {
+                        mongreldb_kit_core::schema::EmbeddingWriteFailurePolicy::AbortWrite => {
+                            mongreldb_core::EmbeddingFailurePolicy::AbortWrite
+                        }
+                    },
+                },
+            }
+        }
     }
 }
 
@@ -404,6 +429,7 @@ pub fn core_to_json(value: &CoreValue, ty: ColumnType) -> Result<Value> {
             Err(_) => Value::Array(b.iter().map(|x| Value::Number((*x).into())).collect()),
         },
         (CoreValue::Embedding(v), _) => serde_json::to_value(v)?,
+        (CoreValue::GeneratedEmbedding(value), _) => serde_json::to_value(&value.vector)?,
         (CoreValue::Decimal(d), _) => Value::String(d.to_string()),
         (
             CoreValue::Interval {
@@ -558,6 +584,28 @@ mod tests {
     }
 
     #[test]
+    fn generated_embedding_serializes_as_vector_json() {
+        let value =
+            CoreValue::GeneratedEmbedding(Box::new(mongreldb_core::GeneratedEmbeddingValue {
+                vector: vec![1.0, -2.0],
+                metadata: mongreldb_core::GeneratedEmbeddingMetadata {
+                    provider_id: "provider".into(),
+                    model_id: "model".into(),
+                    model_version: "1".into(),
+                    preprocessing_version: "1".into(),
+                    source_fingerprint: [7; 32],
+                    status: mongreldb_core::EmbeddingGenerationStatus::Ready,
+                    last_error_category: None,
+                    attempt_count: 1,
+                },
+            }));
+        assert_eq!(
+            core_to_json(&value, ColumnType::Embedding).unwrap(),
+            json!([1.0, -2.0])
+        );
+    }
+
+    #[test]
     fn enum_values_lower_to_engine_enum_type() {
         let table = envelope_table(vec![
             kit_text_column(1, "id", None, None, None),
@@ -679,12 +727,28 @@ mod tests {
         omitted.embedding_dim = Some(4);
         // embedding_source left None → application-supplied default
 
+        let mut generated_spec = Column::new(6, "generated_spec_vec", ColumnType::Embedding);
+        generated_spec.embedding_dim = Some(4);
+        generated_spec.embedding_source = Some(KitSrc::GeneratedColumnSpec {
+            spec: mongreldb_kit_core::schema::GeneratedEmbeddingSpec {
+                provider_id: "provider".into(),
+                model_id: "model".into(),
+                model_version: "1".into(),
+                source_columns: vec![1],
+                input_template: "{id}".into(),
+                dimension: 4,
+                normalization: mongreldb_kit_core::schema::EmbeddingSpecNormalization::None,
+                failure_policy: mongreldb_kit_core::schema::EmbeddingWriteFailurePolicy::AbortWrite,
+            },
+        });
+
         let table = envelope_table(vec![
             kit_text_column(1, "id", None, None, None),
             app,
             local,
             gen,
             omitted,
+            generated_spec,
         ]);
         let core = to_core_schema(&table).unwrap();
         let by = |n: &str| core.columns.iter().find(|c| c.name == n).unwrap();
@@ -707,6 +771,10 @@ mod tests {
             })
         );
         assert_eq!(by("omit_vec").embedding_source, None);
+        assert!(matches!(
+            by("generated_spec_vec").embedding_source,
+            Some(mongreldb_core::EmbeddingSource::GeneratedColumnSpec { .. })
+        ));
     }
 
     #[test]

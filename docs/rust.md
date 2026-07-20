@@ -549,13 +549,17 @@ Create/alter lower this onto the engine `ColumnDef.embedding_source` field.
 ### Registry and explicit generation
 
 ```rust
-use mongreldb_kit::{Database, EmbeddingSource, FixedVectorProvider};
+use mongreldb_kit::{
+    Database, EmbeddingNormalization, EmbeddingSource, FixedVectorProvider,
+};
 use std::sync::Arc;
 
 // Register a provider (demo FixedVectorProvider is non-semantic — tests/plumbing only).
 db.register_embedding_provider(Arc::new(FixedVectorProvider {
     id: "kit-mini".into(),
     model_id: "kit-mini".into(),
+    model_version: "1".into(),
+    normalization: EmbeddingNormalization::None,
     vector: vec![0.0, 1.0, 0.0, 0.0],
 }));
 assert!(db.embedding_providers().list_ids().contains(&"kit-mini".into()));
@@ -565,7 +569,8 @@ let source = EmbeddingSource::LocalModel {
     model_id: "kit-mini".into(),
 };
 let vectors = db.embed_texts(&source, &["hello"], 4)?;
-// insert vectors yourself — ordinary insert never auto-calls providers
+// Legacy source shapes use explicit generation. GeneratedColumnSpec writes
+// materialize transactionally from their configured source columns.
 ```
 
 `embed_texts` with `SuppliedByApplication` always refuses; mismatched dimensions error rather than
@@ -574,7 +579,7 @@ inventing vectors. Core types (`EmbeddingProvider`, `EmbeddingProviderRegistry`,
 
 ### Non-goals
 
-- Silent auto-fill of embedding columns on insert/update.
+- Guessing a provider or source columns when `GeneratedColumnSpec` is absent.
 - Remote Kit clients registering providers on `mongreldb-server` (server/operator config).
 - Hard-coded OpenAI/Anthropic/etc. clients inside Kit.
 - Hashed/random dense vectors presented as semantic search.

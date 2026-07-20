@@ -172,6 +172,35 @@ describe('schema DSL', () => {
 			provider: 'my-provider'
 		});
 
+		const generatedSpec = embedding('generated_vec', 4, {
+			embeddingSource: {
+				kind: 'generated_column_spec',
+				spec: {
+					providerId: 'provider',
+					modelId: 'model',
+					modelVersion: '1',
+					sourceColumns: [1],
+					inputTemplate: '{body}',
+					dimension: 4,
+					normalization: 'none',
+					failurePolicy: 'abort_write'
+				}
+			}
+		});
+		expect(embeddingSourceToJson(generatedSpec.embeddingSource!)).toEqual({
+			kind: 'generated_column_spec',
+			spec: {
+				provider_id: 'provider',
+				model_id: 'model',
+				model_version: '1',
+				source_columns: [1],
+				input_template: '{body}',
+				dimension: 4,
+				normalization: 'none',
+				failure_policy: 'abort_write'
+			}
+		});
+
 		const docs = table('docs', {
 			columns: [int('id', { primaryKey: true }), local],
 			primaryKey: ['id'],
