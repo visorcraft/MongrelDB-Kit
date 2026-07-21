@@ -18,6 +18,7 @@ import type {
 } from '@visorcraft/mongreldb/native.js';
 import {
 	AnnQuantizationSpec,
+	AnnAlgorithmSpec,
 	IndexBuildPolicyJs,
 	WriteBuffer
 } from '@visorcraft/mongreldb/native.js';
@@ -337,22 +338,14 @@ type MongrelIndexSpec = {
 	columnId: number;
 	kind: number;
 	annQuantization?: number;
-	annAlgorithm?: 'hnsw' | 'diskann' | 'ivf';
+	annAlgorithm?: number;
 	predicate?: string;
 	annM?: number;
 	annEfConstruction?: number;
 	annEfSearch?: number;
-	annDiskannR?: number;
-	annDiskannL?: number;
-	annDiskannBeamWidth?: number;
-	annDiskannAlpha?: number;
-	annIvfNlist?: number;
-	annIvfNprobe?: number;
-	annPqTrainingSamples?: number;
-	annPqSeed?: number;
-	annPqRerankFactor?: number;
-	annPqNumSubvectors?: number;
-	annPqBits?: number;
+	diskann?: { r?: number; l?: number; beamWidth?: number; alpha?: number };
+	ivf?: { nlist?: number; nprobe?: number };
+	product?: { numSubvectors: number; bits?: number; trainingSamples?: number; seed?: bigint; rerankFactor?: number };
 	minhashPermutations?: number;
 	minhashBands?: number;
 	learnedRangeEpsilon?: number;
@@ -481,16 +474,22 @@ function toMongrelIndex(table: TableSpec, index: TableSpec['indexes'][number], c
 	if (!col) {
 		throw new Error(`Index column "${colName}" not found in table "${table.name}"`);
 	}
-	// The native AnnQuantizationSpec enum currently only enumerates
-	// BinarySign (0) and Dense (1); product quantization is carried as a
-	// named algorithm field for the next native binding bump, falling back to
-	// BinarySign so the schema round-trips until the native addon catches up.
-	const quantization =
-		index.kind === 'ann'
-			? index.annQuantization === 'dense'
-				? addon.AnnQuantizationSpec.Dense
-				: addon.AnnQuantizationSpec.BinarySign
-			: undefined;
+	const isAnn = index.kind === 'ann';
+	// Map the kit string enums onto the native numeric enums.
+	const quantization = isAnn
+		? index.annQuantization === 'dense'
+			? AnnQuantizationSpec.Dense
+			: index.annQuantization === 'product'
+				? AnnQuantizationSpec.Product
+				: AnnQuantizationSpec.BinarySign
+		: undefined;
+	const algorithm = isAnn
+		? index.annAlgorithm === 'diskann'
+			? AnnAlgorithmSpec.DiskAnn
+			: index.annAlgorithm === 'ivf'
+				? AnnAlgorithmSpec.Ivf
+				: AnnAlgorithmSpec.Hnsw
+		: undefined;
 	return {
 		name: `${index.name}_${colName}`,
 		columnId: col.id,
@@ -507,22 +506,31 @@ function toMongrelIndex(table: TableSpec, index: TableSpec['indexes'][number], c
 								? addon.IndexKindSpec.LearnedRange
 								: addon.IndexKindSpec.Bitmap,
 		annQuantization: quantization,
-		annAlgorithm: index.kind === 'ann' ? index.annAlgorithm : undefined,
+		annAlgorithm: algorithm,
 		predicate: index.predicate,
 		annM: index.annM,
 		annEfConstruction: index.annEfConstruction,
 		annEfSearch: index.annEfSearch,
-		annDiskannR: index.annDiskannR,
-		annDiskannL: index.annDiskannL,
-		annDiskannBeamWidth: index.annDiskannBeamWidth,
-		annDiskannAlpha: index.annDiskannAlpha,
-		annIvfNlist: index.annIvfNlist,
-		annIvfNprobe: index.annIvfNprobe,
-		annPqTrainingSamples: index.annPqTrainingSamples,
-		annPqSeed: index.annPqSeed,
-		annPqRerankFactor: index.annPqRerankFactor,
-		annPqNumSubvectors: index.annPqNumSubvectors,
-		annPqBits: index.annPqBits,
+		diskann: isAnn && (index.annDiskannR ?? index.annDiskannL ?? index.annDiskannBeamWidth ?? index.annDiskannAlpha) !== undefined
+			? {
+					r: index.annDiskannR,
+					l: index.annDiskannL,
+					beamWidth: index.annDiskannBeamWidth,
+					alpha: index.annDiskannAlpha
+				}
+			: undefined,
+		ivf: isAnn && (index.annIvfNlist ?? index.annIvfNprobe) !== undefined
+			? { nlist: index.annIvfNlist, nprobe: index.annIvfNprobe }
+			: undefined,
+		product: isAnn && index.annQuantization === 'product' && index.annPqNumSubvectors !== undefined
+			? {
+					numSubvectors: index.annPqNumSubvectors,
+					bits: index.annPqBits,
+					trainingSamples: index.annPqTrainingSamples,
+					seed: index.annPqSeed !== undefined ? BigInt(index.annPqSeed) : undefined,
+					rerankFactor: index.annPqRerankFactor
+				}
+			: undefined,
 		minhashPermutations: index.minhashPermutations,
 		minhashBands: index.minhashBands,
 		learnedRangeEpsilon: index.learnedRangeEpsilon

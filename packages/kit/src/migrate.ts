@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Database as NativeDatabase, Cell, RowJs } from '@visorcraft/mongreldb/native.js';
 import {
 	AnnQuantizationSpec,
+	AnnAlgorithmSpec,
 	ColumnType,
 	IndexKindSpec,
 	ConditionKind
@@ -117,22 +118,14 @@ type MongrelSchemaSpec = {
 		columnId: number;
 		kind: number;
 		annQuantization?: number;
-		annAlgorithm?: 'hnsw' | 'diskann' | 'ivf';
+		annAlgorithm?: number;
 		predicate?: string;
 		annM?: number;
 		annEfConstruction?: number;
 		annEfSearch?: number;
-		annDiskannR?: number;
-		annDiskannL?: number;
-		annDiskannBeamWidth?: number;
-		annDiskannAlpha?: number;
-		annIvfNlist?: number;
-		annIvfNprobe?: number;
-		annPqTrainingSamples?: number;
-		annPqSeed?: number;
-		annPqRerankFactor?: number;
-		annPqNumSubvectors?: number;
-		annPqBits?: number;
+		diskann?: { r?: number; l?: number; beamWidth?: number; alpha?: number };
+		ivf?: { nlist?: number; nprobe?: number };
+		product?: { numSubvectors: number; bits?: number; trainingSamples?: number; seed?: bigint; rerankFactor?: number };
 		minhashPermutations?: number;
 		minhashBands?: number;
 		learnedRangeEpsilon?: number;
@@ -234,17 +227,21 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			if (!col) {
 				throw new Error(`Index column "${colName}" not found in table "${table.name}"`);
 			}
-			// The native AnnQuantizationSpec enum currently only enumerates
-			// BinarySign (0) and Dense (1); product quantization is carried as
-			// a named algorithm field for the next native binding bump, falling
-			// back to BinarySign so the schema round-trips until the native
-			// addon catches up.
-			const quantization =
-				idx.kind === 'ann'
-					? idx.annQuantization === 'dense'
-						? AnnQuantizationSpec.Dense
+			const isAnn = idx.kind === 'ann';
+			const quantization = isAnn
+				? idx.annQuantization === 'dense'
+					? AnnQuantizationSpec.Dense
+					: idx.annQuantization === 'product'
+						? AnnQuantizationSpec.Product
 						: AnnQuantizationSpec.BinarySign
-					: undefined;
+				: undefined;
+			const algorithm = isAnn
+				? idx.annAlgorithm === 'diskann'
+					? AnnAlgorithmSpec.DiskAnn
+					: idx.annAlgorithm === 'ivf'
+						? AnnAlgorithmSpec.Ivf
+						: AnnAlgorithmSpec.Hnsw
+				: undefined;
 			return {
 				name: `${idx.name}_${colName}`,
 				columnId: col.id,
@@ -261,22 +258,31 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 										? IndexKindSpec.LearnedRange
 										: IndexKindSpec.Bitmap,
 				annQuantization: quantization,
-				annAlgorithm: idx.kind === 'ann' ? idx.annAlgorithm : undefined,
+				annAlgorithm: algorithm,
 				predicate: idx.predicate,
 				annM: idx.annM,
 				annEfConstruction: idx.annEfConstruction,
 				annEfSearch: idx.annEfSearch,
-				annDiskannR: idx.annDiskannR,
-				annDiskannL: idx.annDiskannL,
-				annDiskannBeamWidth: idx.annDiskannBeamWidth,
-				annDiskannAlpha: idx.annDiskannAlpha,
-				annIvfNlist: idx.annIvfNlist,
-				annIvfNprobe: idx.annIvfNprobe,
-				annPqTrainingSamples: idx.annPqTrainingSamples,
-				annPqSeed: idx.annPqSeed,
-				annPqRerankFactor: idx.annPqRerankFactor,
-				annPqNumSubvectors: idx.annPqNumSubvectors,
-				annPqBits: idx.annPqBits,
+				diskann: isAnn && (idx.annDiskannR ?? idx.annDiskannL ?? idx.annDiskannBeamWidth ?? idx.annDiskannAlpha) !== undefined
+					? {
+							r: idx.annDiskannR,
+							l: idx.annDiskannL,
+							beamWidth: idx.annDiskannBeamWidth,
+							alpha: idx.annDiskannAlpha
+						}
+					: undefined,
+				ivf: isAnn && (idx.annIvfNlist ?? idx.annIvfNprobe) !== undefined
+					? { nlist: idx.annIvfNlist, nprobe: idx.annIvfNprobe }
+					: undefined,
+				product: isAnn && idx.annQuantization === 'product' && idx.annPqNumSubvectors !== undefined
+					? {
+							numSubvectors: idx.annPqNumSubvectors,
+							bits: idx.annPqBits,
+							trainingSamples: idx.annPqTrainingSamples,
+							seed: idx.annPqSeed !== undefined ? BigInt(idx.annPqSeed) : undefined,
+							rerankFactor: idx.annPqRerankFactor
+						}
+					: undefined,
 				minhashPermutations: idx.minhashPermutations,
 				minhashBands: idx.minhashBands,
 				learnedRangeEpsilon: idx.learnedRangeEpsilon
