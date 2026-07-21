@@ -33,10 +33,10 @@ pub use query::{
     JoinQuery, Literal, OnConflict, OrderBy, Query, Select, Update, Upsert,
 };
 pub use schema::{
-    AnnQuantization, CheckConstraint, Column, ColumnType, DefaultKind, EmbeddingSource,
-    EmbeddingSpecNormalization, EmbeddingWriteFailurePolicy, ForeignKey, ForeignKeyAction,
-    GeneratedEmbeddingSpec, Index, IndexKind, Schema, SchemaError, Sequence, Table,
-    UniqueConstraint,
+    AnnAlgorithm, AnnQuantization, CheckConstraint, Column, ColumnType, DefaultKind,
+    EmbeddingSource, EmbeddingSpecNormalization, EmbeddingWriteFailurePolicy, ForeignKey,
+    ForeignKeyAction, GeneratedEmbeddingSpec, Index, IndexKind, Schema, SchemaError, Sequence,
+    Table, UniqueConstraint,
 };
 pub use trigger::TriggerSpec;
 pub use validation::{validate_row, validate_row_kit_only, ValidationError};

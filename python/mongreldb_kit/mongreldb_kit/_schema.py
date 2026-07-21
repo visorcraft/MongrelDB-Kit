@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 
 @dataclass
@@ -81,12 +81,26 @@ class Index:
     # When omitted the engine picks a default per column type. Mirrors the
     # `index()` factory's `kind` kwarg and the kit-core `Index.kind`.
     kind: Optional[str] = None
-    # ANN representation: "binary_sign" (default) or full-f32 "dense".
-    ann_quantization: str = "binary_sign"
+    # ANN representation: "binary_sign" (default), full-f32 "dense", or
+    # ``{"product": {"num_subvectors": N, "bits": 8}}`. Mirrors the kit-core
+    # `Index.ann_quantization` enum (BinarySign / Dense / Product).
+    ann_quantization: Union[str, dict[str, Any]] = "binary_sign"
+    # ANN graph/structure algorithm: "hnsw" (default), "diskann", or "ivf".
+    # Orthogonal to `ann_quantization`. Mirrors kit-core `Index.ann_algorithm`.
+    ann_algorithm: Optional[str] = None
     predicate: Optional[str] = None
     ann_m: Optional[int] = None
     ann_ef_construction: Optional[int] = None
     ann_ef_search: Optional[int] = None
+    ann_diskann_r: Optional[int] = None
+    ann_diskann_l: Optional[int] = None
+    ann_diskann_beam_width: Optional[int] = None
+    ann_diskann_alpha: Optional[int] = None
+    ann_ivf_nlist: Optional[int] = None
+    ann_ivf_nprobe: Optional[int] = None
+    ann_pq_training_samples: Optional[int] = None
+    ann_pq_seed: Optional[int] = None
+    ann_pq_rerank_factor: Optional[int] = None
     minhash_permutations: Optional[int] = None
     minhash_bands: Optional[int] = None
     learned_range_epsilon: Optional[int] = None
@@ -99,9 +113,19 @@ class Index:
             d["ann_quantization"] = self.ann_quantization
         for key in (
             "predicate",
+            "ann_algorithm",
             "ann_m",
             "ann_ef_construction",
             "ann_ef_search",
+            "ann_diskann_r",
+            "ann_diskann_l",
+            "ann_diskann_beam_width",
+            "ann_diskann_alpha",
+            "ann_ivf_nlist",
+            "ann_ivf_nprobe",
+            "ann_pq_training_samples",
+            "ann_pq_seed",
+            "ann_pq_rerank_factor",
             "minhash_permutations",
             "minhash_bands",
             "learned_range_epsilon",

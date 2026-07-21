@@ -93,13 +93,42 @@ export interface IndexSpec {
 	 * `learned_range` builds a PGM zonemap that accelerates range predicates
 	 * (`gt`/`gte`/`lt`/`lte`) on numeric/timestamp columns. */
 	kind?: 'bitmap' | 'fm' | 'ann' | 'sparse' | 'minhash' | 'learned_range';
-	/** ANN representation and metric. Defaults to sign-bit Hamming. */
-	annQuantization?: 'binary_sign' | 'dense';
+	/** ANN representation and metric. Defaults to sign-bit Hamming. `product`
+	 * selects product quantization; the codebook parameters come from
+	 * `annPqNumSubvectors` (required) and `annPqBits` (default 8). */
+	annQuantization?: 'binary_sign' | 'dense' | 'product';
+	/** ANN graph/structure algorithm. Defaults to `hnsw`. Orthogonal to
+	 * `annQuantization` (the algorithm chooses how search walks the index;
+	 * the quantization chooses how vectors are represented). */
+	annAlgorithm?: 'hnsw' | 'diskann' | 'ivf';
 	/** Optional SQL predicate for a partial index. */
 	predicate?: string;
 	annM?: number;
 	annEfConstruction?: number;
 	annEfSearch?: number;
+	/** DiskANN max graph degree R. */
+	annDiskannR?: number;
+	/** DiskANN build search-list size L. */
+	annDiskannL?: number;
+	/** DiskANN query beam width. */
+	annDiskannBeamWidth?: number;
+	/** DiskANN robust-prune alpha × 100 (120 = 1.2). */
+	annDiskannAlpha?: number;
+	/** IVF inverted-list (centroid) count. */
+	annIvfNlist?: number;
+	/** IVF probe count at query time. */
+	annIvfNprobe?: number;
+	/** Product-quantizer training sample cap. */
+	annPqTrainingSamples?: number;
+	/** Product-quantizer deterministic training seed. */
+	annPqSeed?: number;
+	/** Product-quantizer exact-rerank factor (0 disables). */
+	annPqRerankFactor?: number;
+	/** Product-quantization sub-vector count (required when
+	 * `annQuantization: 'product'`). */
+	annPqNumSubvectors?: number;
+	/** Product-quantization codebook bit width (default 8). */
+	annPqBits?: number;
 	minhashPermutations?: number;
 	minhashBands?: number;
 	learnedRangeEpsilon?: number;

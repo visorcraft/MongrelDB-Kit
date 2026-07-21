@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import asyncio
 from contextlib import contextmanager
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Union
 
 from .mongreldb_kit_py import (
     ConflictError,
@@ -1072,26 +1072,84 @@ def index(
     columns: str | list[str],
     unique: bool = False,
     kind: str = "bitmap",
-    ann_quantization: str = "binary_sign",
+    ann_quantization: Union[str, dict[str, Any]] = "binary_sign",
+    ann_algorithm: Optional[str] = None,
     predicate: Optional[str] = None,
     ann_m: Optional[int] = None,
     ann_ef_construction: Optional[int] = None,
     ann_ef_search: Optional[int] = None,
+    ann_diskann_r: Optional[int] = None,
+    ann_diskann_l: Optional[int] = None,
+    ann_diskann_beam_width: Optional[int] = None,
+    ann_diskann_alpha: Optional[int] = None,
+    ann_ivf_nlist: Optional[int] = None,
+    ann_ivf_nprobe: Optional[int] = None,
+    ann_pq_training_samples: Optional[int] = None,
+    ann_pq_seed: Optional[int] = None,
+    ann_pq_rerank_factor: Optional[int] = None,
     minhash_permutations: Optional[int] = None,
     minhash_bands: Optional[int] = None,
     learned_range_epsilon: Optional[int] = None,
 ) -> dict[str, Any]:
     """Declare a secondary index. ``kind`` is ``bitmap`` (default), ``fm``,
     ``ann``, ``sparse``, ``minhash`` (set-similarity), or ``learned_range``
-    (PGM zonemap for range predicates; aliases: ``learned``, ``brin``)."""
+    (PGM zonemap for range predicates; aliases: ``learned``, ``brin``).
+
+    For ``kind="ann"``:
+
+    - ``ann_algorithm`` selects the graph/structure (``hnsw`` default,
+      ``diskann``, ``ivf``); orthogonal to ``ann_quantization``.
+    - ``ann_quantization`` selects the vector representation: ``binary_sign``
+      (default), ``dense`` (full f32), or
+      ``{"product": {"num_subvectors": N, "bits": 8}}`` for product
+      quantization (``num_subvectors`` is required in the dict form).
+    - ``ann_diskann_*`` tune DiskANN (R, L, beam width, alpha × 100).
+    - ``ann_ivf_*`` tune IVF (nlist centroids, nprobe query probes).
+    - ``ann_pq_*`` tune product quantization (training samples, seed,
+      rerank factor).
+    """
     aliases = {
         "minhash": "min_hash",
         "learned": "learned_range",
         "brin": "learned_range",
     }
     normalized_kind = aliases.get(kind, kind)
-    if ann_quantization not in {"binary_sign", "dense"}:
-        raise ValueError("ann_quantization must be 'binary_sign' or 'dense'")
+    valid_algorithms = {"hnsw", "diskann", "ivf"}
+    if ann_algorithm is not None and ann_algorithm not in valid_algorithms:
+        raise ValueError(
+            f"ann_algorithm must be one of {sorted(valid_algorithms)}"
+        )
+    # Validate ann_quantization: a string from the enum, or a dict of the
+    # shape {"product": {"num_subvectors": N, "bits": 8}}.
+    if isinstance(ann_quantization, str):
+        if ann_quantization not in {"binary_sign", "dense", "product"}:
+            raise ValueError(
+                "ann_quantization must be 'binary_sign', 'dense', 'product', "
+                "or {'product': {'num_subvectors': N, 'bits': 8}}"
+            )
+        if ann_quantization == "product":
+            # The product dict form is required so num_subvectors/bits can be
+            # passed; a bare "product" string would not carry them.
+            raise ValueError(
+                "ann_quantization='product' requires the dict form "
+                "{'product': {'num_subvectors': N, 'bits': 8}}"
+            )
+    elif isinstance(ann_quantization, dict):
+        product = ann_quantization.get("product")
+        if not isinstance(product, dict):
+            raise ValueError(
+                "ann_quantization dict must be of the form "
+                "{'product': {'num_subvectors': N, 'bits': 8}}"
+            )
+        if "num_subvectors" not in product:
+            raise ValueError(
+                "product quantization requires 'num_subvectors'"
+            )
+    else:
+        raise ValueError(
+            "ann_quantization must be a string or a dict of the form "
+            "{'product': {'num_subvectors': N, 'bits': 8}}"
+        )
     result = {
         "name": name,
         "columns": [columns] if isinstance(columns, str) else list(columns),
@@ -1104,9 +1162,19 @@ def index(
         raise ValueError("ann_quantization is only valid for kind='ann'")
     for key, value in {
         "predicate": predicate,
+        "ann_algorithm": ann_algorithm,
         "ann_m": ann_m,
         "ann_ef_construction": ann_ef_construction,
         "ann_ef_search": ann_ef_search,
+        "ann_diskann_r": ann_diskann_r,
+        "ann_diskann_l": ann_diskann_l,
+        "ann_diskann_beam_width": ann_diskann_beam_width,
+        "ann_diskann_alpha": ann_diskann_alpha,
+        "ann_ivf_nlist": ann_ivf_nlist,
+        "ann_ivf_nprobe": ann_ivf_nprobe,
+        "ann_pq_training_samples": ann_pq_training_samples,
+        "ann_pq_seed": ann_pq_seed,
+        "ann_pq_rerank_factor": ann_pq_rerank_factor,
         "minhash_permutations": minhash_permutations,
         "minhash_bands": minhash_bands,
         "learned_range_epsilon": learned_range_epsilon,

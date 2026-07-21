@@ -253,10 +253,15 @@ export interface IndexOptions {
 	unique?: boolean;
 	/** Create an FM substring index so `contains()` pushes down to the engine. */
 	fm?: boolean;
-	/** Create an ANN (HNSW) index on an embedding column for `annSearch()`. */
+	/** Create an ANN index on an embedding column for `annSearch()`. */
 	ann?: boolean;
-	/** ANN representation. `dense` preserves f32 vectors and ranks by cosine distance. */
-	annQuantization?: 'binary_sign' | 'dense';
+	/** ANN representation. `dense` preserves f32 vectors and ranks by cosine
+	 * distance. `product` selects product quantization (requires
+	 * `annPqNumSubvectors`). */
+	annQuantization?: 'binary_sign' | 'dense' | 'product';
+	/** ANN graph/structure algorithm. Defaults to `hnsw`. Orthogonal to
+	 * `annQuantization`. */
+	annAlgorithm?: 'hnsw' | 'diskann' | 'ivf';
 	/** Optional SQL predicate for a partial index. */
 	predicate?: string;
 	/** HNSW graph degree. */
@@ -265,6 +270,29 @@ export interface IndexOptions {
 	annEfConstruction?: number;
 	/** HNSW query search width. */
 	annEfSearch?: number;
+	/** DiskANN max graph degree R. */
+	annDiskannR?: number;
+	/** DiskANN build search-list size L. */
+	annDiskannL?: number;
+	/** DiskANN query beam width. */
+	annDiskannBeamWidth?: number;
+	/** DiskANN robust-prune alpha × 100 (120 = 1.2). */
+	annDiskannAlpha?: number;
+	/** IVF inverted-list (centroid) count. */
+	annIvfNlist?: number;
+	/** IVF probe count at query time. */
+	annIvfNprobe?: number;
+	/** Product-quantizer training sample cap. */
+	annPqTrainingSamples?: number;
+	/** Product-quantizer deterministic training seed. */
+	annPqSeed?: number;
+	/** Product-quantizer exact-rerank factor (0 disables). */
+	annPqRerankFactor?: number;
+	/** Product-quantization sub-vector count (required when
+	 * `annQuantization: 'product'`). */
+	annPqNumSubvectors?: number;
+	/** Product-quantization codebook bit width (default 8). */
+	annPqBits?: number;
 	/** Create a sparse (SPLADE) index on a sparse column for `sparseMatch()`. */
 	sparse?: boolean;
 	/** Create a MinHash/LSH set-similarity index to accelerate `setSimilarity()`. */
@@ -295,6 +323,32 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 	if (opts.annQuantization !== undefined && !opts.ann) {
 		throw new Error('annQuantization requires ann: true');
 	}
+	if (opts.annAlgorithm !== undefined && !opts.ann) {
+		throw new Error('annAlgorithm requires ann: true');
+	}
+	for (const annTunable of [
+		'annM',
+		'annEfConstruction',
+		'annEfSearch',
+		'annDiskannR',
+		'annDiskannL',
+		'annDiskannBeamWidth',
+		'annDiskannAlpha',
+		'annIvfNlist',
+		'annIvfNprobe',
+		'annPqTrainingSamples',
+		'annPqSeed',
+		'annPqRerankFactor',
+		'annPqNumSubvectors',
+		'annPqBits'
+	] as const) {
+		if (opts[annTunable] !== undefined && !opts.ann) {
+			throw new Error(`${annTunable} requires ann: true`);
+		}
+	}
+	if (opts.annQuantization === 'product' && opts.annPqNumSubvectors === undefined) {
+		throw new Error("annQuantization: 'product' requires annPqNumSubvectors");
+	}
 	return {
 		name: opts.name ?? `idx_${columns.join('_')}`,
 		columns,
@@ -311,10 +365,22 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 							? 'learned_range'
 							: 'bitmap',
 		annQuantization: opts.ann ? (opts.annQuantization ?? 'binary_sign') : undefined,
+		annAlgorithm: opts.ann ? opts.annAlgorithm : undefined,
 		predicate: opts.predicate,
 		annM: opts.annM,
 		annEfConstruction: opts.annEfConstruction,
 		annEfSearch: opts.annEfSearch,
+		annDiskannR: opts.annDiskannR,
+		annDiskannL: opts.annDiskannL,
+		annDiskannBeamWidth: opts.annDiskannBeamWidth,
+		annDiskannAlpha: opts.annDiskannAlpha,
+		annIvfNlist: opts.annIvfNlist,
+		annIvfNprobe: opts.annIvfNprobe,
+		annPqTrainingSamples: opts.annPqTrainingSamples,
+		annPqSeed: opts.annPqSeed,
+		annPqRerankFactor: opts.annPqRerankFactor,
+		annPqNumSubvectors: opts.annPqNumSubvectors,
+		annPqBits: opts.annPqBits,
 		minhashPermutations: opts.minhashPermutations,
 		minhashBands: opts.minhashBands,
 		learnedRangeEpsilon: opts.learnedRangeEpsilon

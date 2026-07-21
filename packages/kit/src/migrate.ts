@@ -117,10 +117,22 @@ type MongrelSchemaSpec = {
 		columnId: number;
 		kind: number;
 		annQuantization?: number;
+		annAlgorithm?: 'hnsw' | 'diskann' | 'ivf';
 		predicate?: string;
 		annM?: number;
 		annEfConstruction?: number;
 		annEfSearch?: number;
+		annDiskannR?: number;
+		annDiskannL?: number;
+		annDiskannBeamWidth?: number;
+		annDiskannAlpha?: number;
+		annIvfNlist?: number;
+		annIvfNprobe?: number;
+		annPqTrainingSamples?: number;
+		annPqSeed?: number;
+		annPqRerankFactor?: number;
+		annPqNumSubvectors?: number;
+		annPqBits?: number;
 		minhashPermutations?: number;
 		minhashBands?: number;
 		learnedRangeEpsilon?: number;
@@ -222,6 +234,17 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 			if (!col) {
 				throw new Error(`Index column "${colName}" not found in table "${table.name}"`);
 			}
+			// The native AnnQuantizationSpec enum currently only enumerates
+			// BinarySign (0) and Dense (1); product quantization is carried as
+			// a named algorithm field for the next native binding bump, falling
+			// back to BinarySign so the schema round-trips until the native
+			// addon catches up.
+			const quantization =
+				idx.kind === 'ann'
+					? idx.annQuantization === 'dense'
+						? AnnQuantizationSpec.Dense
+						: AnnQuantizationSpec.BinarySign
+					: undefined;
 			return {
 				name: `${idx.name}_${colName}`,
 				columnId: col.id,
@@ -237,16 +260,23 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 									: idx.kind === 'learned_range'
 										? IndexKindSpec.LearnedRange
 										: IndexKindSpec.Bitmap,
-				annQuantization:
-					idx.kind === 'ann'
-						? idx.annQuantization === 'dense'
-							? AnnQuantizationSpec.Dense
-							: AnnQuantizationSpec.BinarySign
-						: undefined,
+				annQuantization: quantization,
+				annAlgorithm: idx.kind === 'ann' ? idx.annAlgorithm : undefined,
 				predicate: idx.predicate,
 				annM: idx.annM,
 				annEfConstruction: idx.annEfConstruction,
 				annEfSearch: idx.annEfSearch,
+				annDiskannR: idx.annDiskannR,
+				annDiskannL: idx.annDiskannL,
+				annDiskannBeamWidth: idx.annDiskannBeamWidth,
+				annDiskannAlpha: idx.annDiskannAlpha,
+				annIvfNlist: idx.annIvfNlist,
+				annIvfNprobe: idx.annIvfNprobe,
+				annPqTrainingSamples: idx.annPqTrainingSamples,
+				annPqSeed: idx.annPqSeed,
+				annPqRerankFactor: idx.annPqRerankFactor,
+				annPqNumSubvectors: idx.annPqNumSubvectors,
+				annPqBits: idx.annPqBits,
 				minhashPermutations: idx.minhashPermutations,
 				minhashBands: idx.minhashBands,
 				learnedRangeEpsilon: idx.learnedRangeEpsilon
@@ -537,7 +567,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.62.0';
+	return '0.63.0';
 }
 
 function makeContext(kit: KitDatabase, sqlOptions?: SqlOptions): MigrationContext {
