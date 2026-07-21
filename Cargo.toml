@@ -7,11 +7,3 @@ members = [
     "tests/conformance/rust",
 ]
 resolver = "2"
-
-# Phase 2 development override: point mongreldb-core/query at the local engine
-# checkout so Kit can consume the new AnnAlgorithm/DiskAnn/Ivf/Product types
-# before engine 0.63.0 is published. Removed at Kit 0.63.0 release time
-# (replaced by the published crate version bump).
-[patch.crates-io]
-mongreldb-core = { path = "../mongreldb/crates/mongreldb-core" }
-mongreldb-query = { path = "../mongreldb/crates/mongreldb-query" }
