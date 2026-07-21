@@ -231,4 +231,75 @@ describe('schema DSL', () => {
 			'annQuantization requires ann: true'
 		);
 	});
+
+	it('index factory accepts swappable ANN algorithm and product quantization', () => {
+		const diskann = index(['local_vec'], {
+			ann: true,
+			annAlgorithm: 'diskann',
+			annQuantization: 'dense',
+			annDiskannR: 128,
+			annDiskannL: 256,
+			annDiskannBeamWidth: 4,
+			annDiskannAlpha: 130
+		});
+		expect(diskann).toMatchObject({
+			annAlgorithm: 'diskann',
+			annQuantization: 'dense',
+			annDiskannR: 128,
+			annDiskannL: 256,
+			annDiskannBeamWidth: 4,
+			annDiskannAlpha: 130
+		});
+		// Omitted tunables are skipped (undefined), mirroring the skip-if-None
+		// pattern in the Python surface.
+		expect(diskann.annIvfNlist).toBeUndefined();
+		expect(diskann.annPqSeed).toBeUndefined();
+
+		const ivf = index(['local_vec'], {
+			ann: true,
+			annAlgorithm: 'ivf',
+			annQuantization: 'dense',
+			annIvfNlist: 512,
+			annIvfNprobe: 16
+		});
+		expect(ivf).toMatchObject({
+			annAlgorithm: 'ivf',
+			annIvfNlist: 512,
+			annIvfNprobe: 16
+		});
+
+		const pq = index(['local_vec'], {
+			ann: true,
+			annQuantization: 'product',
+			annPqNumSubvectors: 32,
+			annPqBits: 8,
+			annPqTrainingSamples: 10_000,
+			annPqSeed: 42,
+			annPqRerankFactor: 3
+		});
+		expect(pq).toMatchObject({
+			annQuantization: 'product',
+			annPqNumSubvectors: 32,
+			annPqBits: 8,
+			annPqTrainingSamples: 10_000,
+			annPqSeed: 42,
+			annPqRerankFactor: 3
+		});
+
+		// hnsw remains the implicit default — annAlgorithm is undefined when
+		// the caller does not request a specific algorithm.
+		expect(index(['local_vec'], { ann: true }).annAlgorithm).toBeUndefined();
+
+		// product quantization requires num_subvectors to be supplied.
+		expect(() => index(['local_vec'], { ann: true, annQuantization: 'product' })).toThrow(
+			'annPqNumSubvectors'
+		);
+		// ANN-specific tunables require `ann: true`.
+		expect(() => index(['local_vec'], { annAlgorithm: 'diskann' })).toThrow(
+			'annAlgorithm requires ann: true'
+		);
+		expect(() => index(['local_vec'], { annDiskannR: 128 })).toThrow(
+			'annDiskannR requires ann: true'
+		);
+	});
 });

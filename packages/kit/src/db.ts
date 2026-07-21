@@ -337,10 +337,22 @@ type MongrelIndexSpec = {
 	columnId: number;
 	kind: number;
 	annQuantization?: number;
+	annAlgorithm?: 'hnsw' | 'diskann' | 'ivf';
 	predicate?: string;
 	annM?: number;
 	annEfConstruction?: number;
 	annEfSearch?: number;
+	annDiskannR?: number;
+	annDiskannL?: number;
+	annDiskannBeamWidth?: number;
+	annDiskannAlpha?: number;
+	annIvfNlist?: number;
+	annIvfNprobe?: number;
+	annPqTrainingSamples?: number;
+	annPqSeed?: number;
+	annPqRerankFactor?: number;
+	annPqNumSubvectors?: number;
+	annPqBits?: number;
 	minhashPermutations?: number;
 	minhashBands?: number;
 	learnedRangeEpsilon?: number;
@@ -469,6 +481,16 @@ function toMongrelIndex(table: TableSpec, index: TableSpec['indexes'][number], c
 	if (!col) {
 		throw new Error(`Index column "${colName}" not found in table "${table.name}"`);
 	}
+	// The native AnnQuantizationSpec enum currently only enumerates
+	// BinarySign (0) and Dense (1); product quantization is carried as a
+	// named algorithm field for the next native binding bump, falling back to
+	// BinarySign so the schema round-trips until the native addon catches up.
+	const quantization =
+		index.kind === 'ann'
+			? index.annQuantization === 'dense'
+				? addon.AnnQuantizationSpec.Dense
+				: addon.AnnQuantizationSpec.BinarySign
+			: undefined;
 	return {
 		name: `${index.name}_${colName}`,
 		columnId: col.id,
@@ -484,16 +506,23 @@ function toMongrelIndex(table: TableSpec, index: TableSpec['indexes'][number], c
 							: index.kind === 'learned_range'
 								? addon.IndexKindSpec.LearnedRange
 								: addon.IndexKindSpec.Bitmap,
-		annQuantization:
-			index.kind === 'ann'
-				? index.annQuantization === 'dense'
-					? addon.AnnQuantizationSpec.Dense
-					: addon.AnnQuantizationSpec.BinarySign
-				: undefined,
+		annQuantization: quantization,
+		annAlgorithm: index.kind === 'ann' ? index.annAlgorithm : undefined,
 		predicate: index.predicate,
 		annM: index.annM,
 		annEfConstruction: index.annEfConstruction,
 		annEfSearch: index.annEfSearch,
+		annDiskannR: index.annDiskannR,
+		annDiskannL: index.annDiskannL,
+		annDiskannBeamWidth: index.annDiskannBeamWidth,
+		annDiskannAlpha: index.annDiskannAlpha,
+		annIvfNlist: index.annIvfNlist,
+		annIvfNprobe: index.annIvfNprobe,
+		annPqTrainingSamples: index.annPqTrainingSamples,
+		annPqSeed: index.annPqSeed,
+		annPqRerankFactor: index.annPqRerankFactor,
+		annPqNumSubvectors: index.annPqNumSubvectors,
+		annPqBits: index.annPqBits,
 		minhashPermutations: index.minhashPermutations,
 		minhashBands: index.minhashBands,
 		learnedRangeEpsilon: index.learnedRangeEpsilon

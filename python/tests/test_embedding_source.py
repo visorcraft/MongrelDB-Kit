@@ -126,3 +126,59 @@ def test_dense_ann_schema_serialization():
     )
     assert tuned["predicate"] == "vec IS NOT NULL"
     assert tuned["ann_m"] == 24
+
+
+def test_swappable_ann_algorithm_and_product_quantization():
+    diskann = index(
+        "idx_disk",
+        "vec",
+        kind="ann",
+        ann_algorithm="diskann",
+        ann_quantization="dense",
+        ann_diskann_r=128,
+        ann_diskann_l=256,
+        ann_diskann_beam_width=4,
+        ann_diskann_alpha=130,
+    )
+    assert diskann["ann_algorithm"] == "diskann"
+    assert diskann["ann_quantization"] == "dense"
+    assert diskann["ann_diskann_r"] == 128
+    assert diskann["ann_diskann_l"] == 256
+    assert diskann["ann_diskann_beam_width"] == 4
+    assert diskann["ann_diskann_alpha"] == 130
+    # Omitted optional fields are skipped, mirroring the skip-if-None pattern.
+    assert "ann_ivf_nlist" not in diskann
+    assert "ann_pq_seed" not in diskann
+
+    ivf = index(
+        "idx_ivf",
+        "vec",
+        kind="ann",
+        ann_algorithm="ivf",
+        ann_quantization="dense",
+        ann_ivf_nlist=512,
+        ann_ivf_nprobe=16,
+    )
+    assert ivf["ann_algorithm"] == "ivf"
+    assert ivf["ann_ivf_nlist"] == 512
+    assert ivf["ann_ivf_nprobe"] == 16
+
+    pq = index(
+        "idx_pq",
+        "vec",
+        kind="ann",
+        ann_quantization={"product": {"num_subvectors": 32, "bits": 8}},
+        ann_pq_training_samples=10_000,
+        ann_pq_seed=42,
+        ann_pq_rerank_factor=3,
+    )
+    assert pq["ann_quantization"] == {
+        "product": {"num_subvectors": 32, "bits": 8}
+    }
+    assert pq["ann_pq_training_samples"] == 10_000
+    assert pq["ann_pq_seed"] == 42
+    assert pq["ann_pq_rerank_factor"] == 3
+
+    # hnsw remains the implicit default — ann_algorithm is omitted from the
+    # serialized dict when the caller does not request a specific algorithm.
+    assert "ann_algorithm" not in index("idx_default", "vec", kind="ann")
