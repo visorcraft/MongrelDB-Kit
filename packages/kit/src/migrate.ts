@@ -124,7 +124,7 @@ type MongrelSchemaSpec = {
 		annEfConstruction?: number;
 		annEfSearch?: number;
 		diskann?: { r?: number; l?: number; beamWidth?: number; alpha?: number };
-		ivf?: { nlist?: number; nprobe?: number };
+		ivf?: { nlist?: number; nprobe?: number; trainingSamples?: number };
 		product?: { numSubvectors: number; bits?: number; trainingSamples?: number; seed?: bigint; rerankFactor?: number };
 		minhashPermutations?: number;
 		minhashBands?: number;
@@ -271,8 +271,8 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 							alpha: idx.annDiskannAlpha
 						}
 					: undefined,
-				ivf: isAnn && (idx.annIvfNlist ?? idx.annIvfNprobe) !== undefined
-					? { nlist: idx.annIvfNlist, nprobe: idx.annIvfNprobe }
+				ivf: isAnn && (idx.annIvfNlist ?? idx.annIvfNprobe ?? idx.annIvfTrainingSamples) !== undefined
+					? { nlist: idx.annIvfNlist, nprobe: idx.annIvfNprobe, trainingSamples: idx.annIvfTrainingSamples }
 					: undefined,
 				product: isAnn && idx.annQuantization === 'product' && idx.annPqNumSubvectors !== undefined
 					? {
@@ -573,7 +573,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.63.0';
+	return '0.63.1';
 }
 
 function makeContext(kit: KitDatabase, sqlOptions?: SqlOptions): MigrationContext {

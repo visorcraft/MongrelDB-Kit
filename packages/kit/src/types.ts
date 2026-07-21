@@ -118,6 +118,8 @@ export interface IndexSpec {
 	annIvfNlist?: number;
 	/** IVF probe count at query time. */
 	annIvfNprobe?: number;
+	/** IVF k-means training sample cap. */
+	annIvfTrainingSamples?: number;
 	/** Product-quantizer training sample cap. */
 	annPqTrainingSamples?: number;
 	/** Product-quantizer deterministic training seed. */

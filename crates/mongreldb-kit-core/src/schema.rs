@@ -300,6 +300,9 @@ pub struct Index {
     /// IVF probe count at query time. Engine default when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ann_ivf_nprobe: Option<usize>,
+    /// IVF k-means training sample cap. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_ivf_training_samples: Option<usize>,
     /// Product-quantizer training sample cap. Engine default when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ann_pq_training_samples: Option<usize>,
@@ -913,11 +916,13 @@ mod tests {
             ann_quantization: AnnQuantization::Dense,
             ann_ivf_nlist: Some(512),
             ann_ivf_nprobe: Some(16),
+            ann_ivf_training_samples: Some(20_000),
             ..Default::default()
         };
         let json = serde_json::to_value(&ivf).unwrap();
         assert_eq!(json["ann_algorithm"], "ivf");
         assert_eq!(json["ann_ivf_nlist"], 512);
+        assert_eq!(json["ann_ivf_training_samples"], 20_000);
 
         let pq = Index {
             name: "idx_pq".into(),

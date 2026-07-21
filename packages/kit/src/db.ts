@@ -344,7 +344,7 @@ type MongrelIndexSpec = {
 	annEfConstruction?: number;
 	annEfSearch?: number;
 	diskann?: { r?: number; l?: number; beamWidth?: number; alpha?: number };
-	ivf?: { nlist?: number; nprobe?: number };
+	ivf?: { nlist?: number; nprobe?: number; trainingSamples?: number };
 	product?: { numSubvectors: number; bits?: number; trainingSamples?: number; seed?: bigint; rerankFactor?: number };
 	minhashPermutations?: number;
 	minhashBands?: number;
@@ -519,8 +519,8 @@ function toMongrelIndex(table: TableSpec, index: TableSpec['indexes'][number], c
 					alpha: index.annDiskannAlpha
 				}
 			: undefined,
-		ivf: isAnn && (index.annIvfNlist ?? index.annIvfNprobe) !== undefined
-			? { nlist: index.annIvfNlist, nprobe: index.annIvfNprobe }
+		ivf: isAnn && (index.annIvfNlist ?? index.annIvfNprobe ?? index.annIvfTrainingSamples) !== undefined
+			? { nlist: index.annIvfNlist, nprobe: index.annIvfNprobe, trainingSamples: index.annIvfTrainingSamples }
 			: undefined,
 		product: isAnn && index.annQuantization === 'product' && index.annPqNumSubvectors !== undefined
 			? {

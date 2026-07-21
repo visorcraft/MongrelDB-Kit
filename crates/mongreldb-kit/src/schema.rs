@@ -208,6 +208,7 @@ pub(crate) fn to_core_indexes(table: &KitTable, index: &KitIndex) -> Result<Vec<
                             Some(mongreldb_core::schema::IvfOptions {
                                 nlist: index.ann_ivf_nlist.unwrap_or(256),
                                 nprobe: index.ann_ivf_nprobe.unwrap_or(8),
+                                training_samples: index.ann_ivf_training_samples.unwrap_or(256_000),
                             })
                         } else {
                             None

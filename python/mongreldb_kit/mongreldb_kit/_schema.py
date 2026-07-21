@@ -98,6 +98,7 @@ class Index:
     ann_diskann_alpha: Optional[int] = None
     ann_ivf_nlist: Optional[int] = None
     ann_ivf_nprobe: Optional[int] = None
+    ann_ivf_training_samples: Optional[int] = None
     ann_pq_training_samples: Optional[int] = None
     ann_pq_seed: Optional[int] = None
     ann_pq_rerank_factor: Optional[int] = None
@@ -123,6 +124,7 @@ class Index:
             "ann_diskann_alpha",
             "ann_ivf_nlist",
             "ann_ivf_nprobe",
+            "ann_ivf_training_samples",
             "ann_pq_training_samples",
             "ann_pq_seed",
             "ann_pq_rerank_factor",

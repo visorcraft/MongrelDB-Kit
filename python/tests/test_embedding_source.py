@@ -158,10 +158,12 @@ def test_swappable_ann_algorithm_and_product_quantization():
         ann_quantization="dense",
         ann_ivf_nlist=512,
         ann_ivf_nprobe=16,
+        ann_ivf_training_samples=20_000,
     )
     assert ivf["ann_algorithm"] == "ivf"
     assert ivf["ann_ivf_nlist"] == 512
     assert ivf["ann_ivf_nprobe"] == 16
+    assert ivf["ann_ivf_training_samples"] == 20_000
 
     pq = index(
         "idx_pq",

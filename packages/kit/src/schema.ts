@@ -282,6 +282,8 @@ export interface IndexOptions {
 	annIvfNlist?: number;
 	/** IVF probe count at query time. */
 	annIvfNprobe?: number;
+	/** IVF k-means training sample cap. */
+	annIvfTrainingSamples?: number;
 	/** Product-quantizer training sample cap. */
 	annPqTrainingSamples?: number;
 	/** Product-quantizer deterministic training seed. */
@@ -336,6 +338,7 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 		'annDiskannAlpha',
 		'annIvfNlist',
 		'annIvfNprobe',
+		'annIvfTrainingSamples',
 		'annPqTrainingSamples',
 		'annPqSeed',
 		'annPqRerankFactor',
@@ -376,6 +379,7 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 		annDiskannAlpha: opts.annDiskannAlpha,
 		annIvfNlist: opts.annIvfNlist,
 		annIvfNprobe: opts.annIvfNprobe,
+		annIvfTrainingSamples: opts.annIvfTrainingSamples,
 		annPqTrainingSamples: opts.annPqTrainingSamples,
 		annPqSeed: opts.annPqSeed,
 		annPqRerankFactor: opts.annPqRerankFactor,

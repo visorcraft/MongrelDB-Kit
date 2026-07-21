@@ -260,12 +260,14 @@ describe('schema DSL', () => {
 			annAlgorithm: 'ivf',
 			annQuantization: 'dense',
 			annIvfNlist: 512,
-			annIvfNprobe: 16
+			annIvfNprobe: 16,
+			annIvfTrainingSamples: 20_000
 		});
 		expect(ivf).toMatchObject({
 			annAlgorithm: 'ivf',
 			annIvfNlist: 512,
-			annIvfNprobe: 16
+			annIvfNprobe: 16,
+			annIvfTrainingSamples: 20_000
 		});
 
 		const pq = index(['local_vec'], {
