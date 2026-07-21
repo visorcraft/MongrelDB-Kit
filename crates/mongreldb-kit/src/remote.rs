@@ -1972,6 +1972,8 @@ struct ColumnMeta {
     _nullable: bool,
     #[serde(default, rename = "auto_increment")]
     _auto_increment: bool,
+    #[serde(default, rename = "embedding_source")]
+    _embedding_source: Option<mongreldb_core::EmbeddingSource>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -4769,6 +4771,31 @@ mod tests {
                 .unwrap()["status"],
             "a"
         );
+    }
+
+    #[test]
+    fn schema_column_accepts_embedding_source_metadata() {
+        let info: SchemaInfo = serde_json::from_value(json!({
+            "columns": [{
+                "id": 2,
+                "name": "embedding",
+                "primary_key": false,
+                "ty": "embedding(3)",
+                "nullable": false,
+                "auto_increment": false,
+                "embedding_source": {
+                    "kind": "configured_model",
+                    "provider_id": "tenant",
+                    "model_id": "dense-model",
+                    "model_version": "1"
+                }
+            }]
+        }))
+        .unwrap();
+        assert!(matches!(
+            info.columns[0]._embedding_source,
+            Some(mongreldb_core::EmbeddingSource::ConfiguredModel { .. })
+        ));
     }
 
     #[test]

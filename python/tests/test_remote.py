@@ -32,6 +32,7 @@ from mongreldb_kit import (
 )
 from mongreldb_kit.remote import (
     _MalformedHttpResponse,
+    _build_table,
     _is_query_not_found,
     _is_query_status,
     _is_sql_cursor_error_envelope,
@@ -53,6 +54,40 @@ SCHEMA = {
         }
     }
 }
+
+
+def test_schema_column_accepts_embedding_source_metadata():
+    table = _build_table(
+        {
+            "columns": [
+                {
+                    "id": 2,
+                    "name": "embedding",
+                    "primary_key": False,
+                    "embedding_source": {
+                        "kind": "configured_model",
+                        "provider_id": "tenant",
+                        "model_id": "dense-model",
+                        "model_version": "1",
+                    },
+                }
+            ]
+        }
+    )
+    assert table["name_to_id"]["embedding"] == 2
+    with pytest.raises(_MalformedHttpResponse):
+        _build_table(
+            {
+                "columns": [
+                    {
+                        "id": 2,
+                        "name": "embedding",
+                        "primary_key": False,
+                        "embedding_source": "invalid",
+                    }
+                ]
+            }
+        )
 
 
 def query_not_found_response(query_id):

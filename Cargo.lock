@@ -2903,9 +2903,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-cluster"
-version = "0.61.1"
+version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6610083f8fe793275016607903f8bff945fac78dd3c07bc0c389dc2189897e6"
+checksum = "5083426603300c1f02ec806a9add6e9f9f6668a6085e05247efb1ebd9816bd17"
 dependencies = [
  "getrandom 0.2.17",
  "mongreldb-consensus",
@@ -2927,9 +2927,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-consensus"
-version = "0.61.1"
+version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23ba0da93279d96be5c4d30893fae37340fa4526791b6901de18f6613536bf00"
+checksum = "84638b5557488de1430e0f9c8f9ffbcf7f4ac11a47a7f619a5cc98571f3547f7"
 dependencies = [
  "bincode",
  "mongreldb-core",
@@ -2946,9 +2946,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.61.1"
+version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4cb6b1cd9dd9cbb482e7e6305efc858bcb19eb7bb5a652b2b2de4db73e92a0b"
+checksum = "de5b4388e4f92e65399ce3b6524e487bf7b59aea37934096553869a19b2bd72e"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2987,16 +2987,16 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-fault"
-version = "0.61.1"
+version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5848221e2c5a04d48a252fe35105155d425aee8a74c07dbf71e8f7c58ba9440"
+checksum = "7609dffe22d18499cc2afbbacff9f63290db877f2679e2954c11cd4ecf70823f"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.61.1"
+version = "0.62.0"
 dependencies = [
  "arrow",
  "base64",
@@ -3019,7 +3019,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-cli"
-version = "0.61.1"
+version = "0.62.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3035,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.61.1"
+version = "0.62.0"
 dependencies = [
  "hex",
  "insta",
@@ -3049,7 +3049,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-python"
-version = "0.61.1"
+version = "0.62.0"
 dependencies = [
  "mongreldb-kit",
  "mongreldb-kit-core",
@@ -3059,9 +3059,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-log"
-version = "0.61.1"
+version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a1efd76e89454f47c090de3b8c0caafe17d978b47258cf93a08015c00734ab"
+checksum = "d779202b0f8671dd5827814b9b2646ec7716a5cfe215c27141a279ec224a1ebb"
 dependencies = [
  "mongreldb-types",
  "serde",
@@ -3071,9 +3071,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-protocol"
-version = "0.61.1"
+version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45e38510a44c8832fef129e1f1b1ce66d9a41cc61ccbeb7c447dd096a659995a"
+checksum = "6feb8c229d7e2fc6927d6073b19a2cd55b8d9ecaff77a5ddb0e4948752a7931d"
 dependencies = [
  "mongreldb-types",
  "prost",
@@ -3090,9 +3090,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-query"
-version = "0.61.1"
+version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d99f070b66e636c2f13edabc73a341dcdd68ff87db080daf3173f00a66333ea"
+checksum = "e64d08d46cf8a89080c95c11445ecc196a1229bcff561c126e5d5fa7e6fc470e"
 dependencies = [
  "aes-gcm",
  "arrow",
@@ -3118,9 +3118,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-server"
-version = "0.61.1"
+version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b70556448f975a7721e61c0c49cad3160c75d7d197f086b91652fbc8c5adeaf8"
+checksum = "dcb0afee3782cb30e0cdfe9c3a6a35317eb9145e4674731942f58a239dc49365"
 dependencies = [
  "arrow",
  "async-trait",
@@ -3151,9 +3151,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-types"
-version = "0.61.1"
+version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47f15bd548d355e4afdbb318caf1822cf78e3fd8434df68111be9e88e0bfd216"
+checksum = "fa17252fbe38de00ac1fc58e14bd3ed4a84dff8f5729944dcda9df4e7b92ccd5"
 dependencies = [
  "getrandom 0.2.17",
  "serde",

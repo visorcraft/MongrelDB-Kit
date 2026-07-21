@@ -213,6 +213,20 @@ describe('schema DSL', () => {
 		expect(
 			index(['local_vec'], { ann: true, annQuantization: 'dense' }).annQuantization
 		).toBe('dense');
+		const tuned = index(['local_vec'], {
+			ann: true,
+			annQuantization: 'dense',
+			annM: 24,
+			annEfConstruction: 96,
+			annEfSearch: 48,
+			predicate: 'local_vec IS NOT NULL'
+		});
+		expect(tuned).toMatchObject({
+			annM: 24,
+			annEfConstruction: 96,
+			annEfSearch: 48,
+			predicate: 'local_vec IS NOT NULL'
+		});
 		expect(() => index(['local_vec'], { annQuantization: 'dense' })).toThrow(
 			'annQuantization requires ann: true'
 		);

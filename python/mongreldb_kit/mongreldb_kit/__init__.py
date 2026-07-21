@@ -66,6 +66,7 @@ __all__ = [
     "embedding",
     "embedding_source_supplied",
     "embedding_source_local_model",
+    "embedding_source_configured_model",
     "embedding_source_generated",
     "embedding_source_generated_spec",
     "index",
@@ -1072,6 +1073,13 @@ def index(
     unique: bool = False,
     kind: str = "bitmap",
     ann_quantization: str = "binary_sign",
+    predicate: Optional[str] = None,
+    ann_m: Optional[int] = None,
+    ann_ef_construction: Optional[int] = None,
+    ann_ef_search: Optional[int] = None,
+    minhash_permutations: Optional[int] = None,
+    minhash_bands: Optional[int] = None,
+    learned_range_epsilon: Optional[int] = None,
 ) -> dict[str, Any]:
     """Declare a secondary index. ``kind`` is ``bitmap`` (default), ``fm``,
     ``ann``, ``sparse``, ``minhash`` (set-similarity), or ``learned_range``
@@ -1094,6 +1102,17 @@ def index(
         result["ann_quantization"] = ann_quantization
     elif ann_quantization != "binary_sign":
         raise ValueError("ann_quantization is only valid for kind='ann'")
+    for key, value in {
+        "predicate": predicate,
+        "ann_m": ann_m,
+        "ann_ef_construction": ann_ef_construction,
+        "ann_ef_search": ann_ef_search,
+        "minhash_permutations": minhash_permutations,
+        "minhash_bands": minhash_bands,
+        "learned_range_epsilon": learned_range_epsilon,
+    }.items():
+        if value is not None:
+            result[key] = value
     return result
 
 
@@ -1285,6 +1304,18 @@ def embedding_source_local_model(model_path: str, model_id: str) -> dict[str, An
         "kind": "local_model",
         "model_path": model_path,
         "model_id": model_id,
+    }
+
+
+def embedding_source_configured_model(
+    provider_id: str, model_id: str, model_version: str
+) -> dict[str, Any]:
+    """Catalog source resolved by a named operator-registered provider."""
+    return {
+        "kind": "configured_model",
+        "provider_id": provider_id,
+        "model_id": model_id,
+        "model_version": model_version,
     }
 
 

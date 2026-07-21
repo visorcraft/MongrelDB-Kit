@@ -7,7 +7,7 @@ use mongreldb_core::constraint::{
 use mongreldb_core::memtable::Value as CoreValue;
 use mongreldb_core::schema::{
     AnnOptions, AnnQuantization, ColumnDef, ColumnFlags, DefaultExpr, IndexDef, IndexKind,
-    IndexOptions, Schema as CoreSchema, TypeId,
+    IndexOptions, LearnedRangeOptions, MinHashOptions, Schema as CoreSchema, TypeId,
 };
 use mongreldb_kit_core::schema::{
     Column, ColumnType, DefaultKind, EmbeddingSource as KitEmbeddingSource, Index as KitIndex,
@@ -160,7 +160,7 @@ pub(crate) fn to_core_indexes(table: &KitTable, index: &KitIndex) -> Result<Vec<
                 name: format!("{}_{}", index.name, column_name),
                 column_id: column.id as u16,
                 kind,
-                predicate: None,
+                predicate: index.predicate.clone(),
                 options: IndexOptions {
                     ann: (kind == IndexKind::Ann).then_some(AnnOptions {
                         quantization: match index.ann_quantization {
@@ -171,9 +171,29 @@ pub(crate) fn to_core_indexes(table: &KitTable, index: &KitIndex) -> Result<Vec<
                                 AnnQuantization::Dense
                             }
                         },
-                        ..AnnOptions::default()
+                        m: index.ann_m.unwrap_or_else(|| AnnOptions::default().m),
+                        ef_construction: index
+                            .ann_ef_construction
+                            .unwrap_or_else(|| AnnOptions::default().ef_construction),
+                        ef_search: index
+                            .ann_ef_search
+                            .unwrap_or_else(|| AnnOptions::default().ef_search),
                     }),
-                    ..IndexOptions::default()
+                    minhash: (kind == IndexKind::MinHash).then_some(MinHashOptions {
+                        permutations: index
+                            .minhash_permutations
+                            .unwrap_or_else(|| MinHashOptions::default().permutations),
+                        bands: index
+                            .minhash_bands
+                            .unwrap_or_else(|| MinHashOptions::default().bands),
+                    }),
+                    learned_range: (kind == IndexKind::LearnedRange).then_some(
+                        LearnedRangeOptions {
+                            epsilon: index
+                                .learned_range_epsilon
+                                .unwrap_or_else(|| LearnedRangeOptions::default().epsilon),
+                        },
+                    ),
                 },
             })
         })
@@ -268,6 +288,15 @@ pub fn to_core_embedding_source(source: &KitEmbeddingSource) -> mongreldb_core::
         } => mongreldb_core::EmbeddingSource::LocalModel {
             model_path: PathBuf::from(model_path),
             model_id: model_id.clone(),
+        },
+        KitEmbeddingSource::ConfiguredModel {
+            provider_id,
+            model_id,
+            model_version,
+        } => mongreldb_core::EmbeddingSource::ConfiguredModel {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+            model_version: model_version.clone(),
         },
         KitEmbeddingSource::GeneratedColumn { provider } => {
             mongreldb_core::EmbeddingSource::GeneratedColumn {
@@ -641,12 +670,32 @@ mod tests {
             unique: false,
             kind: KitIndexKind::Ann,
             ann_quantization: mongreldb_kit_core::AnnQuantization::Dense,
+            predicate: Some("embedding IS NOT NULL".into()),
+            ann_m: Some(24),
+            ann_ef_construction: Some(96),
+            ann_ef_search: Some(48),
+            ..Default::default()
         });
         let core = to_core_schema(&table).unwrap();
         assert_eq!(
             core.indexes[0].options.ann.as_ref().unwrap().quantization,
             AnnQuantization::Dense
         );
+        assert_eq!(
+            core.indexes[0].predicate.as_deref(),
+            Some("embedding IS NOT NULL")
+        );
+        assert_eq!(core.indexes[0].options.ann.as_ref().unwrap().m, 24);
+        assert_eq!(
+            core.indexes[0]
+                .options
+                .ann
+                .as_ref()
+                .unwrap()
+                .ef_construction,
+            96
+        );
+        assert_eq!(core.indexes[0].options.ann.as_ref().unwrap().ef_search, 48);
     }
 
     #[test]

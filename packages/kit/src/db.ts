@@ -21,7 +21,7 @@ import {
 	IndexBuildPolicyJs,
 	WriteBuffer
 } from '@visorcraft/mongreldb/native.js';
-import { Schema } from './schema.js';
+import { Schema, embeddingSourceToJson } from './schema.js';
 import { rowsToTsv, tsvToRows } from './tsv.js';
 import { rowFromRowJs } from './rows.js';
 import {
@@ -263,6 +263,7 @@ type MongrelColumnSpec = {
 	enumVariants?: string[];
 	encrypted?: boolean;
 	encryptedIndexable?: boolean;
+	embeddingSourceJson?: string;
 };
 
 type MongrelDatabase = NativeDatabase & {
@@ -336,6 +337,13 @@ type MongrelIndexSpec = {
 	columnId: number;
 	kind: number;
 	annQuantization?: number;
+	predicate?: string;
+	annM?: number;
+	annEfConstruction?: number;
+	annEfSearch?: number;
+	minhashPermutations?: number;
+	minhashBands?: number;
+	learnedRangeEpsilon?: number;
 };
 
 export type IndexJobInfo = {
@@ -446,7 +454,11 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 					: (col.generated ?? undefined),
 			enumVariants: col.enumValues,
 			encrypted: col.encrypted,
-			encryptedIndexable: col.encryptedIndexable
+			encryptedIndexable: col.encryptedIndexable,
+			embeddingSourceJson:
+				col.embeddingSource === undefined
+					? undefined
+					: JSON.stringify(embeddingSourceToJson(col.embeddingSource))
 		})),
 		indexes
 	};
@@ -477,7 +489,14 @@ function toMongrelIndex(table: TableSpec, index: TableSpec['indexes'][number], c
 				? index.annQuantization === 'dense'
 					? addon.AnnQuantizationSpec.Dense
 					: addon.AnnQuantizationSpec.BinarySign
-				: undefined
+				: undefined,
+		predicate: index.predicate,
+		annM: index.annM,
+		annEfConstruction: index.annEfConstruction,
+		annEfSearch: index.annEfSearch,
+		minhashPermutations: index.minhashPermutations,
+		minhashBands: index.minhashBands,
+		learnedRangeEpsilon: index.learnedRangeEpsilon
 	};
 }
 

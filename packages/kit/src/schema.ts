@@ -214,6 +214,13 @@ export function embeddingSourceToJson(source: EmbeddingSource): Record<string, u
 				model_path: source.modelPath,
 				model_id: source.modelId
 			};
+		case 'configured_model':
+			return {
+				kind: 'configured_model',
+				provider_id: source.providerId,
+				model_id: source.modelId,
+				model_version: source.modelVersion
+			};
 		case 'generated_column':
 			return { kind: 'generated_column', provider: source.provider };
 		case 'generated_column_spec':
@@ -250,13 +257,24 @@ export interface IndexOptions {
 	ann?: boolean;
 	/** ANN representation. `dense` preserves f32 vectors and ranks by cosine distance. */
 	annQuantization?: 'binary_sign' | 'dense';
+	/** Optional SQL predicate for a partial index. */
+	predicate?: string;
+	/** HNSW graph degree. */
+	annM?: number;
+	/** HNSW construction search width. */
+	annEfConstruction?: number;
+	/** HNSW query search width. */
+	annEfSearch?: number;
 	/** Create a sparse (SPLADE) index on a sparse column for `sparseMatch()`. */
 	sparse?: boolean;
 	/** Create a MinHash/LSH set-similarity index to accelerate `setSimilarity()`. */
 	minhash?: boolean;
+	minhashPermutations?: number;
+	minhashBands?: number;
 	/** Create a learned-range (PGM zonemap) index to accelerate range predicates
 	 * (`gt`/`gte`/`lt`/`lte`) on numeric/timestamp columns. */
 	learnedRange?: boolean;
+	learnedRangeEpsilon?: number;
 }
 
 export interface UniqueOptions {
@@ -292,7 +310,14 @@ export function index(columns: string[], opts: IndexOptions = {}): IndexSpec {
 						: opts.learnedRange
 							? 'learned_range'
 							: 'bitmap',
-		annQuantization: opts.ann ? (opts.annQuantization ?? 'binary_sign') : undefined
+		annQuantization: opts.ann ? (opts.annQuantization ?? 'binary_sign') : undefined,
+		predicate: opts.predicate,
+		annM: opts.annM,
+		annEfConstruction: opts.annEfConstruction,
+		annEfSearch: opts.annEfSearch,
+		minhashPermutations: opts.minhashPermutations,
+		minhashBands: opts.minhashBands,
+		learnedRangeEpsilon: opts.learnedRangeEpsilon
 	};
 }
 

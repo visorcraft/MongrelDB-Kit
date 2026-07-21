@@ -263,6 +263,7 @@ fn unique_index_enforces_uniqueness() {
             unique: true,
             kind: Default::default(),
             ann_quantization: Default::default(),
+            ..Default::default()
         }],
         foreign_keys: vec![],
         // No explicit unique constraint: the unique INDEX alone must enforce it.
@@ -303,6 +304,7 @@ fn non_unique_index_does_not_enforce_uniqueness() {
             unique: false,
             kind: Default::default(),
             ann_quantization: Default::default(),
+            ..Default::default()
         }],
         foreign_keys: vec![],
         unique_constraints: vec![],

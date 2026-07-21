@@ -5,6 +5,7 @@ from mongreldb_kit import (
     embedding,
     embedding_source_generated,
     embedding_source_generated_spec,
+    embedding_source_configured_model,
     embedding_source_local_model,
     embedding_source_supplied,
     index,
@@ -32,6 +33,14 @@ def test_embedding_source_helpers_and_column_dict():
         "kind": "local_model",
         "model_path": "/models/kit-mini",
         "model_id": "kit-mini",
+    }
+
+    configured = embedding_source_configured_model("tenant", "model", "2026-07")
+    assert configured == {
+        "kind": "configured_model",
+        "provider_id": "tenant",
+        "model_id": "model",
+        "model_version": "2026-07",
     }
 
     gen = embedding(
@@ -105,3 +114,15 @@ def test_dense_ann_schema_serialization():
         ]
         == "dense"
     )
+    tuned = index(
+        "idx_vec",
+        "vec",
+        kind="ann",
+        ann_quantization="dense",
+        predicate="vec IS NOT NULL",
+        ann_m=24,
+        ann_ef_construction=96,
+        ann_ef_search=48,
+    )
+    assert tuned["predicate"] == "vec IS NOT NULL"
+    assert tuned["ann_m"] == 24

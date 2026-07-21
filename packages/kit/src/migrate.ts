@@ -7,7 +7,7 @@ import {
 	ConditionKind
 } from '@visorcraft/mongreldb/native.js';
 import { KitDatabase, type SqlOptions } from './db.js';
-import type { Schema } from './schema.js';
+import { embeddingSourceToJson, type Schema } from './schema.js';
 import { rowFromRowJs } from './rows.js';
 import type { TableSpec, ColumnSpec, IndexSpec, UniqueSpec, ForeignKeySpec, ColumnStorageType, PkValue } from './types.js';
 import { toCells, pkValueFromRow, parentExists, type ConstraintKit } from './constraints.js';
@@ -112,7 +112,19 @@ export interface MigrationOptions {
 
 type MongrelSchemaSpec = {
 	columns: MongrelColumnSpec[];
-	indexes: { name: string; columnId: number; kind: number; annQuantization?: number }[];
+	indexes: {
+		name: string;
+		columnId: number;
+		kind: number;
+		annQuantization?: number;
+		predicate?: string;
+		annM?: number;
+		annEfConstruction?: number;
+		annEfSearch?: number;
+		minhashPermutations?: number;
+		minhashBands?: number;
+		learnedRangeEpsilon?: number;
+	}[];
 };
 
 type MongrelColumnSpec = {
@@ -126,6 +138,7 @@ type MongrelColumnSpec = {
 	defaultValue?: Cell;
 	defaultExpr?: string;
 	enumVariants?: string[];
+	embeddingSourceJson?: string;
 };
 
 function columnId(table: TableSpec, name: string): number {
@@ -194,7 +207,11 @@ function toMongrelColumnSpec(table: TableSpec, column: ColumnSpec): MongrelColum
 			column.default?.kind === 'now' || column.default?.kind === 'uuid'
 				? column.default.kind
 				: (column.generated ?? undefined),
-		enumVariants: column.enumValues
+		enumVariants: column.enumValues,
+		embeddingSourceJson:
+			column.embeddingSource === undefined
+				? undefined
+				: JSON.stringify(embeddingSourceToJson(column.embeddingSource))
 	};
 }
 
@@ -225,7 +242,14 @@ function toMongrelSchema(table: TableSpec): MongrelSchemaSpec {
 						? idx.annQuantization === 'dense'
 							? AnnQuantizationSpec.Dense
 							: AnnQuantizationSpec.BinarySign
-						: undefined
+						: undefined,
+				predicate: idx.predicate,
+				annM: idx.annM,
+				annEfConstruction: idx.annEfConstruction,
+				annEfSearch: idx.annEfSearch,
+				minhashPermutations: idx.minhashPermutations,
+				minhashBands: idx.minhashBands,
+				learnedRangeEpsilon: idx.learnedRangeEpsilon
 			};
 		})
 	);
@@ -513,7 +537,7 @@ async function writeSchemaCatalog(kit: KitDatabase, schema: Schema): Promise<voi
 
 function kitVersion(): string {
 	// Keep in sync with package.json. Avoiding a JSON import keeps the ESM bundle simple.
-	return '0.61.1';
+	return '0.62.0';
 }
 
 function makeContext(kit: KitDatabase, sqlOptions?: SqlOptions): MigrationContext {

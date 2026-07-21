@@ -32,6 +32,7 @@ export type ColumnApplicationType = ColumnStorageType;
 export type EmbeddingSource =
 	| { kind: 'supplied_by_application' }
 	| { kind: 'local_model'; modelPath: string; modelId: string }
+	| { kind: 'configured_model'; providerId: string; modelId: string; modelVersion: string }
 	| { kind: 'generated_column'; provider: string }
 	| {
 			kind: 'generated_column_spec';
@@ -94,6 +95,14 @@ export interface IndexSpec {
 	kind?: 'bitmap' | 'fm' | 'ann' | 'sparse' | 'minhash' | 'learned_range';
 	/** ANN representation and metric. Defaults to sign-bit Hamming. */
 	annQuantization?: 'binary_sign' | 'dense';
+	/** Optional SQL predicate for a partial index. */
+	predicate?: string;
+	annM?: number;
+	annEfConstruction?: number;
+	annEfSearch?: number;
+	minhashPermutations?: number;
+	minhashBands?: number;
+	learnedRangeEpsilon?: number;
 }
 
 export interface ForeignKeySpec {

@@ -95,6 +95,7 @@ fn indexed_schema() -> Schema {
             unique: false,
             kind: IndexKind::MinHash,
             ann_quantization: Default::default(),
+            ..Default::default()
         }],
         foreign_keys: vec![],
         unique_constraints: vec![],

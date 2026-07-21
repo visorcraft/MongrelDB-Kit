@@ -83,6 +83,13 @@ class Index:
     kind: Optional[str] = None
     # ANN representation: "binary_sign" (default) or full-f32 "dense".
     ann_quantization: str = "binary_sign"
+    predicate: Optional[str] = None
+    ann_m: Optional[int] = None
+    ann_ef_construction: Optional[int] = None
+    ann_ef_search: Optional[int] = None
+    minhash_permutations: Optional[int] = None
+    minhash_bands: Optional[int] = None
+    learned_range_epsilon: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"name": self.name, "columns": list(self.columns), "unique": self.unique}
@@ -90,6 +97,18 @@ class Index:
             d["kind"] = self.kind
         if self.kind == "ann":
             d["ann_quantization"] = self.ann_quantization
+        for key in (
+            "predicate",
+            "ann_m",
+            "ann_ef_construction",
+            "ann_ef_search",
+            "minhash_permutations",
+            "minhash_bands",
+            "learned_range_epsilon",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                d[key] = value
         return d
 
 

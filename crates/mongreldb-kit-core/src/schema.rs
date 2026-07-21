@@ -102,6 +102,12 @@ pub enum EmbeddingSource {
         /// Stable model identity (registry key and ANN generation stamp).
         model_id: String,
     },
+    /// Portable model identity resolved from node-local provider configuration.
+    ConfiguredModel {
+        provider_id: String,
+        model_id: String,
+        model_version: String,
+    },
     /// Named provider registered on the process (`provider` registry key).
     GeneratedColumn {
         /// Registry key of the provider.
@@ -227,7 +233,7 @@ pub enum AnnQuantization {
 }
 
 /// An index on one or more columns.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Index {
     pub name: String,
     pub columns: Vec<String>,
@@ -239,6 +245,27 @@ pub struct Index {
     /// ANN representation. Ignored for non-ANN indexes.
     #[serde(default)]
     pub ann_quantization: AnnQuantization,
+    /// Optional SQL predicate for a partial index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
+    /// HNSW graph degree. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_m: Option<usize>,
+    /// HNSW construction search width. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_ef_construction: Option<usize>,
+    /// HNSW query search width. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_ef_search: Option<usize>,
+    /// MinHash permutation count. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minhash_permutations: Option<usize>,
+    /// MinHash LSH band count. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minhash_bands: Option<usize>,
+    /// Learned-range error bound. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learned_range_epsilon: Option<usize>,
 }
 
 /// A uniqueness constraint over one or more columns.
@@ -454,6 +481,7 @@ impl Schema {
                 col.embedding_source,
                 Some(
                     EmbeddingSource::LocalModel { .. }
+                        | EmbeddingSource::ConfiguredModel { .. }
                         | EmbeddingSource::GeneratedColumn { .. }
                         | EmbeddingSource::GeneratedColumnSpec { .. }
                 )
@@ -466,6 +494,23 @@ impl Schema {
             }
             column_names.insert(col.name.clone(), col.id);
             column_ids.insert(col.id, col.name.clone());
+        }
+
+        for col in &table.columns {
+            if let Some(EmbeddingSource::ConfiguredModel {
+                provider_id,
+                model_id,
+                model_version,
+            }) = col.embedding_source.as_ref()
+            {
+                if provider_id.is_empty() || model_id.is_empty() || model_version.is_empty() {
+                    return Err(SchemaError::InvalidGeneratedEmbeddingSpec(
+                        table.name.clone(),
+                        col.name.clone(),
+                        "provider, model, and version are required".into(),
+                    ));
+                }
+            }
         }
 
         for col in &table.columns {
@@ -657,6 +702,7 @@ mod tests {
                     unique: true,
                     kind: Default::default(),
                     ann_quantization: Default::default(),
+                    ..Default::default()
                 },
                 // A non-unique index must NOT synthesize a constraint.
                 Index {
@@ -665,6 +711,7 @@ mod tests {
                     unique: false,
                     kind: Default::default(),
                     ann_quantization: Default::default(),
+                    ..Default::default()
                 },
             ],
             foreign_keys: vec![],
@@ -696,6 +743,7 @@ mod tests {
                 unique: true,
                 kind: Default::default(),
                 ann_quantization: Default::default(),
+                ..Default::default()
             }],
             foreign_keys: vec![],
             unique_constraints: vec![UniqueConstraint {
@@ -730,6 +778,7 @@ mod tests {
                 unique: true,
                 kind: Default::default(),
                 ann_quantization: Default::default(),
+                ..Default::default()
             }],
             foreign_keys: vec![],
             unique_constraints: vec![],
@@ -754,9 +803,16 @@ mod tests {
             unique: false,
             kind: IndexKind::Ann,
             ann_quantization: AnnQuantization::Dense,
+            predicate: Some("embedding IS NOT NULL".into()),
+            ann_m: Some(24),
+            ann_ef_construction: Some(96),
+            ann_ef_search: Some(48),
+            ..Default::default()
         };
         let json = serde_json::to_value(&dense).unwrap();
         assert_eq!(json["ann_quantization"], "dense");
+        assert_eq!(json["ann_m"], 24);
+        assert_eq!(json["predicate"], "embedding IS NOT NULL");
         assert_eq!(
             serde_json::from_value::<Index>(json)
                 .unwrap()

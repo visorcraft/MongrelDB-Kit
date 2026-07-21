@@ -3225,6 +3225,7 @@ def _build_table(info: Dict[str, Any]) -> Dict[str, Any]:
                     "primary_key",
                     "nullable",
                     "auto_increment",
+                    "embedding_source",
                 ),
             )
             or not _is_non_negative_int(col.get("id"))
@@ -3238,6 +3239,9 @@ def _build_table(info: Dict[str, Any]) -> Dict[str, Any]:
             and not isinstance(col["nullable"], bool)
             or "auto_increment" in col
             and not isinstance(col["auto_increment"], bool)
+            or "embedding_source" in col
+            and col["embedding_source"] is not None
+            and not isinstance(col["embedding_source"], dict)
         ):
             raise _MalformedHttpResponse("schema column descriptor fields were invalid")
         cid = col["id"]
