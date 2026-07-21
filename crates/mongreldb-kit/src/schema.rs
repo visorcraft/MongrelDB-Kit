@@ -162,23 +162,57 @@ pub(crate) fn to_core_indexes(table: &KitTable, index: &KitIndex) -> Result<Vec<
                 kind,
                 predicate: index.predicate.clone(),
                 options: IndexOptions {
-                    ann: (kind == IndexKind::Ann).then_some(AnnOptions {
-                        quantization: match index.ann_quantization {
-                            mongreldb_kit_core::schema::AnnQuantization::BinarySign => {
-                                AnnQuantization::BinarySign
+                    ann: (kind == IndexKind::Ann).then_some(|| {
+                        use mongreldb_kit_core::schema::{AnnAlgorithm as KitAnnAlgorithm, AnnQuantization as KitAnnQuantization};
+                        let defaults = AnnOptions::default();
+                        let algorithm = match index.ann_algorithm {
+                            KitAnnAlgorithm::Hnsw => mongreldb_core::schema::AnnAlgorithm::Hnsw,
+                            KitAnnAlgorithm::DiskAnn => mongreldb_core::schema::AnnAlgorithm::DiskAnn,
+                            KitAnnAlgorithm::Ivf => mongreldb_core::schema::AnnAlgorithm::Ivf,
+                        };
+                        let quantization = match index.ann_quantization {
+                            KitAnnQuantization::BinarySign => AnnQuantization::BinarySign,
+                            KitAnnQuantization::Dense => AnnQuantization::Dense,
+                            KitAnnQuantization::Product { num_subvectors, bits } => {
+                                AnnQuantization::Product { num_subvectors, bits }
                             }
-                            mongreldb_kit_core::schema::AnnQuantization::Dense => {
-                                AnnQuantization::Dense
+                        };
+                        let diskann = if algorithm == mongreldb_core::schema::AnnAlgorithm::DiskAnn {
+                            Some(mongreldb_core::schema::DiskAnnOptions {
+                                r: index.ann_diskann_r.unwrap_or(defaults.diskann.as_ref().map(|d| d.r).unwrap_or(64)),
+                                l: index.ann_diskann_l.unwrap_or(defaults.diskann.as_ref().map(|d| d.l).unwrap_or(128)),
+                                beam_width: index.ann_diskann_beam_width.unwrap_or(defaults.diskann.as_ref().map(|d| d.beam_width).unwrap_or(8)),
+                                alpha: index.ann_diskann_alpha.unwrap_or(defaults.diskann.as_ref().map(|d| d.alpha).unwrap_or(120)),
+                            })
+                        } else {
+                            None
+                        };
+                        let ivf = if algorithm == mongreldb_core::schema::AnnAlgorithm::Ivf {
+                            Some(mongreldb_core::schema::IvfOptions {
+                                nlist: index.ann_ivf_nlist.unwrap_or(256),
+                                nprobe: index.ann_ivf_nprobe.unwrap_or(8),
+                            })
+                        } else {
+                            None
+                        };
+                        let product = matches!(quantization, AnnQuantization::Product { .. }).then(|| {
+                            mongreldb_core::schema::ProductQuantizerOptions {
+                                training_samples: index.ann_pq_training_samples.unwrap_or(256_000),
+                                seed: index.ann_pq_seed.unwrap_or(0x9E37_79B9_7F4A_7C15),
+                                rerank_factor: index.ann_pq_rerank_factor.unwrap_or(5),
                             }
-                        },
-                        m: index.ann_m.unwrap_or_else(|| AnnOptions::default().m),
-                        ef_construction: index
-                            .ann_ef_construction
-                            .unwrap_or_else(|| AnnOptions::default().ef_construction),
-                        ef_search: index
-                            .ann_ef_search
-                            .unwrap_or_else(|| AnnOptions::default().ef_search),
-                    }),
+                        });
+                        AnnOptions {
+                            quantization,
+                            algorithm,
+                            diskann,
+                            ivf,
+                            product,
+                            m: index.ann_m.unwrap_or(defaults.m),
+                            ef_construction: index.ann_ef_construction.unwrap_or(defaults.ef_construction),
+                            ef_search: index.ann_ef_search.unwrap_or(defaults.ef_search),
+                        }
+                    }()),
                     minhash: (kind == IndexKind::MinHash).then_some(MinHashOptions {
                         permutations: index
                             .minhash_permutations

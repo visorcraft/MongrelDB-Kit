@@ -230,6 +230,27 @@ pub enum AnnQuantization {
     BinarySign,
     /// Full `f32` vectors, ranked by cosine distance.
     Dense,
+    /// Product quantization: vectors split into `num_subvectors` groups, each
+    /// encoded to `bits`-bit codes against trained codebooks. Ranked by ADC
+    /// (asymmetric distance computation) with optional exact rerank.
+    Product { num_subvectors: u16, bits: u8 },
+}
+
+/// ANN graph/structure algorithm. Orthogonal to [`AnnQuantization`]: the
+/// algorithm chooses how search walks the index; the quantization chooses how
+/// vectors are represented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum AnnAlgorithm {
+    /// Hierarchical Navigable Small World (the default).
+    #[default]
+    #[serde(rename = "hnsw")]
+    Hnsw,
+    /// DiskANN / Vamana single-layer robust-pruned graph.
+    #[serde(rename = "diskann")]
+    DiskAnn,
+    /// Inverted file index (k-means centroids + inverted lists).
+    #[serde(rename = "ivf")]
+    Ivf,
 }
 
 /// An index on one or more columns.
@@ -245,6 +266,10 @@ pub struct Index {
     /// ANN representation. Ignored for non-ANN indexes.
     #[serde(default)]
     pub ann_quantization: AnnQuantization,
+    /// ANN graph/structure algorithm (Phase 2). Defaults to HNSW. Ignored for
+    /// non-ANN indexes. Orthogonal to `ann_quantization`.
+    #[serde(default)]
+    pub ann_algorithm: AnnAlgorithm,
     /// Optional SQL predicate for a partial index.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predicate: Option<String>,
@@ -257,6 +282,33 @@ pub struct Index {
     /// HNSW query search width. Engine default when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ann_ef_search: Option<usize>,
+    /// DiskANN max graph degree R. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_diskann_r: Option<usize>,
+    /// DiskANN build search-list size L. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_diskann_l: Option<usize>,
+    /// DiskANN query beam width. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_diskann_beam_width: Option<usize>,
+    /// DiskANN robust-prune alpha × 100 (120 = 1.2). Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_diskann_alpha: Option<u32>,
+    /// IVF inverted-list (centroid) count. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_ivf_nlist: Option<usize>,
+    /// IVF probe count at query time. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_ivf_nprobe: Option<usize>,
+    /// Product-quantizer training sample cap. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_pq_training_samples: Option<usize>,
+    /// Product-quantizer deterministic training seed. Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_pq_seed: Option<u64>,
+    /// Product-quantizer exact-rerank factor (0 disables). Engine default when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ann_pq_rerank_factor: Option<usize>,
     /// MinHash permutation count. Engine default when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minhash_permutations: Option<usize>,
@@ -828,6 +880,81 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(old.ann_quantization, AnnQuantization::BinarySign);
+    }
+
+    #[test]
+    fn swappable_ann_algorithm_and_product_quantization_roundtrip() {
+        let diskann = Index {
+            name: "idx_diskann".into(),
+            columns: vec!["embedding".into()],
+            unique: false,
+            kind: IndexKind::Ann,
+            ann_algorithm: AnnAlgorithm::DiskAnn,
+            ann_quantization: AnnQuantization::Dense,
+            ann_diskann_r: Some(128),
+            ann_diskann_l: Some(256),
+            ann_diskann_beam_width: Some(4),
+            ann_diskann_alpha: Some(130),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&diskann).unwrap();
+        assert_eq!(json["ann_algorithm"], "diskann");
+        assert_eq!(json["ann_diskann_r"], 128);
+        assert_eq!(json["ann_diskann_alpha"], 130);
+        let decoded: Index = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.ann_algorithm, AnnAlgorithm::DiskAnn);
+        assert_eq!(decoded.ann_diskann_l, Some(256));
+
+        let ivf = Index {
+            name: "idx_ivf".into(),
+            columns: vec!["embedding".into()],
+            kind: IndexKind::Ann,
+            ann_algorithm: AnnAlgorithm::Ivf,
+            ann_quantization: AnnQuantization::Dense,
+            ann_ivf_nlist: Some(512),
+            ann_ivf_nprobe: Some(16),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&ivf).unwrap();
+        assert_eq!(json["ann_algorithm"], "ivf");
+        assert_eq!(json["ann_ivf_nlist"], 512);
+
+        let pq = Index {
+            name: "idx_pq".into(),
+            columns: vec!["embedding".into()],
+            kind: IndexKind::Ann,
+            ann_quantization: AnnQuantization::Product {
+                num_subvectors: 32,
+                bits: 8,
+            },
+            ann_pq_training_samples: Some(10_000),
+            ann_pq_seed: Some(42),
+            ann_pq_rerank_factor: Some(3),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&pq).unwrap();
+        assert_eq!(json["ann_quantization"]["product"]["num_subvectors"], 32);
+        assert_eq!(json["ann_quantization"]["product"]["bits"], 8);
+        assert_eq!(json["ann_pq_seed"], 42);
+        let decoded: Index = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            decoded.ann_quantization,
+            AnnQuantization::Product {
+                num_subvectors: 32,
+                bits: 8
+            }
+        );
+
+        // Default algorithm is HNSW and is omitted on the wire (backward compat).
+        let hnsw = Index {
+            name: "idx_hnsw".into(),
+            columns: vec!["embedding".into()],
+            kind: IndexKind::Ann,
+            ann_quantization: AnnQuantization::Dense,
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&hnsw).unwrap();
+        assert_eq!(json["ann_algorithm"], "hnsw");
     }
 
     #[test]
