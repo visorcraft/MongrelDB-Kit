@@ -1031,6 +1031,25 @@ function stopMockServer(worker: Worker): Promise<void> {
 }
 
 describe('RemoteDatabase', () => {
+	it('buildKitSearchBody accepts multi-retriever fusion wire', () => {
+		const body = RemoteDatabase.buildKitSearchBody({
+			table: 'docs',
+			retrievers: [
+				{ name: 'ann', weight: 1, ann: { column_id: 3, query: [0.1, 0.2], k: 10 } },
+				{ name: 'sparse', weight: 0.5, sparse: { column_id: 4, query: [[1, 0.5]], k: 10 } }
+			],
+			fusionConstant: 60,
+			limit: 5
+		});
+		expect(body.table).toBe('docs');
+		expect(body.retrievers).toHaveLength(2);
+		expect(body.fusion).toEqual({ reciprocal_rank: { constant: 60 } });
+		expect(body.limit).toBe(5);
+		// Round-trip through JSON like the HTTP client encoder.
+		const wire = JSON.parse(JSON.stringify(body));
+		expect(wire.retrievers).toHaveLength(2);
+	});
+
 	it('preserves unknown durable outcome as null', async () => {
 		const { url, worker } = await startMockServer('outcome_unknown');
 		try {

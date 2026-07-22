@@ -1817,6 +1817,65 @@ export class RemoteDatabase {
 		};
 	}
 
+	/**
+	 * Build a multi-retriever hybrid search body for `POST /kit/search`.
+	 * Exposed for wire tests and callers that need the payload without executing.
+	 */
+	static buildKitSearchBody(input: {
+		table: string;
+		retrievers: Array<Record<string, unknown>>;
+		fusionConstant?: number;
+		limit?: number;
+		must?: Array<Record<string, unknown>>;
+		rerank?: Record<string, unknown>;
+		projection?: number[];
+	}): Record<string, unknown> {
+		if (!input.table) throw new TypeError('table is required');
+		if (!input.retrievers || input.retrievers.length === 0) {
+			throw new RangeError('search requires at least one retriever');
+		}
+		const limit = input.limit ?? 10;
+		if (!Number.isSafeInteger(limit) || limit <= 0) {
+			throw new RangeError('limit must be a positive safe integer');
+		}
+		const body: Record<string, unknown> = {
+			table: input.table,
+			retrievers: input.retrievers,
+			fusion: { reciprocal_rank: { constant: input.fusionConstant ?? 60 } },
+			limit
+		};
+		if (input.must && input.must.length > 0) body.must = input.must;
+		if (input.rerank) body.rerank = input.rerank;
+		if (input.projection) body.projection = input.projection;
+		return body;
+	}
+
+	/** Multi-retriever hybrid search (`POST /kit/search`). */
+	async kitSearch(body: Record<string, unknown>): Promise<{
+		hits: Array<Record<string, unknown>>;
+		trace?: unknown;
+		nextCursor?: string;
+	}> {
+		const response = await this.request('/kit/search', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		});
+		if (!response.ok) {
+			throw new KitError(`kit search failed with HTTP ${response.status}`, 'REMOTE_PROTOCOL');
+		}
+		const payload: unknown = await responseJsonStrict(response);
+		if (payload === null || typeof payload !== 'object') {
+			throw new KitError('kit search response was not an object', 'REMOTE_PROTOCOL');
+		}
+		const env = payload as Record<string, unknown>;
+		return {
+			hits: Array.isArray(env.hits) ? env.hits as Array<Record<string, unknown>> : [],
+			trace: env.trace,
+			nextCursor: typeof env.next_cursor === 'string' ? env.next_cursor : undefined
+		};
+	}
+
 	async sqlPage(sql: string, options: RemoteSqlPaginationOptions): Promise<RemoteSqlPage> {
 		await this.requireSqlPagination();
 		if (options.projection.length === 0 || options.projection.length > 128
