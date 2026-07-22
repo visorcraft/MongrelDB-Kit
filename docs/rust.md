@@ -6,7 +6,7 @@ This guide shows how to define a schema, run migrations, and perform CRUD with t
 
 ```toml
 [dependencies]
-mongreldb-kit = "0.64.0"
+mongreldb-kit = "0.64.2"
 serde_json = "1"
 ```
 
@@ -581,13 +581,13 @@ use mongreldb_kit::{
 use std::sync::Arc;
 
 // Register a provider (demo FixedVectorProvider is non-semantic — tests/plumbing only).
-db.register_embedding_provider(Arc::new(FixedVectorProvider {
-    id: "kit-mini".into(),
-    model_id: "kit-mini".into(),
-    model_version: "1".into(),
-    normalization: EmbeddingNormalization::None,
-    vector: vec![0.0, 1.0, 0.0, 0.0],
-}));
+db.register_embedding_provider(Arc::new(FixedVectorProvider::new(
+    "kit-mini",
+    "kit-mini",
+    "1",
+    EmbeddingNormalization::None,
+    vec![0.0, 1.0, 0.0, 0.0],
+)));
 assert!(db.embedding_providers().list_ids().contains(&"kit-mini".into()));
 
 let source = EmbeddingSource::LocalModel {

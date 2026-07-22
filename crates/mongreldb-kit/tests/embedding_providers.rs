@@ -125,13 +125,13 @@ fn registry_register_list_and_embed_helper() {
 
     assert!(db.embedding_providers().list_ids().is_empty());
 
-    db.register_embedding_provider(Arc::new(FixedVectorProvider {
-        id: "fixed-v1".into(),
-        model_id: "fixed-v1".into(),
-        model_version: "1".into(),
-        normalization: EmbeddingNormalization::None,
-        vector: vec![0.0, 1.0, 0.0, 0.0],
-    }));
+    db.register_embedding_provider(Arc::new(FixedVectorProvider::new(
+        "fixed-v1",
+        "fixed-v1",
+        "1",
+        EmbeddingNormalization::None,
+        vec![0.0, 1.0, 0.0, 0.0],
+    )));
     assert_eq!(
         db.embedding_providers().list_ids(),
         vec!["fixed-v1".to_string()]
@@ -231,13 +231,13 @@ fn local_model_register_embed_insert_ann_search() {
         ));
     }
 
-    db.register_embedding_provider(Arc::new(FixedVectorProvider {
-        id: "kit-mini".into(),
-        model_id: "kit-mini".into(),
-        model_version: "1".into(),
-        normalization: EmbeddingNormalization::None,
-        vector: vec![0.25, 0.5, 0.75, 1.0],
-    }));
+    db.register_embedding_provider(Arc::new(FixedVectorProvider::new(
+        "kit-mini",
+        "kit-mini",
+        "1",
+        EmbeddingNormalization::None,
+        vec![0.25, 0.5, 0.75, 1.0],
+    )));
 
     let vectors = db.embed_texts(&source, &["document body"], 4).unwrap();
     assert_eq!(vectors[0], vec![0.25, 0.5, 0.75, 1.0]);
@@ -288,13 +288,13 @@ fn generated_column_spec_materializes_on_commit() {
     }])
     .unwrap();
     let db = Database::create(directory.path(), schema).unwrap();
-    db.register_embedding_provider(Arc::new(FixedVectorProvider {
-        id: "fixed-v1".into(),
-        model_id: "fixed-model".into(),
-        model_version: "1".into(),
-        normalization: EmbeddingNormalization::None,
-        vector: vec![1.0, 2.0, 3.0, 4.0],
-    }));
+    db.register_embedding_provider(Arc::new(FixedVectorProvider::new(
+        "fixed-v1",
+        "fixed-model",
+        "1",
+        EmbeddingNormalization::None,
+        vec![1.0, 2.0, 3.0, 4.0],
+    )));
 
     let mut transaction = db.begin().unwrap();
     transaction
