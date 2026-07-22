@@ -283,6 +283,62 @@ def _normalize_query_id(value: str) -> str:
     return value.lower()
 
 
+_OUTCOME_ALLOWED_KEYS = (
+    "committed",
+    "committed_statements",
+    "last_commit_epoch",
+    "last_commit_epoch_text",
+    "last_commit_hlc",
+    "first_commit_statement_index",
+    "last_commit_statement_index",
+    "completed_statements",
+    "statement_index",
+    "serialization",
+    "serialization_state",
+    "terminal_state",
+)
+_OUTCOME_REQUIRED_KEYS = (
+    "committed",
+    "committed_statements",
+    "last_commit_epoch",
+    "last_commit_epoch_text",
+    "first_commit_statement_index",
+    "last_commit_statement_index",
+    "completed_statements",
+    "statement_index",
+    "serialization",
+)
+
+
+def _is_commit_hlc(value: Any) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, dict):
+        return False
+    if not _has_only_keys(value, ("physical_micros", "logical", "node_tiebreaker")):
+        return False
+    physical = value.get("physical_micros")
+    if not isinstance(physical, int) or isinstance(physical, bool) or physical < 0:
+        return False
+    for field in ("logical", "node_tiebreaker"):
+        if field not in value:
+            continue
+        v = value[field]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            return False
+    return True
+
+
+def _parse_commit_hlc(value: Any) -> Optional[Dict[str, int]]:
+    if value is None or not isinstance(value, dict):
+        return None
+    return {
+        "physical_micros": int(value["physical_micros"]),
+        "logical": int(value.get("logical", 0)),
+        "node_tiebreaker": int(value.get("node_tiebreaker", 0)),
+    }
+
+
 def _has_only_keys(value: Dict[str, Any], allowed: tuple[str, ...]) -> bool:
     return set(value).issubset(allowed)
 
@@ -413,11 +469,14 @@ def _is_sql_write_receipt(
             "committed_statements",
             "last_commit_epoch",
             "last_commit_epoch_text",
+            "last_commit_hlc",
             "first_commit_statement_index",
             "last_commit_statement_index",
             "completed_statements",
             "statement_index",
             "serialization",
+            "serialization_state",
+            "terminal_state",
         ),
     ):
         return False
@@ -885,6 +944,7 @@ def _is_query_status(value: Any, query_id: str) -> bool:
             "committed_statements",
             "last_commit_epoch",
             "last_commit_epoch_text",
+            "last_commit_hlc",
             "first_commit_statement_index",
             "last_commit_statement_index",
             "completed_statements",
@@ -894,6 +954,7 @@ def _is_query_status(value: Any, query_id: str) -> bool:
             "terminal_error",
             "cancellation_reason",
             "outcome",
+            "durable",
             "trace",
         ),
     ) or not _has_only_keys(
@@ -903,11 +964,14 @@ def _is_query_status(value: Any, query_id: str) -> bool:
             "committed_statements",
             "last_commit_epoch",
             "last_commit_epoch_text",
+            "last_commit_hlc",
             "first_commit_statement_index",
             "last_commit_statement_index",
             "completed_statements",
             "statement_index",
             "serialization",
+            "serialization_state",
+            "terminal_state",
         ),
     ) or isinstance(terminal, dict) and not _has_only_keys(terminal, ("code", "category")):
         return False
@@ -963,6 +1027,20 @@ def _is_query_status(value: Any, query_id: str) -> bool:
             and trace.get("commit_fence_outcome")
             not in ("not_reached", "cancel_won", "commit_won")
         ):
+            return False
+    if not _is_commit_hlc(value.get("last_commit_hlc")) or not _is_commit_hlc(
+        outcome.get("last_commit_hlc")
+    ):
+        return False
+    durable = value.get("durable")
+    if durable is not None:
+        if not isinstance(durable, dict) or not _has_only_keys(
+            durable, _OUTCOME_ALLOWED_KEYS
+        ):
+            return False
+        if not all(field in durable for field in _OUTCOME_REQUIRED_KEYS):
+            return False
+        if not _is_commit_hlc(durable.get("last_commit_hlc")):
             return False
     committed = value.get("committed")
     outcome_committed = outcome.get("committed")
@@ -1254,6 +1332,7 @@ def _validate_cancel_response(
             "committed_statements",
             "last_commit_epoch",
             "last_commit_epoch_text",
+            "last_commit_hlc",
             "first_commit_statement_index",
             "last_commit_statement_index",
             "completed_statements",
@@ -1262,6 +1341,7 @@ def _validate_cancel_response(
             "retryable",
             "server_state",
             "outcome",
+            "durable",
             "error",
             "terminal_error",
         ),
@@ -1626,11 +1706,14 @@ def _is_sql_error_envelope(value: Any, query_id: str) -> bool:
             "committed_statements",
             "last_commit_epoch",
             "last_commit_epoch_text",
+            "last_commit_hlc",
             "first_commit_statement_index",
             "last_commit_statement_index",
             "completed_statements",
             "statement_index",
             "serialization",
+            "serialization_state",
+            "terminal_state",
         ),
     ) or not _has_only_keys(
         error,
@@ -2479,6 +2562,34 @@ class RemoteDatabase:
         if not _is_query_status(status, query_id):
             raise _invalid_query_status(query_id, "response fields were inconsistent")
         return status
+
+    def retrieve_text(
+        self,
+        table: str,
+        embedding_column: int,
+        text: str,
+        *,
+        k: Optional[int] = None,
+        deadline_ms: Optional[int] = None,
+        max_work: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Text → embed under active semantic identity → ANN retrieve (0.64+)."""
+        if not isinstance(embedding_column, int) or not 0 <= embedding_column <= 0xFFFF:
+            raise ValueError("embedding_column must be a u16 column id")
+        if k is not None and (not isinstance(k, int) or k <= 0):
+            raise ValueError("k must be a positive integer")
+        body: Dict[str, Any] = {
+            "table": table,
+            "embedding_column": embedding_column,
+            "text": text,
+        }
+        if k is not None:
+            body["k"] = k
+        if deadline_ms is not None:
+            body["deadline_ms"] = deadline_ms
+        if max_work is not None:
+            body["max_work"] = max_work
+        return self._post_json("/kit/retrieve_text", body)
 
     def sql_page(
         self,

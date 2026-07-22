@@ -297,6 +297,16 @@ const server = http.createServer((req, res) => {
 		} else if (mode === 'committed_serializing'
 			&& req.url.startsWith('/queries/') && !req.url.endsWith('/cancel')) {
 			const queryId = req.url.split('/')[2];
+			const hlc = { physical_micros: 1_700_000_000_000_000, logical: 3, node_tiebreaker: 7 };
+			const outcome = {
+				committed: true, committed_statements: 1,
+				last_commit_epoch: 17, last_commit_epoch_text: '17',
+				last_commit_hlc: hlc,
+				first_commit_statement_index: 0, last_commit_statement_index: 0,
+				completed_statements: 1, statement_index: 0,
+				serialization: 'in_progress',
+				serialization_state: 'in_progress'
+			};
 			res.writeHead(200, { 'content-type': 'application/json' });
 			res.end(JSON.stringify({
 				query_id: queryId,
@@ -304,16 +314,12 @@ const server = http.createServer((req, res) => {
 				state: 'serializing', server_state: 'serializing', operation: 'INSERT',
 				committed: true, committed_statements: 1,
 				last_commit_epoch: 17, last_commit_epoch_text: '17',
+				last_commit_hlc: hlc,
 				first_commit_statement_index: 0, last_commit_statement_index: 0,
 				completed_statements: 1, statement_index: 0,
 				cancel_outcome: null, cancellation_reason: 'none', retryable: false,
-				outcome: {
-					committed: true, committed_statements: 1,
-					last_commit_epoch: 17, last_commit_epoch_text: '17',
-					first_commit_statement_index: 0, last_commit_statement_index: 0,
-					completed_statements: 1, statement_index: 0,
-					serialization: 'in_progress'
-				},
+				outcome,
+				durable: outcome,
 				terminal_error: null, trace: {}
 			}));
 		} else if (req.url.startsWith('/queries/') && !req.url.endsWith('/cancel')
@@ -1699,10 +1705,24 @@ describe('RemoteDatabase', () => {
 				name: 'CommitOutcomeError',
 				queryId,
 				committed: true,
-				lastCommitEpoch: 17n
+				lastCommitEpoch: 17n,
+				lastCommitHlc: {
+					physicalMicros: 1_700_000_000_000_000,
+					logical: 3,
+					nodeTiebreaker: 7
+				},
+				serializationState: 'in_progress'
 			});
+			const status = await remote.queryStatus(queryId);
+			expect(status.durableOutcome.lastCommitHlc).toEqual({
+				physicalMicros: 1_700_000_000_000_000,
+				logical: 3,
+				nodeTiebreaker: 7
+			});
+			expect(status.durableOutcome.serializationState).toBe('in_progress');
 			const requests = await getRequests(worker);
-			expect(requests.filter((request) => request.path === `/queries/${queryId}`)).toHaveLength(1);
+			expect(requests.filter((request) => request.path === `/queries/${queryId}`).length)
+				.toBeGreaterThanOrEqual(1);
 			expect(requests.some((request) => request.path?.endsWith('/cancel'))).toBe(false);
 		} finally {
 			await stopMockServer(worker);

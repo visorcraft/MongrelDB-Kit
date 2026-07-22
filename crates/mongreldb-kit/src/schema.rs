@@ -708,6 +708,18 @@ mod tests {
                     status: mongreldb_core::EmbeddingGenerationStatus::Ready,
                     last_error_category: None,
                     attempt_count: 1,
+                    semantic_identity: mongreldb_core::EmbeddingProviderRef {
+                        provider_id: "provider".into(),
+                        provider_version: "1".into(),
+                        model_id: "model".into(),
+                        model_version: "1".into(),
+                        model_artifact_sha256: [1; 32],
+                        tokenizer_sha256: [2; 32],
+                        preprocessing_sha256: [3; 32],
+                        dimension: 2,
+                        normalization: mongreldb_core::EmbeddingNormalization::None,
+                    },
+                    provider_registry_generation: 1,
                 },
             }));
         assert_eq!(

@@ -2169,6 +2169,61 @@ impl PyTransaction {
             .collect()
     }
 
+    /// Text → embed under active semantic identity → ANN retrieve (0.64+).
+    ///
+    /// Returns a JSON object string: `{ "hits": [...], "provenance": {...} }`.
+    fn retrieve_text(
+        &self,
+        table: &str,
+        embedding_column: &str,
+        text: &str,
+        k: usize,
+    ) -> PyResult<String> {
+        let txn = self
+            .txn
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("transaction already closed"))?;
+        let result = txn
+            .retrieve_text(table, embedding_column, text, k)
+            .map_err(map_err)?;
+        let hits: Vec<serde_json::Value> = result
+            .hits
+            .iter()
+            .map(|hit| {
+                serde_json::json!({
+                    "row_id": hit.row_id,
+                    "rank": hit.rank,
+                    "score_kind": hit.score_kind,
+                    "score_value": hit.score_value,
+                })
+            })
+            .collect();
+        let identity = &result.provenance.semantic_identity;
+        let fingerprint = result
+            .provenance
+            .query_source_fingerprint
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let body = serde_json::json!({
+            "hits": hits,
+            "provenance": {
+                "embedding_column": result.provenance.embedding_column,
+                "provider_registry_generation": result.provenance.provider_registry_generation,
+                "query_source_fingerprint": fingerprint,
+                "semantic_identity": {
+                    "provider_id": identity.provider_id,
+                    "provider_version": identity.provider_version,
+                    "model_id": identity.model_id,
+                    "model_version": identity.model_version,
+                    "dimension": identity.dimension,
+                    "normalization": format!("{:?}", identity.normalization),
+                },
+            },
+        });
+        serde_json::to_string(&body).map_err(|e| StorageError::new_err(e.to_string()))
+    }
+
     /// Learned-sparse (SPLADE) retrieval over a `Sparse` column's index; returns
     /// the top-`k` rows for the weighted query tokens (as JSON strings).
     fn sparse_match(

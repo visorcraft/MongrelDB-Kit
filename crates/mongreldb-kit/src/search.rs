@@ -41,6 +41,31 @@ pub struct SearchHit {
     pub components: Vec<SearchComponent>,
 }
 
+/// One text→embed→ANN hit (no full row payload; use `get` if needed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextRetrieveHit {
+    pub row_id: u64,
+    pub rank: usize,
+    pub score_kind: String,
+    pub score_value: f64,
+}
+
+/// Provenance for a query-time [`TextRetrieveResult`] (P0.7 / 0.64+).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextRetrieveProvenance {
+    pub embedding_column: String,
+    pub provider_registry_generation: u64,
+    pub query_source_fingerprint: [u8; 32],
+    pub semantic_identity: mongreldb_core::EmbeddingProviderRef,
+}
+
+/// Text → embed under active semantic identity → ANN retrieve.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextRetrieveResult {
+    pub hits: Vec<TextRetrieveHit>,
+    pub provenance: TextRetrieveProvenance,
+}
+
 impl SearchHit {
     /// View as a ordinary kit [`Row`] (drops score metadata).
     pub fn as_row(&self) -> Row {
@@ -308,6 +333,7 @@ pub(crate) fn core_hit_to_kit(hit: CoreSearchHit, table: &KitTable) -> Result<Se
     let core_row = mongreldb_core::memtable::Row {
         row_id: hit.row_id,
         committed_epoch: mongreldb_core::Epoch(0),
+        commit_ts: None,
         columns,
         deleted: false,
     };

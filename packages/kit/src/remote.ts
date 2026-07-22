@@ -1,7 +1,13 @@
 import { RemoteDatabase as NativeRemoteDatabase } from '@visorcraft/mongreldb/native.js';
 import { tableFromIPC, tableFromJSON, type Table as ArrowTable } from 'apache-arrow';
 import { randomBytes } from 'node:crypto';
-import type { CancelOutcome, SqlOptions, SqlQuery, SqlQueryStatus } from './db.js';
+import type {
+	CancelOutcome,
+	SqlCommitHlc,
+	SqlOptions,
+	SqlQuery,
+	SqlQueryStatus
+} from './db.js';
 import {
 	CommitOutcomeError,
 	CapabilityUnsupportedError,
@@ -289,16 +295,26 @@ export type RemoteSqlWriteReceipt = {
 	terminalError?: { code: string; category: string };
 };
 
+/** Structural HLC from server durable recovery (0.64+). */
+export type RemoteCommitHlc = {
+	physical_micros: number;
+	logical?: number;
+	node_tiebreaker?: number;
+};
+
 export type RemoteDurableOutcome = {
 	committed: boolean | null;
 	committed_statements?: number | null;
 	last_commit_epoch?: number | null;
 	last_commit_epoch_text?: string | null;
+	last_commit_hlc?: RemoteCommitHlc | null;
 	first_commit_statement_index?: number | null;
 	last_commit_statement_index?: number | null;
 	completed_statements?: number | null;
 	statement_index?: number | null;
 	serialization?: string;
+	serialization_state?: string | null;
+	terminal_state?: string | null;
 };
 
 type RawRemoteSqlWriteReceipt = {
@@ -562,6 +578,7 @@ type RawRemoteQueryStatus = {
 	committed_statements?: number | null;
 	last_commit_epoch?: number | null;
 	last_commit_epoch_text?: string | null;
+	last_commit_hlc?: RemoteCommitHlc | null;
 	first_commit_statement_index?: number | null;
 	last_commit_statement_index?: number | null;
 	completed_statements?: number | null;
@@ -571,6 +588,8 @@ type RawRemoteQueryStatus = {
 	terminal_error?: { code?: string; category?: string } | null;
 	cancellation_reason: string;
 	outcome: RemoteDurableOutcome;
+	/** Nested durable recovery object (mirrors outcome; 0.64+). */
+	durable?: RemoteDurableOutcome | null;
 	trace?: {
 		queue_duration_us?: number;
 		planning_duration_us?: number;
@@ -601,6 +620,74 @@ function sameOptional(left: unknown, right: unknown): boolean {
 	return (left ?? null) === (right ?? null);
 }
 
+const OUTCOME_ALLOWED_KEYS = [
+	'committed', 'committed_statements', 'last_commit_epoch', 'last_commit_epoch_text',
+	'last_commit_hlc', 'first_commit_statement_index', 'last_commit_statement_index',
+	'completed_statements', 'statement_index', 'serialization', 'serialization_state',
+	'terminal_state'
+] as const;
+
+const OUTCOME_REQUIRED_KEYS = [
+	'committed', 'committed_statements', 'last_commit_epoch', 'last_commit_epoch_text',
+	'first_commit_statement_index', 'last_commit_statement_index', 'completed_statements',
+	'statement_index', 'serialization'
+] as const;
+
+function isRemoteCommitHlc(value: unknown): value is RemoteCommitHlc {
+	if (value === null || value === undefined) return true;
+	if (value === null || typeof value !== 'object') return false;
+	const hlc = value as Record<string, unknown>;
+	if (!hasOnlyKeys(hlc, ['physical_micros', 'logical', 'node_tiebreaker'])) return false;
+	if (typeof hlc.physical_micros !== 'number'
+		|| !Number.isSafeInteger(hlc.physical_micros)
+		|| hlc.physical_micros < 0) return false;
+	if (hlc.logical !== undefined
+		&& (typeof hlc.logical !== 'number' || !Number.isSafeInteger(hlc.logical) || hlc.logical < 0)) {
+		return false;
+	}
+	if (hlc.node_tiebreaker !== undefined
+		&& (typeof hlc.node_tiebreaker !== 'number'
+			|| !Number.isSafeInteger(hlc.node_tiebreaker)
+			|| hlc.node_tiebreaker < 0)) {
+		return false;
+	}
+	return true;
+}
+
+function parseRemoteCommitHlc(value: unknown): SqlCommitHlc | undefined {
+	if (value === null || value === undefined || typeof value !== 'object') return undefined;
+	const hlc = value as RemoteCommitHlc;
+	return {
+		physicalMicros: hlc.physical_micros,
+		logical: hlc.logical ?? 0,
+		nodeTiebreaker: hlc.node_tiebreaker ?? 0
+	};
+}
+
+function pickCommitHlc(
+	...sources: Array<RemoteDurableOutcome | null | undefined | { last_commit_hlc?: RemoteCommitHlc | null }>
+): SqlCommitHlc | undefined {
+	for (const source of sources) {
+		if (!source) continue;
+		const parsed = parseRemoteCommitHlc(
+			'last_commit_hlc' in source ? source.last_commit_hlc : undefined
+		);
+		if (parsed !== undefined) return parsed;
+	}
+	return undefined;
+}
+
+function pickSerializationState(
+	outcome?: RemoteDurableOutcome | null,
+	durable?: RemoteDurableOutcome | null
+): string | undefined {
+	const state = durable?.serialization_state
+		?? outcome?.serialization_state
+		?? durable?.serialization
+		?? outcome?.serialization;
+	return state === undefined || state === null ? undefined : state;
+}
+
 function isRemoteQueryStatus(value: unknown, queryId: string): value is RawRemoteQueryStatus {
 	if (value === null || typeof value !== 'object') return false;
 	const body = value as Record<string, unknown>;
@@ -608,24 +695,30 @@ function isRemoteQueryStatus(value: unknown, queryId: string): value is RawRemot
 			? body.outcome as Record<string, unknown>
 			: undefined;
 	if (outcome === undefined) return false;
+	const durable = body.durable === undefined || body.durable === null
+		? undefined
+		: typeof body.durable === 'object'
+			? body.durable as Record<string, unknown>
+			: undefined;
+	if (body.durable !== undefined && body.durable !== null && durable === undefined) return false;
 	const serverState = body.server_state ?? '';
 	const terminal = body.terminal_error;
 	if (!hasOnlyKeys(body, [
 		'query_id', 'status', 'state', 'server_state', 'terminal_state', 'detail', 'operation',
 		'started_ms_ago', 'deadline_ms_remaining', 'session_id',
 		'committed', 'committed_statements', 'last_commit_epoch', 'last_commit_epoch_text',
+		'last_commit_hlc',
 		'first_commit_statement_index', 'last_commit_statement_index', 'completed_statements',
 		'statement_index', 'cancel_outcome', 'retryable', 'terminal_error',
-		'cancellation_reason', 'outcome', 'trace'
-	]) || !hasOnlyKeys(outcome, [
-		'committed', 'committed_statements', 'last_commit_epoch', 'last_commit_epoch_text',
-		'first_commit_statement_index', 'last_commit_statement_index', 'completed_statements',
-		'statement_index', 'serialization'
-	]) || !hasAllKeys(outcome, [
-		'committed', 'committed_statements', 'last_commit_epoch', 'last_commit_epoch_text',
-		'first_commit_statement_index', 'last_commit_statement_index', 'completed_statements',
-		'statement_index', 'serialization'
-	])) return false;
+		'cancellation_reason', 'outcome', 'durable', 'trace'
+	]) || !hasOnlyKeys(outcome, OUTCOME_ALLOWED_KEYS)
+		|| !hasAllKeys(outcome, OUTCOME_REQUIRED_KEYS)
+		|| (durable !== undefined && (!hasOnlyKeys(durable, OUTCOME_ALLOWED_KEYS)
+			|| !hasAllKeys(durable, OUTCOME_REQUIRED_KEYS)))
+	) return false;
+	if (!isRemoteCommitHlc(body.last_commit_hlc)
+		|| !isRemoteCommitHlc(outcome.last_commit_hlc)
+		|| (durable !== undefined && !isRemoteCommitHlc(durable.last_commit_hlc))) return false;
 	if (terminal !== undefined && terminal !== null
 		&& (typeof terminal !== 'object'
 			|| !hasOnlyKeys(terminal as Record<string, unknown>, ['code', 'category']))) return false;
@@ -1012,19 +1105,16 @@ function validateCancelResponse(
 	if (!hasOnlyKeys(body, [
 		'query_id', 'state', 'cancel_outcome', 'status', 'terminal_state', 'code',
 		'committed', 'committed_statements', 'last_commit_epoch', 'last_commit_epoch_text',
+		'last_commit_hlc',
 		'first_commit_statement_index', 'last_commit_statement_index', 'completed_statements',
-		'statement_index', 'cancellation_reason', 'retryable', 'server_state', 'outcome', 'error',
-		'terminal_error'
+		'statement_index', 'cancellation_reason', 'retryable', 'server_state', 'outcome', 'durable',
+		'error', 'terminal_error'
 	])) {
 		throw new KitError('SQL cancellation response has unknown fields', 'REMOTE_PROTOCOL');
 	}
 	if (body.outcome !== undefined && body.outcome !== null
 		&& (typeof body.outcome !== 'object'
-			|| !hasOnlyKeys(body.outcome as Record<string, unknown>, [
-				'committed', 'committed_statements', 'last_commit_epoch', 'last_commit_epoch_text',
-				'first_commit_statement_index', 'last_commit_statement_index', 'completed_statements',
-				'statement_index', 'serialization'
-			]))) {
+			|| !hasOnlyKeys(body.outcome as Record<string, unknown>, OUTCOME_ALLOWED_KEYS))) {
 		throw new KitError('SQL cancellation outcome has unknown fields', 'REMOTE_PROTOCOL');
 	}
 	if (body.error !== undefined && body.error !== null
@@ -1625,6 +1715,7 @@ export class RemoteDatabase {
 		queryId = normalizeQueryId(queryId);
 		const status = await this.rawQueryStatus(queryId);
 		const committed = mergedCommitState(status.outcome?.committed, status.committed);
+		const durable = status.durable ?? undefined;
 		return {
 			queryId: status.query_id,
 			phase: status.server_state || status.state,
@@ -1642,10 +1733,12 @@ export class RemoteDatabase {
 					status.outcome?.last_commit_epoch_text ?? status.last_commit_epoch_text,
 					status.outcome?.last_commit_epoch ?? status.last_commit_epoch
 				),
+				lastCommitHlc: pickCommitHlc(durable, status.outcome, status),
 				firstCommitStatementIndex: status.outcome?.first_commit_statement_index
 					?? status.first_commit_statement_index ?? undefined,
 				lastCommitStatementIndex: status.outcome?.last_commit_statement_index
-					?? status.last_commit_statement_index ?? undefined
+					?? status.last_commit_statement_index ?? undefined,
+				serializationState: pickSerializationState(status.outcome, durable)
 			},
 			terminalErrorCode: status.terminal_error?.code,
 			terminalErrorCategory: status.terminal_error?.category,
@@ -1654,6 +1747,73 @@ export class RemoteDatabase {
 			cancellationReason: status.cancellation_reason ?? 'none',
 			cancelOutcome: status.cancel_outcome ?? undefined,
 			retryable: status.retryable
+		};
+	}
+
+	/**
+	 * Text → embed under the active semantic identity → ANN retrieve
+	 * (`POST /kit/retrieve_text`, 0.64+).
+	 */
+	async retrieveText(
+		table: string,
+		embeddingColumn: number,
+		text: string,
+		options: { k?: number; deadlineMs?: number; maxWork?: number } = {}
+	): Promise<{
+		hits: Array<{ rowId: string; rank: number; score: unknown }>;
+		provenance: {
+			embeddingColumn: number;
+			providerRegistryGeneration: number;
+			querySourceFingerprint: string;
+			semanticIdentity: Record<string, unknown>;
+		};
+	}> {
+		if (!Number.isInteger(embeddingColumn) || embeddingColumn < 0 || embeddingColumn > 0xffff) {
+			throw new RangeError('embeddingColumn must be a u16 column id');
+		}
+		if (options.k !== undefined && (!Number.isSafeInteger(options.k) || options.k <= 0)) {
+			throw new RangeError('k must be a positive safe integer');
+		}
+		const body: Record<string, unknown> = {
+			table,
+			embedding_column: embeddingColumn,
+			text
+		};
+		if (options.k !== undefined) body.k = options.k;
+		if (options.deadlineMs !== undefined) body.deadline_ms = options.deadlineMs;
+		if (options.maxWork !== undefined) body.max_work = options.maxWork;
+		const response = await this.request('/kit/retrieve_text', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		});
+		if (!response.ok) {
+			throw new KitError(
+				`retrieve_text failed with HTTP ${response.status}`,
+				'REMOTE_PROTOCOL'
+			);
+		}
+		const payload: unknown = await responseJsonStrict(response);
+		if (payload === null || typeof payload !== 'object') {
+			throw new KitError('retrieve_text response was not an object', 'REMOTE_PROTOCOL');
+		}
+		const env = payload as Record<string, unknown>;
+		if (!Array.isArray(env.hits) || env.provenance === null || typeof env.provenance !== 'object') {
+			throw new KitError('retrieve_text response missing hits/provenance', 'REMOTE_PROTOCOL');
+		}
+		const provenance = env.provenance as Record<string, unknown>;
+		return {
+			hits: (env.hits as Array<Record<string, unknown>>).map((hit) => ({
+				rowId: String(hit.row_id),
+				rank: hit.rank as number,
+				score: hit.score
+			})),
+			provenance: {
+				embeddingColumn: provenance.embedding_column as number,
+				providerRegistryGeneration: provenance.provider_registry_generation as number,
+				querySourceFingerprint: String(provenance.query_source_fingerprint ?? ''),
+				semanticIdentity: (provenance.semantic_identity ?? {}) as Record<string, unknown>
+			}
 		};
 	}
 
@@ -2013,6 +2173,7 @@ export class RemoteDatabase {
 		if (committed === null) {
 			throw new QueryOutcomeUnknownError(queryId, message, metadata);
 		}
+		const durable = status.durable ?? undefined;
 		const durableOutcome = {
 			committed,
 			committedStatements: maxKnown(
@@ -2023,12 +2184,14 @@ export class RemoteDatabase {
 				outcome?.last_commit_epoch_text ?? status.last_commit_epoch_text,
 				outcome?.last_commit_epoch ?? status.last_commit_epoch
 			),
+			lastCommitHlc: pickCommitHlc(durable, outcome, status),
 			firstCommitStatementIndex: outcome?.first_commit_statement_index
 				?? status.first_commit_statement_index ?? undefined,
 			lastCommitStatementIndex: outcome?.last_commit_statement_index
 				?? status.last_commit_statement_index ?? undefined,
 			completedStatements: outcome?.completed_statements ?? status.completed_statements ?? undefined,
-			statementIndex: outcome?.statement_index ?? status.statement_index ?? undefined
+			statementIndex: outcome?.statement_index ?? status.statement_index ?? undefined,
+			serializationState: pickSerializationState(outcome, durable)
 		};
 		switch (status.terminal_error?.code) {
 			case 'QUERY_CANCELLED':

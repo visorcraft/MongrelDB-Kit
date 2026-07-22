@@ -40,16 +40,17 @@ pub use mongreldb_query::{
 pub use query::JoinRow;
 #[cfg(feature = "remote")]
 pub use remote::{
-    RemoteAuth, RemoteBatch, RemoteCancelOutcome, RemoteDatabase, RemoteIdempotentSqlOptions,
-    RemoteOpResult, RemoteOptions, RemoteQueryRow, RemoteQueryStatus, RemoteSqlFormat,
-    RemoteSqlOptions, RemoteSqlPage, RemoteSqlPageInfo, RemoteSqlPageLimits,
-    RemoteSqlPaginationOptions, RemoteSqlQueryHandle, RemoteSqlReceiptError, RemoteSqlWriteReceipt,
-    RemoteTransaction, SecretString, SqlCancellationCapabilities, SqlIdempotencyCapabilities,
-    SqlPaginationCapabilities,
+    RemoteAuth, RemoteBatch, RemoteCancelOutcome, RemoteCommitHlc, RemoteDatabase,
+    RemoteIdempotentSqlOptions, RemoteOpResult, RemoteOptions, RemoteQueryOutcome, RemoteQueryRow,
+    RemoteQueryStatus, RemoteSqlFormat, RemoteSqlOptions, RemoteSqlPage, RemoteSqlPageInfo,
+    RemoteSqlPageLimits, RemoteSqlPaginationOptions, RemoteSqlQueryHandle, RemoteSqlReceiptError,
+    RemoteSqlWriteReceipt, RemoteTransaction, SecretString, SqlCancellationCapabilities,
+    SqlIdempotencyCapabilities, SqlPaginationCapabilities,
 };
 pub use schema::Row;
 pub use search::{
     SearchComponent, SearchHit, SearchMetric, SearchRerank, SearchRetriever, SearchSpec,
+    TextRetrieveHit, TextRetrieveProvenance, TextRetrieveResult,
 };
 pub use txn::Transaction;
 

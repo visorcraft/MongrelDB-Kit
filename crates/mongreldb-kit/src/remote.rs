@@ -446,6 +446,17 @@ pub enum RemoteCancelOutcome {
     PreCancelled,
 }
 
+/// Structural HLC from HTTP durable recovery (0.64+).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteCommitHlc {
+    pub physical_micros: u64,
+    #[serde(default)]
+    pub logical: u32,
+    #[serde(default)]
+    pub node_tiebreaker: u32,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteQueryOutcome {
@@ -457,6 +468,9 @@ pub struct RemoteQueryOutcome {
     pub last_commit_epoch: Option<u64>,
     #[serde(deserialize_with = "deserialize_required_option")]
     pub last_commit_epoch_text: Option<String>,
+    /// Authoritative commit HLC when the server recorded one (0.64+).
+    #[serde(default)]
+    pub last_commit_hlc: Option<RemoteCommitHlc>,
     #[serde(deserialize_with = "deserialize_required_option")]
     pub first_commit_statement_index: Option<usize>,
     #[serde(deserialize_with = "deserialize_required_option")]
@@ -466,6 +480,11 @@ pub struct RemoteQueryOutcome {
     #[serde(deserialize_with = "deserialize_required_option")]
     pub statement_index: Option<usize>,
     pub serialization: String,
+    /// Alias of `serialization` for native DurableOutcome field name parity.
+    #[serde(default)]
+    pub serialization_state: Option<String>,
+    #[serde(default)]
+    pub terminal_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -529,6 +548,8 @@ pub struct RemoteQueryStatus {
     #[serde(default)]
     pub last_commit_epoch_text: Option<String>,
     #[serde(default)]
+    pub last_commit_hlc: Option<RemoteCommitHlc>,
+    #[serde(default)]
     pub first_commit_statement_index: Option<usize>,
     #[serde(default)]
     pub last_commit_statement_index: Option<usize>,
@@ -539,6 +560,9 @@ pub struct RemoteQueryStatus {
     #[serde(default)]
     pub retryable: bool,
     pub outcome: RemoteQueryOutcome,
+    /// Nested durable recovery object (mirrors `outcome` with full field set).
+    #[serde(default)]
+    pub durable: Option<RemoteQueryOutcome>,
     #[serde(default)]
     pub terminal_error: Option<RemoteTerminalError>,
     #[serde(default)]
@@ -575,6 +599,24 @@ impl RemoteQueryStatus {
 
     pub fn durably_committed(&self) -> bool {
         self.durable_commit_state() == Some(true)
+    }
+
+    /// Prefer nested durable / outcome HLC, then top-level status field.
+    pub fn last_commit_hlc(&self) -> Option<&RemoteCommitHlc> {
+        self.durable
+            .as_ref()
+            .and_then(|d| d.last_commit_hlc.as_ref())
+            .or(self.outcome.last_commit_hlc.as_ref())
+            .or(self.last_commit_hlc.as_ref())
+    }
+
+    /// Prefer nested durable / outcome serialization_state, then serialization.
+    pub fn serialization_state(&self) -> &str {
+        self.durable
+            .as_ref()
+            .and_then(|d| d.serialization_state.as_deref())
+            .or(self.outcome.serialization_state.as_deref())
+            .unwrap_or(self.outcome.serialization.as_str())
     }
 }
 

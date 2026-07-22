@@ -72,12 +72,23 @@ export type CancelOutcome =
 	| 'not_found'
 	| 'pre_cancelled';
 
+/** Structural HLC from server durable recovery (0.64+). */
+export interface SqlCommitHlc {
+	physicalMicros: number;
+	logical: number;
+	nodeTiebreaker: number;
+}
+
 export interface SqlDurableOutcome {
 	committed: boolean | null;
 	committedStatements: number | null;
 	lastCommitEpoch?: bigint;
+	/** Authoritative commit HLC when the server recorded one (0.64+). */
+	lastCommitHlc?: SqlCommitHlc;
 	firstCommitStatementIndex?: number;
 	lastCommitStatementIndex?: number;
+	/** Serialization phase name (parity with native serialization_state). */
+	serializationState?: string;
 }
 
 export interface SqlQueryStatus {

@@ -39,10 +39,18 @@ export interface DurableQueryOutcome {
 	committed: boolean | null;
 	committedStatements?: number;
 	lastCommitEpoch?: bigint;
+	/** Authoritative commit HLC when the server recorded one (0.64+). */
+	lastCommitHlc?: {
+		physicalMicros: number;
+		logical: number;
+		nodeTiebreaker: number;
+	};
 	firstCommitStatementIndex?: number;
 	lastCommitStatementIndex?: number;
 	completedStatements?: number;
 	statementIndex?: number;
+	/** Serialization phase name (parity with native serialization_state). */
+	serializationState?: string;
 }
 
 export interface SqlErrorMetadata {
@@ -178,10 +186,12 @@ export class QueryCancelledError extends KitError {
 	readonly committed: boolean | null;
 	readonly committedStatements?: number;
 	readonly lastCommitEpoch?: bigint;
+	readonly lastCommitHlc?: DurableQueryOutcome['lastCommitHlc'];
 	readonly firstCommitStatementIndex?: number;
 	readonly lastCommitStatementIndex?: number;
 	readonly completedStatements?: number;
 	readonly statementIndex?: number;
+	readonly serializationState?: string;
 	readonly cancelOutcome?: string;
 	readonly cancellationReason?: string;
 	readonly retryable?: boolean;
@@ -194,10 +204,12 @@ export class QueryCancelledError extends KitError {
 		this.committed = outcome.committed;
 		this.committedStatements = outcome.committedStatements;
 		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.lastCommitHlc = outcome.lastCommitHlc;
 		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
 		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
 		this.completedStatements = outcome.completedStatements;
 		this.statementIndex = outcome.statementIndex;
+		this.serializationState = outcome.serializationState;
 		this.cancelOutcome = metadata.cancelOutcome;
 		this.cancellationReason = metadata.cancellationReason;
 		this.retryable = metadata.retryable;
@@ -210,10 +222,12 @@ export class QueryTimeoutError extends KitError {
 	readonly committed: boolean | null;
 	readonly committedStatements?: number;
 	readonly lastCommitEpoch?: bigint;
+	readonly lastCommitHlc?: DurableQueryOutcome['lastCommitHlc'];
 	readonly firstCommitStatementIndex?: number;
 	readonly lastCommitStatementIndex?: number;
 	readonly completedStatements?: number;
 	readonly statementIndex?: number;
+	readonly serializationState?: string;
 	readonly cancelOutcome?: string;
 	readonly cancellationReason?: string;
 	readonly retryable?: boolean;
@@ -226,10 +240,12 @@ export class QueryTimeoutError extends KitError {
 		this.committed = outcome.committed;
 		this.committedStatements = outcome.committedStatements;
 		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.lastCommitHlc = outcome.lastCommitHlc;
 		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
 		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
 		this.completedStatements = outcome.completedStatements;
 		this.statementIndex = outcome.statementIndex;
+		this.serializationState = outcome.serializationState;
 		this.cancelOutcome = metadata.cancelOutcome;
 		this.cancellationReason = metadata.cancellationReason;
 		this.retryable = metadata.retryable;
@@ -242,10 +258,12 @@ export class CommitOutcomeError extends KitError {
 	readonly committed: boolean | null;
 	readonly committedStatements?: number;
 	readonly lastCommitEpoch?: bigint;
+	readonly lastCommitHlc?: DurableQueryOutcome['lastCommitHlc'];
 	readonly firstCommitStatementIndex?: number;
 	readonly lastCommitStatementIndex?: number;
 	readonly completedStatements?: number;
 	readonly statementIndex?: number;
+	readonly serializationState?: string;
 	readonly cancelOutcome?: string;
 	readonly cancellationReason?: string;
 	readonly retryable?: boolean;
@@ -258,10 +276,12 @@ export class CommitOutcomeError extends KitError {
 		this.committed = outcome.committed;
 		this.committedStatements = outcome.committedStatements;
 		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.lastCommitHlc = outcome.lastCommitHlc;
 		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
 		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
 		this.completedStatements = outcome.completedStatements;
 		this.statementIndex = outcome.statementIndex;
+		this.serializationState = outcome.serializationState;
 		this.cancelOutcome = metadata.cancelOutcome;
 		this.cancellationReason = metadata.cancellationReason;
 		this.retryable = metadata.retryable;
@@ -275,10 +295,12 @@ export class QueryExecutionError extends KitError {
 	readonly committed: boolean | null;
 	readonly committedStatements?: number;
 	readonly lastCommitEpoch?: bigint;
+	readonly lastCommitHlc?: DurableQueryOutcome['lastCommitHlc'];
 	readonly firstCommitStatementIndex?: number;
 	readonly lastCommitStatementIndex?: number;
 	readonly completedStatements?: number;
 	readonly statementIndex?: number;
+	readonly serializationState?: string;
 	readonly cancelOutcome?: string;
 	readonly cancellationReason?: string;
 	readonly retryable?: boolean;
@@ -292,10 +314,12 @@ export class QueryExecutionError extends KitError {
 		this.committed = outcome.committed;
 		this.committedStatements = outcome.committedStatements;
 		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.lastCommitHlc = outcome.lastCommitHlc;
 		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
 		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
 		this.completedStatements = outcome.completedStatements;
 		this.statementIndex = outcome.statementIndex;
+		this.serializationState = outcome.serializationState;
 		this.cancelOutcome = metadata.cancelOutcome;
 		this.cancellationReason = metadata.cancellationReason;
 		this.retryable = metadata.retryable;
@@ -326,10 +350,12 @@ export class ResultLimitExceededError extends KitError {
 	readonly committed: boolean | null;
 	readonly committedStatements?: number;
 	readonly lastCommitEpoch?: bigint;
+	readonly lastCommitHlc?: DurableQueryOutcome['lastCommitHlc'];
 	readonly firstCommitStatementIndex?: number;
 	readonly lastCommitStatementIndex?: number;
 	readonly completedStatements?: number;
 	readonly statementIndex?: number;
+	readonly serializationState?: string;
 	readonly cancelOutcome?: string;
 	readonly cancellationReason?: string;
 	readonly retryable?: boolean;
@@ -342,10 +368,12 @@ export class ResultLimitExceededError extends KitError {
 		this.committed = outcome.committed;
 		this.committedStatements = outcome.committedStatements;
 		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.lastCommitHlc = outcome.lastCommitHlc;
 		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
 		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
 		this.completedStatements = outcome.completedStatements;
 		this.statementIndex = outcome.statementIndex;
+		this.serializationState = outcome.serializationState;
 		this.cancelOutcome = metadata.cancelOutcome;
 		this.cancellationReason = metadata.cancellationReason;
 		this.retryable = metadata.retryable;
@@ -358,10 +386,12 @@ export class SerializationError extends KitError {
 	readonly committed: boolean | null;
 	readonly committedStatements?: number;
 	readonly lastCommitEpoch?: bigint;
+	readonly lastCommitHlc?: DurableQueryOutcome['lastCommitHlc'];
 	readonly firstCommitStatementIndex?: number;
 	readonly lastCommitStatementIndex?: number;
 	readonly completedStatements?: number;
 	readonly statementIndex?: number;
+	readonly serializationState?: string;
 	readonly cancelOutcome?: string;
 	readonly cancellationReason?: string;
 	readonly retryable?: boolean;
@@ -374,10 +404,12 @@ export class SerializationError extends KitError {
 		this.committed = outcome.committed;
 		this.committedStatements = outcome.committedStatements;
 		this.lastCommitEpoch = outcome.lastCommitEpoch;
+		this.lastCommitHlc = outcome.lastCommitHlc;
 		this.firstCommitStatementIndex = outcome.firstCommitStatementIndex;
 		this.lastCommitStatementIndex = outcome.lastCommitStatementIndex;
 		this.completedStatements = outcome.completedStatements;
 		this.statementIndex = outcome.statementIndex;
+		this.serializationState = outcome.serializationState;
 		this.cancelOutcome = metadata.cancelOutcome;
 		this.cancellationReason = metadata.cancellationReason;
 		this.retryable = metadata.retryable;

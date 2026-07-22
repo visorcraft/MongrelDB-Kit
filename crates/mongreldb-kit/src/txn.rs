@@ -392,6 +392,7 @@ impl<'a> Transaction<'a> {
         let core_row = CoreRow {
             row_id,
             committed_epoch: Epoch(0),
+            commit_ts: None,
             columns: merged_cells.into_iter().collect(),
             deleted: false,
         };
@@ -930,6 +931,76 @@ impl<'a> Transaction<'a> {
         hits.into_iter()
             .map(|hit| crate::search::core_hit_to_kit(hit, t))
             .collect()
+    }
+
+    /// Embed `text` with the active semantic identity for `embedding_column`
+    /// and run ANN retrieval (P0.7 / engine `retrieve_text`, 0.64+).
+    ///
+    /// Does **not** include uncommitted staged rows; commit first if needed.
+    pub fn retrieve_text(
+        &self,
+        table: &str,
+        embedding_column: &str,
+        text: &str,
+        k: usize,
+    ) -> Result<crate::search::TextRetrieveResult> {
+        if self.has_staged_for(table) {
+            return Err(KitError::Validation(
+                "retrieve_text does not include uncommitted staged rows; commit first".into(),
+            ));
+        }
+        if k == 0 {
+            return Err(KitError::Validation(
+                "retrieve_text k must be greater than zero".into(),
+            ));
+        }
+        let t = self.require_table(table)?;
+        let column_id = crate::search::resolve_column_id(t, embedding_column)?;
+        let retrieved = self
+            .db
+            .core_db()
+            .retrieve_text(
+                table,
+                column_id,
+                text,
+                mongreldb_core::TextSearchOptions::new(k),
+            )
+            .map_err(KitError::from)?;
+        let hits = retrieved
+            .hits
+            .into_iter()
+            .map(|hit| {
+                let (score_kind, score_value) = match hit.score {
+                    mongreldb_core::query::RetrieverScore::AnnHammingDistance(d) => {
+                        ("ann_hamming_distance".into(), f64::from(d))
+                    }
+                    mongreldb_core::query::RetrieverScore::AnnCosineDistance(d) => {
+                        ("ann_cosine_distance".into(), f64::from(d))
+                    }
+                    mongreldb_core::query::RetrieverScore::SparseDotProduct(v) => {
+                        ("sparse_dot_product".into(), v)
+                    }
+                    mongreldb_core::query::RetrieverScore::MinHashEstimatedJaccard(v) => {
+                        ("minhash_estimated_jaccard".into(), f64::from(v))
+                    }
+                };
+                crate::search::TextRetrieveHit {
+                    row_id: hit.row_id.0,
+                    rank: hit.rank,
+                    score_kind,
+                    score_value,
+                }
+            })
+            .collect();
+        Ok(crate::search::TextRetrieveResult {
+            hits,
+            provenance: crate::search::TextRetrieveProvenance {
+                embedding_column: embedding_column.to_owned(),
+                provider_registry_generation: retrieved.provenance.provider_registry_generation,
+                query_source_fingerprint: retrieved.provenance.query_source_fingerprint,
+                semantic_identity: retrieved.provenance.semantic_identity,
+            },
+        })
     }
 
     /// Learned-sparse (SPLADE-style) retrieval: return the `k` rows whose

@@ -884,6 +884,22 @@ class Transaction:
         rows = self._handle.ann_search(table, column, [float(x) for x in query], k)
         return [json.loads(r) for r in rows]
 
+    def retrieve_text(
+        self,
+        table: str,
+        embedding_column: str,
+        text: str,
+        k: int = 10,
+    ) -> dict[str, Any]:
+        """Embed ``text`` with the active semantic identity for
+        ``embedding_column`` and run ANN retrieval (0.64+).
+
+        Returns ``{"hits": [...], "provenance": {...}}``. Does not include
+        uncommitted staged rows — commit first if needed.
+        """
+        raw = self._handle.retrieve_text(table, embedding_column, text, k)
+        return json.loads(raw)
+
     def sparse_match(
         self,
         table: str,
