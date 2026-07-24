@@ -6,7 +6,7 @@ This guide shows how to define a schema, run migrations, and perform CRUD with t
 
 ```toml
 [dependencies]
-mongreldb-kit = "0.64.5"
+mongreldb-kit = "0.64.6"
 serde_json = "1"
 ```
 
