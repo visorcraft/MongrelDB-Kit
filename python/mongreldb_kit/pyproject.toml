@@ -1,6 +1,6 @@
 [project]
 name = "mongreldb-kit"
-version = "0.64.7"
+version = "0.64.8"
 description = "Python bindings for MongrelDB Kit — the application-facing persistence layer (schema model, migrations, relational constraints, query APIs, embedded SQL, storage tuning) for MongrelDB. Runs the columnar engine in-process via PyO3."
 readme = "../../README.md"
 requires-python = ">=3.10"
