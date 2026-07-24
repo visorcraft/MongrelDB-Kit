@@ -109,13 +109,16 @@ const publishedPosts = db
 const titles = db.selectFrom(posts).select([posts.title]).executeSync();
 
 // ---------------------------------------------------------------------------
-// Update
+// Update — partial patch only (omit keys you do not change)
 // ---------------------------------------------------------------------------
 
 db.updateTable(posts)
   .set({ published: true })
   .where(eq(posts.id, post.id))
   .executeSync();
+// set() sanitizes then merges onto the stored row: omit = leave unchanged,
+// null = SQL NULL, undefined = omit. Prefer partial patches over full-row spreads.
+// See docs/query-builder.md.
 
 // ---------------------------------------------------------------------------
 // Delete
@@ -176,9 +179,10 @@ db.insertInto(table).values({ ... }).executeSync();
 db.insertInto(table).valuesMany([{ ... }, { ... }]).executeSync();
 ```
 
-Update:
+Update (partial patch — omit unchanged columns; `null` → SQL NULL; `undefined` → omit):
 ```ts
-db.updateTable(table).set({ ... }).where(predicate).executeSync();
+db.updateTable(table).set({ status: 'shipped' }).where(predicate).executeSync();
+// Avoid full-row spreads; prefer true partial patches.
 ```
 
 Delete:

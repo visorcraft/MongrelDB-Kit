@@ -232,6 +232,38 @@ const updated = db
 table. Columns produced by `nowDefault()` are refreshed on update unless you set them
 explicitly. Unique, primary-key, and foreign-key guards are re-checked for the new values.
 
+#### Partial patch only — the normal update API
+
+`set(patch)` is a **partial** patch. Every update runs a modular pipeline
+(sanitize → merge onto the stored row → write). Put **only** the columns you intend to change:
+
+| Patch key | Effect |
+| --- | --- |
+| **Omitted** | Column keeps its current stored value |
+| Present with a value | Column is updated to that value |
+| Present with `null` | Column is written as SQL `NULL` (clear nullable columns this way) |
+| Present with `undefined` | **Treated as omit** — key is dropped before merge; column is unchanged |
+
+```ts
+// Correct: only status changes; customer_id, amount, … stay as stored.
+db.updateTable(orders).set({ status: 'shipped' }).where(eq(orders.id, id)).executeSync();
+
+// Clear a nullable note
+db.updateTable(orders).set({ note: null }).where(eq(orders.id, id)).executeSync();
+
+// undefined is omit (safe if a sparse object carries undefined fields)
+db.updateTable(orders)
+  .set({ status: 'shipped', note: undefined })
+  .where(eq(orders.id, id))
+  .executeSync();
+// note is left as stored; only status changes.
+```
+
+Spreading a full existing row into `set({ ...existing, ...partial })` is still an
+**anti-pattern** (unnecessary; Kit already merges), but accidental `undefined`
+fields in that object no longer wipe columns — only explicit `null` clears them.
+There is no separate full-row replace API; `set` is always partial merge.
+
 ### Delete - returns a `bigint` count
 
 `deleteFrom(table).where(predicate).executeSync()` returns the number of matched rows as a

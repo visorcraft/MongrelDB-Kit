@@ -113,6 +113,34 @@ const rows = db.updateTable(customers)
 `Update<T>` does not encode insert defaults - those apply on insert only. See
 [Defaults & sequences](./defaults.md) for exactly which defaults (if any) are touched on update.
 
+### Omit vs `null` / `undefined` in `set(patch)`
+
+`updateTable(...).set(patch)` is a **partial** merge onto the stored row (see
+[Query builder → Update](./query-builder.md#update---returns-the-updated-row)).
+The product pipeline is **sanitize → merge → write** (`updatePatch` module):
+
+- **Omit** a key to leave that column unchanged.
+- Set a key to **`null`** to store SQL `NULL` (only way to clear a column).
+- Set a key to **`undefined`** — treated as **omit** (dropped before merge); the column is unchanged.
+- Spreading a full existing row into `set({ ...existing, ...partial })` remains an
+  **anti-pattern** (Kit already merges). Accidental `undefined` fields in that
+  object no longer null columns out; still prefer a true partial patch.
+
+```ts
+// Good
+db.updateTable(customers).set({ tier: 'pro' }).where(eq(customers.id, id)).executeSync();
+
+// Clears a nullable note
+db.updateTable(customers).set({ note: null }).where(eq(customers.id, id)).executeSync();
+
+// undefined does not clear
+db.updateTable(customers).set({ note: undefined }).where(eq(customers.id, id)).executeSync();
+// note stays as stored
+
+// Prefer partial over full-row spread
+// Avoid: set({ ...row, tier: 'pro' })
+```
+
 ## How the builder returns these types
 
 The CRUD entry points are generic over the table, so results carry the inferred types end to end -

@@ -32,6 +32,10 @@ import { encodedPk } from './keys.js';
 import { packRows, packRowIds } from './packing.js';
 import type { Schema } from './schema.js';
 import { rowFromRowJs } from './rows.js';
+import {
+	prepareMergedUpdateRow,
+	patchTouchesForeignKeys
+} from './updatePatch.js';
 
 declare module './db.js' {
 	interface KitDatabase {
@@ -1133,30 +1137,12 @@ function prepareInsertRowSync(
 	return withDefaults;
 }
 
-function applyUpdateDefaults(
-	table: TableSpec,
-	merged: Record<string, unknown>,
-	patch: Record<string, unknown>,
-	ctx: DefaultContext
-): void {
-	for (const col of table.columns) {
-		if (patch[col.name] !== undefined) continue;
-		// Only `generated: 'now'` columns are write-managed timestamps that refresh
-		// on every update (e.g. updatedAt). A plain `default: nowDefault()` is an
-		// insert-time value (e.g. createdAt) and must NOT change on update.
-		if (col.generated === 'now') {
-			merged[col.name] = ctx.now;
-		}
-	}
-}
-
-function hasForeignKeyChange(table: TableSpec, patch: Record<string, unknown>): boolean {
-	return table.foreignKeys.some((fk) => fk.columns.some((colName) => patch[colName] !== undefined));
-}
-
 /**
  * Apply `patch` to `existingRow` inside `txn`, updating guards and foreign-key
  * touches as needed. Returns the merged row.
+ *
+ * Patch semantics live in {@link prepareMergedUpdateRow} (sanitize → merge →
+ * timestamp defaults). This helper only owns the transactional write + guards.
  */
 function uniqueConstraintChanged(
 	uq: { name: string; columns: string[] },
@@ -1174,8 +1160,12 @@ function applyUpdateInTxn(
 	existingRowId: bigint,
 	patch: Record<string, unknown>
 ): Record<string, unknown> {
-	const merged = { ...existingRow, ...patch };
-	applyUpdateDefaults(table, merged, patch, makeDefaultContext());
+	const { sanitizedPatch, merged } = prepareMergedUpdateRow(
+		table,
+		existingRow,
+		patch,
+		makeDefaultContext()
+	);
 	validateRow(table, merged);
 	const oldPkValue = pkValueFromRow(table, existingRow);
 	const newPkValue = pkValueFromRow(table, merged);
@@ -1193,7 +1183,7 @@ function applyUpdateInTxn(
 	if (pkChanged) {
 		deletePkGuard(kit, txn, table, oldPkValue);
 	}
-	if (hasForeignKeyChange(table, patch)) {
+	if (patchTouchesForeignKeys(table, sanitizedPatch)) {
 		enforceForeignKeys(kit, txn, table, merged);
 	}
 	txn.delete(table.name, existingRowId);
