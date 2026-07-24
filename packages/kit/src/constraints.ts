@@ -176,6 +176,16 @@ function buildParentPk(
 
 function equalityCondition(col: ColumnSpec, value: unknown) {
 	if (col.storageType === 'int64') {
+		// Prefer PkInt64 when this column is the sole primary key (HOT path).
+		// Callers that need FK/secondary equality keep RangeInt via makeEqCondition;
+		// findByPk always targets the PK column, so PkInt64 is correct here.
+		if (col.primaryKey) {
+			return {
+				kind: ConditionKind.PkInt64,
+				columnId: col.id,
+				int64Lo: value as bigint
+			};
+		}
 		return {
 			kind: ConditionKind.RangeInt,
 			columnId: col.id,

@@ -387,11 +387,29 @@ function isBitmapTextColumn(column: ColumnSpec): boolean {
 	);
 }
 
+function isPrimaryKeyColumn(table: TableSpec, column: ColumnSpec): boolean {
+	return table.primaryKey.length === 1 && table.primaryKey[0] === column.name;
+}
+
 function makeEqCondition(table: TableSpec, column: ColumnSpec, value: unknown): ConditionSpec | null {
 	if (value === null || value === undefined) return null;
 
 	if (column.storageType === 'int64') {
 		if (typeof value !== 'bigint') return null;
+		// Prefer the native HOT PK path for single-column int primary keys.
+		// RangeInt on the id column can miss a live row when HOT/run plans
+		// desync; PkInt64 encodes the key as big-endian i64 bytes matching
+		// the engine HOT map.
+		if (isPrimaryKeyColumn(table, column)) {
+			return {
+				kind: ConditionKind.PkInt64,
+				columnId: column.id,
+				int64Lo: value
+			};
+		}
+		// Secondary int64 equality (owner_id, trip_id, …): still RangeInt.
+		// Engine dual-sources Bitmap on point RangeInt so maintained Bitmap
+		// membership keeps list-by-FK correct after delete+put updates.
 		return {
 			kind: ConditionKind.RangeInt,
 			columnId: column.id,

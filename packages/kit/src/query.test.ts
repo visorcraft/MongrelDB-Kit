@@ -177,7 +177,7 @@ describe('query builder', () => {
 		});
 	});
 
-	it('pushes single-column integer primary-key equality through the native range path', () => {
+	it('pushes single-column integer primary-key equality through the native HOT path (PkInt64)', () => {
 		withDbSync((db) => {
 			db.insertInto(users).values({ id: 1n, email: 'one@example.com' }).executeSync();
 			db.insertInto(users).values({ id: 2n, email: 'two@example.com' }).executeSync();
@@ -188,8 +188,9 @@ describe('query builder', () => {
 				expect(rows[0].email).toBe('one@example.com');
 				expect(trace.queryCalls()).toBe(1);
 				expect(trace.conditions()[0]).toHaveLength(1);
+				// Prefer HOT (PkInt64) over RangeInt so PK desync cannot hide live rows.
 				expect((trace.conditions()[0]![0] as { kind: ConditionKind }).kind).toBe(
-					ConditionKind.RangeInt
+					ConditionKind.PkInt64
 				);
 			} finally {
 				trace.restore();

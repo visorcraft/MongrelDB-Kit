@@ -60,6 +60,29 @@ function seedThree(db: KitDatabase) {
 		.executeSync();
 }
 
+const trips = table('trips', {
+	columns: [
+		int('id', { primaryKey: true }),
+		int('owner_id', { nullable: false }),
+		text('name', { nullable: true })
+	],
+	primaryKey: ['id'],
+	indexes: [index(['owner_id'], { name: 'trips_owner_idx' })]
+});
+
+const tripsSchema = new Schema([trips]);
+
+function withTripsDb(fn: (db: KitDatabase) => void): void {
+	const dir = makeTempDir();
+	const db = KitDatabase.openSync(dir, tripsSchema);
+	try {
+		fn(db);
+	} finally {
+		db.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 describe('secondary index after updateTable.set', () => {
 	it('partial set keeps the row listable by the unchanged trip_id index', () => {
 		withDb((db) => {
@@ -225,5 +248,49 @@ describe('secondary index after updateTable.set', () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe('trips owner list after updates (Roamarr regression)', () => {
+	it('lists both trips by owner_id after many title-only updates', () => {
+		withTripsDb((db) => {
+			db.insertInto(trips)
+				.values({ id: 1n, owner_id: 1n, name: 'August' })
+				.executeSync();
+			db.insertInto(trips)
+				.values({ id: 2n, owner_id: 1n, name: 'December' })
+				.executeSync();
+
+			const listOwner = () =>
+				db
+					.selectFrom(trips)
+					.where(eq(trips.owner_id, 1n))
+					.executeSync()
+					.map((r) => r.id)
+					.sort();
+
+			expect(listOwner()).toEqual([1n, 2n]);
+
+			for (const name of ['August v2', 'August v3', 'August final']) {
+				db.updateTable(trips).set({ name }).where(eq(trips.id, 1n)).executeSync();
+			}
+
+			expect(listOwner()).toEqual([1n, 2n]);
+			expect(
+				db.selectFrom(trips).where(eq(trips.id, 1n)).executeSync()[0].name
+			).toBe('August final');
+			expect(db.selectFrom(trips).where(eq(trips.id, 2n)).executeSync()).toHaveLength(1);
+		});
+	});
+
+	it('int primary key eq uses PkInt64 (HOT), not only RangeInt', () => {
+		withTripsDb((db) => {
+			db.insertInto(trips)
+				.values({ id: 42n, owner_id: 9n, name: 'solo' })
+				.executeSync();
+			const plan = db.selectFrom(trips).where(eq(trips.id, 42n)).explain();
+			expect(plan.pushedConditions).toContain('PkInt64');
+			expect(db.selectFrom(trips).where(eq(trips.id, 42n)).executeSync()).toHaveLength(1);
+		});
 	});
 });
