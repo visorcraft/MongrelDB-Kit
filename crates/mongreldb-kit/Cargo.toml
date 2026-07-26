@@ -11,10 +11,10 @@ categories = ["database"]
 [dependencies]
 bincode = "1"
 mongreldb-kit-core = { path = "../mongreldb-kit-core", version = "0.64.11" }
-mongreldb-core = { version = "0.64.10", features = ["encryption"] }
+mongreldb-core = { version = "0.64.11", features = ["encryption"] }
 # SQL frontend — powers `Database::sql()` / `sql_arrow()` (read path, views,
 # `ANALYZE`/`VACUUM`-equivalent helpers). Published from the engine repo.
-mongreldb-query = "0.64.10"
+mongreldb-query = "0.64.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"

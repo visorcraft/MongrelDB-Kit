@@ -47,7 +47,7 @@
 		"apache-arrow": "^21.1.0"
 	},
 	"peerDependencies": {
-		"@visorcraft/mongreldb": "^0.64.10"
+		"@visorcraft/mongreldb": "^0.64.11"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
