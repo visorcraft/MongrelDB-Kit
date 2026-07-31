@@ -187,6 +187,12 @@ jobs:
 
   python-integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The published wheel is cp310-abi3 (CPython 3.10+); test the newest
+        # supported interpreters so 3.12/3.13/3.14 support stays real.
+        python-version: ['3.12', '3.13', '3.14']
     steps:
       - name: Checkout kit
         uses: actions/checkout@v7
@@ -210,6 +216,11 @@ jobs:
         with:
           workspaces: MongrelDB-Kit
           key: python-integration
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
 
       - name: Python build (PyO3) + tests
         working-directory: MongrelDB-Kit

@@ -207,18 +207,24 @@ jobs:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             manylinux: auto
+            # One sdist is enough for PyPI; build it on the primary leg.
+            sdist: true
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             manylinux: auto
+            sdist: false
           - runner: macos-14
             target: aarch64-apple-darwin
             manylinux: ''
+            sdist: false
           - runner: macos-15
             target: x86_64-apple-darwin
             manylinux: ''
+            sdist: false
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             manylinux: ''
+            sdist: false
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -238,11 +244,15 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --find-interpreter
           manylinux: ${{ matrix.manylinux }}
+          sdist: ${{ matrix.sdist }}
           working-directory: python/mongreldb_kit
-          # `--find-interpreter` is required for the manylinux docker builds:
-          # actions/setup-python only provisions the host runner, so in the
-          # containerized Linux build maturin must discover the CPython
-          # interpreters under /opt/python itself. On macOS/Windows (host
+          # The extension is built with PyO3 abi3-py310, so each platform
+          # produces ONE cp310-abi3 wheel that runs on CPython 3.10+ (3.12,
+          # 3.13, 3.14 included) — no per-interpreter matrix needed.
+          # `--find-interpreter` is still required for the manylinux docker
+          # builds: actions/setup-python only provisions the host runner, so
+          # in the containerized Linux build maturin must discover a CPython
+          # interpreter under /opt/python itself. On macOS/Windows (host
           # builds) it picks up the setup-python interpreter. Wheels land in
           # the cargo workspace's target/wheels (repo root), not under the
           # working-directory. The PyO3 module pulls mongreldb-kit +
@@ -253,7 +263,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.target }}
-          path: target/wheels/*.whl
+          # `*` (not `*.whl`) so the sdist tarball from the sdist leg is
+          # uploaded too; legs without an sdist only match their wheel.
+          path: target/wheels/*
           if-no-files-found: error
 
   publish-python-to-pypi:
