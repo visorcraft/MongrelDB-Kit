@@ -182,6 +182,11 @@ rtk .venv/bin/pytest ../../python/tests ../../tests/conformance/python
 rtk cargo run -p mongreldb-kit-cli -- --help
 ```
 
+## Related tools
+
+- [Mongrel](https://visorcraft.com/mongreldb) — Commercial multi-system workbench with native MongrelDB support.
+- [MongrelDB Viewer](https://github.com/visorcraft/MongrelDB-Viewer) — Free, open-source MongrelDB GUI and MCP server.
+
 ## License
 
 MIT OR Apache-2.0
