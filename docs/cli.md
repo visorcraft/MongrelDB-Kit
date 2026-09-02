@@ -58,8 +58,9 @@ the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 | `fixture load <path> <fixture.json>` | Load rows from a JSON fixture |
 | `procedure install\|drop\|list\|describe\|call` | Manage stored procedures |
 | `compact <path>` | Merge all tables' sorted runs into one (maintenance) |
+| `checkpoint <path>` | Flush, compact, and drop rotated WAL segments (engine `checkpoint`) |
 | `analyze <path>` | Rebuild index statistics for every table (engine `ANALYZE`) |
-| `vacuum <path>` | Reclaim space: compact every table, then gc (engine `VACUUM`) |
+| `vacuum <path>` | Reclaim space: compact every table, then gc (engine `VACUUM`; does not rotate the WAL) |
 | `rename-table <path> <from> <to>` | Rename a live table (engine + kit schema catalog) |
 | `sql <path> <statement>` | Run a SQL statement (read returns rows as JSON; DDL/DML returns `[]`) |
 | `view create <path> <view.json>` \| `view drop <path> <name>` | Create/drop a SQL view (session-scoped; see [SQL views](./migrations.md#sql-views)) |
@@ -200,11 +201,18 @@ mongreldb-kit sql ./store.kitdb "VACUUM"
 
 `analyze` and `vacuum` are convenience wrappers for the engine's `ANALYZE`
 (rebuild index statistics) and `VACUUM` (compact + gc) maintenance commands.
+`vacuum` does **not** rotate the WAL. `checkpoint` force-flushes every table
+(including the mutable-run tier), compacts, and drops rotated WAL segments so
+the next open replays only a small active segment (MongrelDB 0.64.18+).
+Startup WAL recovery is unlimited by default; set
+`MONGRELDB_MAX_RECOVERY_WAL_BYTES` and/or `MONGRELDB_MAX_RECOVERY_WAL_RECORDS`
+before the command to fail closed (`0` or unset = unlimited).
 `rename-table` durably renames a table and updates the kit schema catalog.
 
 ```sh
 mongreldb-kit analyze ./store.kitdb            # "analyzed all tables"
 mongreldb-kit vacuum ./store.kitdb             # "reclaimed N run(s)"
+mongreldb-kit checkpoint ./store.kitdb         # "checkpointed ./store.kitdb"
 mongreldb-kit rename-table ./store.kitdb widgets things
 ```
 

@@ -397,6 +397,13 @@ statements, the result cache) persist across calls - mirroring a long-lived
 database connection. After a migration that creates or drops tables, call
 `refresh_sql_session` so the session sees the new table set.
 
+`vacuum()` is compact+gc and does **not** rotate the WAL. `checkpoint()`
+force-flushes the mutable-run tier, compacts, and replaces the WAL with a
+fresh empty active segment (MongrelDB 0.64.18+). Startup WAL recovery is
+unlimited by default; set `MONGRELDB_MAX_RECOVERY_WAL_BYTES` and/or
+`MONGRELDB_MAX_RECOVERY_WAL_RECORDS` before open to fail closed (`0` or unset
+= unlimited).
+
 ```rust
 use mongreldb_kit::{Database, ViewSpec};
 use mongreldb_kit_core::MigrationOp;
@@ -412,7 +419,8 @@ db.sql_rows("SELECT * FROM active")?; // queries the view
 
 // Maintenance (the engine's ANALYZE / VACUUM equivalents).
 db.analyze()?;          // ensure_indexes_complete() on every table
-let reclaimed = db.vacuum()?; // compact_all() + gc()
+let reclaimed = db.vacuum()?; // compact_all() + gc(); does not rotate the WAL
+db.checkpoint()?;       // flush + compact + drop rotated WAL (0.64.18+)
 
 // Rename a table (engine + kit schema catalog + persisted).
 db.rename_table("widgets", "things")?;

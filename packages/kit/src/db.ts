@@ -1132,7 +1132,12 @@ export class KitDatabase {
 		return this.db.compactTable(table);
 	}
 
-	/** Flush every table, compact, and drop rotated WAL segments. */
+	/**
+	 * Flush every table (memtable and mutable run), compact, and drop rotated
+	 * WAL segments so the next open replays only a small active segment.
+	 * Requires MongrelDB 0.64.18+. Credential-enforced databases need `Ddl`.
+	 * `vacuum()` / `compactAll()` do not rotate the WAL.
+	 */
 	checkpoint(): void {
 		const native = this.db as typeof this.db & { checkpoint?: () => void };
 		if (typeof native.checkpoint !== 'function') {
@@ -1151,7 +1156,8 @@ export class KitDatabase {
 
 	/** Reclaim space across all tables (the engine's `VACUUM` equivalent:
 	 * compact every sorted run, then gc). Routes through the SQL surface for
-	 * parity with the engine's own definition. Safe to run at any time. */
+	 * parity with the engine's own definition. Safe to run at any time.
+	 * Does not rotate the WAL; use {@link checkpoint} to bound recovery. */
 	async vacuum(): Promise<void> {
 		await this.sql('VACUUM');
 	}
@@ -1202,6 +1208,14 @@ export class KitDatabase {
 	 */
 	async compactAllAsync(): Promise<{ compacted: number; skipped: number }> {
 		return Promise.resolve(this.db.compactAll());
+	}
+
+	/**
+	 * Async twin of {@link checkpoint}. Same caveat as
+	 * {@link compactAllAsync}: no native async variant; the call blocks.
+	 */
+	async checkpointAsync(): Promise<void> {
+		return Promise.resolve(this.checkpoint());
 	}
 
 	/**

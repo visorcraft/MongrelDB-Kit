@@ -322,6 +322,8 @@ enum Command {
     Procedure(ProcedureCmd),
     /// Compact all tables — merge sorted runs into one for flat query latency.
     Compact { path: PathBuf },
+    /// Flush, compact, and drop rotated WAL segments (engine checkpoint).
+    Checkpoint { path: PathBuf },
     /// Rebuild index statistics for every table (engine ANALYZE).
     Analyze { path: PathBuf },
     /// Reclaim space: compact every table, then gc (engine VACUUM).
@@ -678,6 +680,7 @@ fn main() -> Result<()> {
             }
         },
         Command::Compact { path } => cmd_compact(&path, creds.as_ref()),
+        Command::Checkpoint { path } => cmd_checkpoint(&path, creds.as_ref()),
         Command::Analyze { path } => cmd_analyze(&path, creds.as_ref()),
         Command::Vacuum { path } => cmd_vacuum(&path, creds.as_ref()),
         Command::RenameTable { path, from, to } => {
@@ -812,6 +815,13 @@ fn cmd_compact(path: &Path, creds: Option<&Credentials>) -> Result<()> {
     let db = open_db(path, creds)?;
     let (compacted, skipped) = db.compact_all().context("compaction failed")?;
     println!("compacted {compacted} table(s), skipped {skipped}");
+    Ok(())
+}
+
+fn cmd_checkpoint(path: &Path, creds: Option<&Credentials>) -> Result<()> {
+    let db = open_db(path, creds)?;
+    db.checkpoint().context("checkpoint failed")?;
+    println!("checkpointed {}", path.display());
     Ok(())
 }
 

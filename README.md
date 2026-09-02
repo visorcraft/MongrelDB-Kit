@@ -31,6 +31,7 @@
 - Migration runner with content-addressed checksums, stored schema catalog, table renames, and SQL views.
 - Embedded SQL surface (sql / sqlArrow / sqlRows) with recursive CTEs, window functions, CREATE TABLE AS SELECT, materialized views, multi-statement execution, and a mongreldb_fts_rank relevance-scoring UDF.
 - Storage tuning (spill thresholds, compaction zstd, result-cache sizing, index build policy), trigger config, and per-table introspection (run count, page-cache stats, memtable/cache lengths).
+- Maintenance: `analyze` / `vacuum` (compact+gc) and `checkpoint()` to flush, compact, and drop rotated WAL segments so recovery stays bounded (MongrelDB 0.64.18+).
 - BinarySign and full-f32 Dense ANN schema options, plus durable online
   create/replace index jobs with status, cancellation, resume, and wait APIs
   in Rust, TypeScript, and Python.

@@ -1,6 +1,6 @@
 """Tests for the kit's administrative/lifecycle methods: rename_table,
-compact_all/compact_table, analyze, vacuum, and the SQL read surface
-(sql_rows / sql_arrow).
+compact_all/compact_table, analyze, vacuum, checkpoint, and the SQL read
+surface (sql_rows / sql_arrow).
 
 These mirror the Rust integration tests in crates/mongreldb-kit/tests/integration.rs
 and the TypeScript db.test.ts suite, pinning cross-language parity.
@@ -85,6 +85,16 @@ def test_analyze_and_vacuum_run_without_error():
     db.analyze()  # ensure_indexes_complete on every table; no return
     reclaimed = db.vacuum()  # compact_all + gc
     assert isinstance(reclaimed, py_int)
+    db.close()
+
+
+def test_checkpoint_keeps_committed_rows():
+    db = make_db()
+    with db.begin() as txn:
+        txn.insert("widgets", {"id": 1, "name": "w1"})
+    db.checkpoint()
+    rows = db.sql_rows("SELECT id, name FROM widgets ORDER BY id")
+    assert rows == [{"id": 1, "name": "w1"}]
     db.close()
 
 

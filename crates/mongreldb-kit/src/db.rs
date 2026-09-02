@@ -1616,9 +1616,21 @@ impl Database {
     /// Reclaim space across all tables: compacts every table's sorted runs,
     /// then runs `gc`. Returns the count of reclaimed orphaned runs/files.
     /// Equivalent to the engine's `VACUUM`. Safe to run at any time.
+    ///
+    /// `VACUUM` does not rotate the WAL. Mutable-run data can keep WAL
+    /// segments alive. Use [`Self::checkpoint`] to flush, compact, and
+    /// replace the WAL with a fresh empty active segment.
     pub fn vacuum(&self) -> Result<usize> {
         self.inner.compact().map_err(KitError::from)?;
         self.inner.gc().map_err(KitError::from)
+    }
+
+    /// Flush every table (memtable and mutable run), compact, and drop
+    /// rotated WAL segments so the next open replays only a small active
+    /// segment. Requires MongrelDB 0.64.18+. Credential-enforced databases
+    /// need the `Ddl` permission.
+    pub fn checkpoint(&self) -> Result<()> {
+        self.inner.checkpoint().map_err(KitError::from)
     }
 
     /// Create a SQL view (`CREATE VIEW <name> AS <select>`). The engine

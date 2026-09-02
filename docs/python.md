@@ -452,7 +452,12 @@ retries the whole callback when a `ConflictError` (a retryable write-write confl
 (the engine's DataFusion frontend). The session is held for the database's
 lifetime, so session-scoped objects (views, prepared statements, the result
 cache) persist across calls. Maintenance helpers mirror the engine's `ANALYZE`
-and `VACUUM`, and `rename_table` updates the engine, the kit schema catalog,
+and `VACUUM`. `vacuum()` compact+gc does **not** rotate the WAL; `checkpoint()`
+force-flushes the mutable-run tier, compacts, and replaces the WAL with a fresh
+empty active segment (MongrelDB 0.64.18+). Startup WAL recovery is unlimited by
+default; set `MONGRELDB_MAX_RECOVERY_WAL_BYTES` and/or
+`MONGRELDB_MAX_RECOVERY_WAL_RECORDS` before open to fail closed (`0` or unset =
+unlimited). `rename_table` updates the engine, the kit schema catalog,
 and any referencing foreign keys.
 
 ```python
@@ -469,7 +474,8 @@ db.drop_view("active")
 next_id = db.reserve_auto_inc("orders")  # Optional[int]
 
 db.analyze()              # ensure_indexes_complete() on every table
-reclaimed = db.vacuum()   # compact_all() + gc(); returns the reclaimed-file count
+reclaimed = db.vacuum()   # compact_all() + gc(); does not rotate the WAL
+db.checkpoint()           # flush + compact + drop rotated WAL segments (0.64.18+)
 
 db.rename_table("widgets", "things")  # engine + schema catalog + persisted
 db.compact_all(); db.compact_table("things")

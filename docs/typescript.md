@@ -222,15 +222,24 @@ same builder - see the [Query builder](./query-builder.md) guide for the full su
   `updateTable`/`deleteFrom` builders. `updateWhere` returns the updated rows; `deleteWhere`
   returns the deleted count as a `bigint`.
 - `await db.analyze()` and `await db.vacuum()` rebuild index statistics and reclaim space (the
-  engine's `ANALYZE` / `VACUUM` equivalents), routing through the SQL surface.
+  engine's `ANALYZE` / `VACUUM` equivalents), routing through the SQL surface. `vacuum()`
+  compact+gc does **not** rotate the WAL.
+- `db.checkpoint()` (sync) and `await db.checkpointAsync()` flush every table including the
+  mutable-run tier, compact, and drop rotated WAL segments so the next open replays only a
+  small active segment. Requires MongrelDB 0.64.18+. Credential-enforced databases need `Ddl`.
+  Startup WAL recovery is unlimited by default; set `MONGRELDB_MAX_RECOVERY_WAL_BYTES` and/or
+  `MONGRELDB_MAX_RECOVERY_WAL_RECORDS` before open to fail closed (`0` or unset = unlimited).
+  See the engine [Maintenance](https://github.com/visorcraft/MongrelDB/blob/master/docs/09-maintenance.md)
+  guide.
 - **Async / non-blocking I/O:** the Kit wraps the addon's `spawn_blocking` async variants so hot
   read/write paths don't block the Node event loop: `db.putAsync(table, cells)`,
   `db.getAsync(table, rowId)`, `db.queryAsync(table, conditions)`, `db.countAsync(table)`,
   `db.countWhereAsync(table, conditions)`, `db.queryArrowAsync(table, conditions)`,
   `db.setSimilarityAsync(...)`, plus async twins of the maintenance methods (`flushAsync`,
-  `compactAllAsync`, `compactTableAsync`, `snapshotEpochAsync`, `approxAggregateAsync`).
+  `compactAllAsync`, `compactTableAsync`, `checkpointAsync`, `snapshotEpochAsync`,
+  `approxAggregateAsync`).
   **Caveat:** the maintenance twins where the addon has no native async variant
-  (`compactAllAsync`/`compactTableAsync`/`approxAggregateAsync`/`snapshotEpochAsync`) wrap the sync
+  (`compactAllAsync`/`compactTableAsync`/`checkpointAsync`/`approxAggregateAsync`/`snapshotEpochAsync`) wrap the sync
   call in a `Promise` - they match the async signature but still block; the `TableHandle` async
   methods (`putAsync`/`queryAsync`/…) are genuinely non-blocking. See
   [runTxn](./typescript.md#transactions) for an async transaction helper.

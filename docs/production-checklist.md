@@ -16,15 +16,33 @@ This checklist covers the basics of running MongrelDB Kit in production.
 MongrelDB stores data in a directory or file. Back up the resolved database path and the `attachments/` directory beside it.
 
 - Stop the application or use a filesystem snapshot for a consistent backup.
+- Before a cold copy, run `db.checkpoint()` / `mongreldb-kit checkpoint <path>` so the
+  WAL is a small empty active segment and recovery on restore is cheap.
 - Copy the data directory with `cp -a`, `rsync`, or a volume snapshot.
 - Test restores on a non-production instance.
 - Never reuse a backup with a different `ROAMARR_SECRET`; encrypted fields will be unrecoverable.
+
+## WAL recovery
+
+Opening a Kit database streams the write-ahead log. There is no default byte or
+record cap. A large WAL makes open slower; it does not fail open by itself.
+
+- Schedule `checkpoint()` (not only `vacuum()` / `compact`) if the `wal/`
+  directory grows. `VACUUM` compact+gc does not drop segments that still cover
+  mutable-run data.
+- Optional fail-closed caps, set in the process environment before open:
+  `MONGRELDB_MAX_RECOVERY_WAL_BYTES` and `MONGRELDB_MAX_RECOVERY_WAL_RECORDS`.
+  `0` or unset means unlimited. Exceeding a cap returns
+  `ResourceLimitExceeded`.
+- Details: engine
+  [Maintenance](https://github.com/visorcraft/MongrelDB/blob/master/docs/09-maintenance.md).
 
 ## Monitoring
 
 Monitor these signals:
 
-- Disk space on the database volume
+- Disk space on the database volume, including the `wal/` subdirectory
+- WAL segment count / size after checkpoint (a growing WAL is a maintenance gap, not a crash)
 - Migration lock age in `__kit_migration_locks`
 - Query latency for full-table scans (the kit materializes visible rows for unpushable filters)
 - Error rates by category: `DUPLICATE`, `FOREIGN_KEY`, `RESTRICT`, `VALIDATION`,

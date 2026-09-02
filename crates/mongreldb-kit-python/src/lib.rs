@@ -1363,8 +1363,15 @@ impl PyDatabase {
 
     /// Reclaim space across all tables: compact every sorted run, then gc.
     /// Returns the count of reclaimed orphaned runs/files. (Engine `VACUUM`.)
+    /// Does not rotate the WAL; use `checkpoint()` to bound recovery.
     fn vacuum(&self) -> PyResult<usize> {
         self.require_db()?.vacuum().map_err(map_err)
+    }
+
+    /// Flush every table, compact, and drop rotated WAL segments.
+    /// Requires MongrelDB 0.64.18+.
+    fn checkpoint(&self) -> PyResult<()> {
+        self.require_db()?.checkpoint().map_err(map_err)
     }
 
     /// Create a SQL view from a JSON spec `{"name": ..., "sql": "SELECT ..."}`.

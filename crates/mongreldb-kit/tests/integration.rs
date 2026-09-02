@@ -1871,3 +1871,25 @@ fn sql_surface_runs_ddl_and_views() {
     assert!(db.sql_rows("DROP VIEW active_users").is_ok());
     assert!(db.sql_rows("SELECT * FROM active_users").is_err());
 }
+
+#[test]
+fn checkpoint_keeps_committed_rows() {
+    let dir = temp_dir();
+    let db = Database::create(&dir, make_schema()).unwrap();
+    {
+        let mut txn = db.begin().unwrap();
+        insert_user(&mut txn, 1, "a@x.com");
+        txn.commit().unwrap();
+    }
+    db.checkpoint().unwrap();
+    let rows = db
+        .sql_rows("SELECT id, email FROM users ORDER BY id")
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![json!({"id": 1, "email": "a@x.com"})
+            .as_object()
+            .unwrap()
+            .clone()]
+    );
+}

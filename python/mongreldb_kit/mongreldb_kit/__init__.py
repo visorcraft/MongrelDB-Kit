@@ -317,9 +317,19 @@ class Database:
         """Reclaim space across all tables: compact every sorted run, then gc.
 
         Returns the count of reclaimed orphaned runs/files. Equivalent to the
-        engine's ``VACUUM``.
+        engine's ``VACUUM``. Does not rotate the WAL; call :meth:`checkpoint`
+        to bound recovery.
         """
         return self._handle.vacuum()
+
+    def checkpoint(self) -> None:
+        """Flush every table, compact, and drop rotated WAL segments.
+
+        After this, the next open replays only a small active WAL segment.
+        Requires MongrelDB 0.64.18+. Credential-enforced databases need the
+        ``Ddl`` permission.
+        """
+        self._handle.checkpoint()
 
     def create_view(self, name: str, sql: str) -> None:
         """Create a SQL view (``CREATE VIEW <name> AS <select>``).

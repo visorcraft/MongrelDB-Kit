@@ -510,6 +510,23 @@ describe('KitDatabase', () => {
 		}
 	});
 
+	it('checkpoint keeps committed rows', () => {
+		const users = table('users', {
+			columns: [int('id', { primaryKey: true }), text('name')],
+			primaryKey: 'id'
+		});
+		const dir = makeTempDir();
+		const db = KitDatabase.openSync(dir, new Schema([users]));
+		try {
+			db.insertInto(users).values({ id: 1n, name: 'ada' }).executeSync();
+			db.checkpoint();
+			expect(db.selectFrom(users).executeSync()).toEqual([{ id: 1n, name: 'ada' }]);
+		} finally {
+			db.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('incrementalAggregate returns exact count/sum/avg, with an optional filter', () => {
 		const t = table('t', {
 			columns: [int('id', { primaryKey: true }), real('amount')],
