@@ -3607,7 +3607,7 @@ fn decode_cells(cells: &[Value], id_to_name: &HashMap<u16, String>) -> Result<Ma
         ));
     }
     let mut out = Map::new();
-    for pair in cells.chunks_exact(2) {
+    for pair in cells.as_chunks::<2>().0 {
         let id = pair[0]
             .as_u64()
             .and_then(|id| u16::try_from(id).ok())
@@ -3935,7 +3935,7 @@ fn decode_returning_row(
         ));
     }
     let mut out = Map::new();
-    for pair in row.chunks_exact(2) {
+    for pair in row.as_chunks::<2>().0 {
         let id = pair[0]
             .as_u64()
             .and_then(|id| u16::try_from(id).ok())
@@ -4708,7 +4708,7 @@ fn validate_procedure_call_response(response: Value, operation: &str) -> Result<
         &["status", "committed", "epoch", "epoch_text", "result"],
         "procedure call response",
     )
-    .map_err(&invalid)?;
+    .map_err(invalid)?;
     let committed = response["committed"]
         .as_bool()
         .ok_or_else(|| invalid("procedure call committed field is invalid".into()))?;
