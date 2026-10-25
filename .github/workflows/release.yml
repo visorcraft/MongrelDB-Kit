@@ -95,7 +95,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2.9.1
+      - uses: Swatinem/rust-cache@v2.9.3
 
       # mongreldb-kit depends on mongreldb-kit-core by path+version; crates.io
       # publish strips the path, so mongreldb-kit-core must already be live on
@@ -143,7 +143,7 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2.9.1
+      - uses: Swatinem/rust-cache@v2.9.3
 
       - if: matrix.apt != ''
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
@@ -174,7 +174,7 @@ jobs:
           toolchain: stable
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - uses: Swatinem/rust-cache@v2.9.1
+      - uses: Swatinem/rust-cache@v2.9.3
 
       - run: cargo build --release -p mongreldb-kit-cli --target x86_64-apple-darwin
 
