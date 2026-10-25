@@ -39,6 +39,7 @@
 - Engine-side trigger management plus SQL-backed virtual/external table helpers.
 - Extended SQL Function helpers for JSON, date/time, aggregate, and math-style SQL calls.
 - User/role/credentials management with optional storage-layer enforcement: Argon2id-hashed catalog users, roles, `GRANT`/`REVOKE` table-level permissions, daemon HTTP Basic + Bearer auth, and opt-in `require_auth` credential enforcement (credentialed open/create constructors, `enable_auth`/`disable_auth`, offline recovery) - exposed through every language API, the embedded SQL surface, and the CLI (`user` / `role` / `auth` subcommands).
+- CLI access to page-encrypted databases. `mongreldb-kit` opens them with `--passphrase`, `--passphrase-stdin`, or `MONGREL_PASSPHRASE` on `get` and every other command that opens a database directory. `init` still creates a plaintext database.
 - Relational constraint enforcement on top of MongrelDB transactions: not-null, type/range/string validation, unique/composite unique, foreign keys, and cascade/set-null/restrict deletes.
 - Multi-process file locking, replication, and change-data-capture via the daemon.
 
@@ -182,6 +183,24 @@ rtk .venv/bin/pytest ../../python/tests ../../tests/conformance/python
 # CLI
 rtk cargo run -p mongreldb-kit-cli -- --help
 ```
+
+## Encrypted databases
+
+A database created with page encryption (AES-256-GCM) does not open through
+the normal plaintext path. Pass the passphrase on any Kit command that opens
+the directory:
+
+```sh
+mongreldb-kit --passphrase "$MONGREL_PASSPHRASE" get ./store.kitdb customers 1
+```
+
+`MONGREL_PASSPHRASE` supplies the same value. `--passphrase-stdin` reads one
+line from stdin. `auth disable-offline` uses this flag too. With `--user`,
+the CLI opens the database through the encrypted credentialed path.
+
+`mongreldb-kit init` does not encrypt. Create an encrypted database with the
+Rust or language `create_encrypted` constructor. Details are in the
+[CLI](docs/cli.md) guide.
 
 ## Related tools
 
