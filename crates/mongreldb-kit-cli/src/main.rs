@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -215,6 +215,14 @@ struct Cli {
     /// Read the password from stdin (one line). Requires --user.
     #[arg(long, global = true)]
     password_stdin: bool,
+
+    /// Passphrase for a page-encrypted database. Also via MONGREL_PASSPHRASE.
+    #[arg(long, global = true, env = "MONGREL_PASSPHRASE")]
+    passphrase: Option<String>,
+
+    /// Read the encryption passphrase from stdin (one line).
+    #[arg(long, global = true)]
+    passphrase_stdin: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -460,9 +468,6 @@ enum AuthCmd {
     /// Disable require_auth on a database offline (recovery).
     DisableOffline {
         path: PathBuf,
-        /// Encryption passphrase. Also via MONGREL_PASSPHRASE.
-        #[arg(long, env = "MONGREL_PASSPHRASE")]
-        passphrase: Option<String>,
         #[arg(long)]
         yes: bool,
     },
@@ -571,17 +576,54 @@ fn resolve_credentials(cli: &Cli) -> Result<Option<Credentials>> {
     Ok(Some(Credentials { user, password }))
 }
 
+static ENCRYPTION_PASSPHRASE: OnceLock<Option<String>> = OnceLock::new();
+
+fn resolve_passphrase(cli: &Cli) -> Result<Option<String>> {
+    if cli.passphrase.is_some() && cli.passphrase_stdin {
+        bail!("pass --passphrase or --passphrase-stdin, not both");
+    }
+    if let Some(pw) = &cli.passphrase {
+        return Ok(Some(pw.clone()));
+    }
+    if !cli.passphrase_stdin {
+        return Ok(None);
+    }
+    if cli.password_stdin {
+        bail!("--password-stdin and --passphrase-stdin both read stdin");
+    }
+    let mut line = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut line)
+        .context("failed to read passphrase from stdin")?;
+    Ok(Some(
+        line.trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string(),
+    ))
+}
+
 fn open_db(path: &Path, creds: Option<&Credentials>) -> Result<Database> {
-    match creds {
-        Some(c) => Database::open_with_credentials(path, &c.user, &c.password)
+    let passphrase = ENCRYPTION_PASSPHRASE
+        .get()
+        .and_then(|value| value.as_deref());
+    match (passphrase, creds) {
+        (Some(pw), Some(c)) => {
+            Database::open_encrypted_with_credentials(path, pw, &c.user, &c.password)
+                .context("failed to open encrypted database with credentials")
+        }
+        (Some(pw), None) => {
+            Database::open_encrypted(path, pw).context("failed to open encrypted database")
+        }
+        (None, Some(c)) => Database::open_with_credentials(path, &c.user, &c.password)
             .context("failed to open database with credentials"),
-        None => Database::open(path).context("failed to open database"),
+        (None, None) => Database::open(path).context("failed to open database"),
     }
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let creds = resolve_credentials(&cli)?;
+    let passphrase = resolve_passphrase(&cli)?;
+    let _ = ENCRYPTION_PASSPHRASE.set(passphrase.clone());
     match cli.command {
         Command::Init {
             path,
@@ -762,11 +804,9 @@ fn main() -> Result<()> {
             } => cmd_role_deny(&path, &role, &permission, creds.as_ref()),
         },
         Command::Auth(cmd) => match cmd {
-            AuthCmd::DisableOffline {
-                path,
-                passphrase,
-                yes,
-            } => cmd_auth_disable_offline(&path, passphrase.as_deref(), yes, creds.as_ref()),
+            AuthCmd::DisableOffline { path, yes } => {
+                cmd_auth_disable_offline(&path, passphrase.as_deref(), yes, creds.as_ref())
+            }
             AuthCmd::Enable {
                 path,
                 admin_user,

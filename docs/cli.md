@@ -73,6 +73,16 @@ the kit reads and writes, with snake_case storage-type tokens such as `int64`,
 `mongreldb-kit --help` and `mongreldb-kit <command> --help` print the same
 information at the terminal.
 
+Page-encrypted databases open with a global `--passphrase` or
+`MONGREL_PASSPHRASE`. `--passphrase-stdin` reads one line from stdin. That
+applies to `get` and every other command that opens a database directory.
+`auth disable-offline` uses the same flag.
+
+```sh
+MONGREL_PASSPHRASE="$(cat passphrase-file)" \
+  mongreldb-kit get ./host-sudo host_sudo wp-farm
+```
+
 ## init
 
 Create an empty database directory. The directory is created with the internal
