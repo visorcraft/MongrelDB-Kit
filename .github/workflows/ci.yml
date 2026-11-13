@@ -73,7 +73,7 @@ jobs:
         run: cargo test -p mongreldb-kit-core
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -162,7 +162,7 @@ jobs:
           key: node-integration
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -218,7 +218,7 @@ jobs:
           key: python-integration
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 

@@ -50,8 +50,8 @@
 		"@visorcraft/mongreldb": "^0.65.1"
 	},
 	"devDependencies": {
-		"@types/node": "^26.6.5",
-		"typescript": "^5.9.3",
-		"vitest": "^3.2.7"
+		"@types/node": "^26.6.6",
+		"typescript": "^7.0.2",
+		"vitest": "^5.1.0"
 	}
 }

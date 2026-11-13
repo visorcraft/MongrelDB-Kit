@@ -32,15 +32,15 @@ fn us(d: Duration) -> String {
 fn kit_txn(agent: &ureq::Agent, url: &str, ops: &[Value]) -> Duration {
     let body = json!({ "ops": ops });
     let start = Instant::now();
-    let resp = agent
+    let mut resp = agent
         .post(url)
-        .set("Content-Type", "application/json")
-        .send_string(&body.to_string())
+        .header("Content-Type", "application/json")
+        .send(body.to_string())
         .unwrap_or_else(|e| panic!("kit_txn request failed: {e}"));
     let elapsed = start.elapsed();
-    if resp.status() != 200 {
-        let status = resp.status();
-        let text = resp.into_string().unwrap_or_default();
+    let status = resp.status();
+    if status.as_u16() != 200 {
+        let text = resp.body_mut().read_to_string().unwrap_or_default();
         panic!("kit_txn returned {status}: {text}");
     }
     elapsed
@@ -48,9 +48,10 @@ fn kit_txn(agent: &ureq::Agent, url: &str, ops: &[Value]) -> Duration {
 
 fn bench(url: &str, n: i64) {
     let endpoint = format!("{url}/kit/txn");
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .build();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .into();
 
     // Single insert + commit: fresh PKs above the seeded range.
     let insert_latencies: Vec<Duration> = (0..N_OPS as i64)

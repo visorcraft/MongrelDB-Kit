@@ -18,7 +18,7 @@ mongreldb-query = "0.65.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
-parking_lot = "0.12"
+parking_lot = "0.13"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
 arrow = "59"
