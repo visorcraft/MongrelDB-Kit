@@ -25,6 +25,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag that receives built assets
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -162,6 +167,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: dist/${{ matrix.asset }}
 
   release-cli-darwin-binaries:
@@ -192,6 +198,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             dist/mongreldb-kit-darwin-arm64
             dist/mongreldb-kit-darwin-universal
