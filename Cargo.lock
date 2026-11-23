@@ -2786,9 +2786,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-core"
-version = "0.66.2"
+version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a972e3be4966e3387800c107f2fa8acb5fc4a558bab9bad6191db6f1174e5edd"
+checksum = "e3a33cefda6ccd8085b35fcdba70055aaa7749853e45d2ae21d91bc3afe3474b"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -2827,16 +2827,16 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-fault"
-version = "0.66.2"
+version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99d85f25304084ad7cb168a1f4cc5e782774ea7a9ed23962833d5d409ed39365"
+checksum = "b5a79803bcd766da59ce34c0afe124fa4583aef46077af4e42752f4810b2c65f"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "mongreldb-kit"
-version = "0.66.2"
+version = "0.67.0"
 dependencies = [
  "arrow",
  "base64 0.23.1",
@@ -2859,7 +2859,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-cli"
-version = "0.66.2"
+version = "0.67.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2875,7 +2875,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-core"
-version = "0.66.2"
+version = "0.67.0"
 dependencies = [
  "hex",
  "insta",
@@ -2889,7 +2889,7 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-kit-python"
-version = "0.66.2"
+version = "0.67.0"
 dependencies = [
  "mongreldb-kit",
  "mongreldb-kit-core",
@@ -2899,9 +2899,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-log"
-version = "0.66.2"
+version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b09bdf8b9c880d2b68a57445a6b3ef448b9e06b9b2cdca34ff48711e477f38d"
+checksum = "c20d5e5cc1c2fece9e985951c24bd2c05077d4441e1d49cb4557429afd519694"
 dependencies = [
  "mongreldb-types",
  "serde",
@@ -2911,9 +2911,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-protocol"
-version = "0.66.2"
+version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae8dba6557cc79aaf3782374aa0f9d59f15a429e67ae0f99ccb89a106567aa67"
+checksum = "afad843b470813dfc84420d866c6f93117f6714ddfac89eaa2a8b6f0f0ccd7e0"
 dependencies = [
  "mongreldb-types",
  "prost",
@@ -2930,9 +2930,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-query"
-version = "0.66.2"
+version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5097191828a528fd14bb2fd7aa118b252bdee60c9897ff053668f3c66c891201"
+checksum = "af760befd6067b331041e2f8b955c6d9a0a9a27e7f5e7154a276f53d1480dcec"
 dependencies = [
  "aes-gcm",
  "arrow",
@@ -2958,9 +2958,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-server"
-version = "0.66.2"
+version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ae213b9a41ec61245796069f409566db5483436fa614fbc7292a139f4ef063b"
+checksum = "42430b10d008d3963edb62096c392d88fec74e5cae059f371b5dc7de19f8f359"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2991,9 +2991,9 @@ dependencies = [
 
 [[package]]
 name = "mongreldb-types"
-version = "0.66.2"
+version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fbdf887e6e1e6870cb7a7f2f7cf33844939a09b6b164440de6b022f3146e8cd"
+checksum = "1c5b59629a81704d1e27f446fd656b7b97e405cffd784c17ed46390aceb516a5"
 dependencies = [
  "getrandom 0.4.3",
  "serde",
