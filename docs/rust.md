@@ -6,7 +6,7 @@ This guide shows how to define a schema, run migrations, and perform CRUD with t
 
 ```toml
 [dependencies]
-mongreldb-kit = "0.67.0"
+mongreldb-kit = "0.67.1"
 serde_json = "1"
 ```
 
@@ -440,7 +440,7 @@ let next_id: Option<i64> = db.reserve_auto_inc("orders")?;
 
 ### Advanced SQL (recursive CTEs, windows, regex, catalog, ATTACH, SAVEPOINTs)
 
-The embedded DataFusion 54 session supports the full SQL stdlib:
+The embedded DataFusion 56 session supports the full SQL stdlib:
 
 ```rust
 // Recursive CTE.

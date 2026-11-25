@@ -507,7 +507,7 @@ the NAPI addon; the Python facade exposes the highest-value subset above.
 
 ### Advanced SQL (recursive CTEs, windows, regex, catalog, ATTACH, SAVEPOINTs)
 
-The embedded DataFusion 54 session supports the full SQL stdlib via
+The embedded DataFusion 56 session supports the full SQL stdlib via
 `sql_rows()`:
 
 ```python

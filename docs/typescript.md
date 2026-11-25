@@ -352,7 +352,7 @@ await db.sqlRows('SELECT name FROM users AS OF EPOCH 42 WHERE id = 1');
 
 ### Advanced SQL via `db.sqlRows()`
 
-The embedded SQL session runs DataFusion 54, which supports the full SQL
+The embedded SQL session runs DataFusion 56, which supports the full SQL
 stdlib - recursive CTEs, window functions, regex matching, catalog
 introspection, cross-database queries, and sub-transactions:
 
